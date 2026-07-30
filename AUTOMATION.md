@@ -12,6 +12,9 @@ Tech News/
 │   ├── Media/
 │   │   ├── <company-or-topic>/
 │   │   └── _combined/
+│   ├── Media (No-Copyright)/
+│   │   ├── <company-or-topic>/
+│   │   └── _Combined/
 │   ├── Outro/
 │   │   └── outro_sound/
 │   └── Overlays/
@@ -29,17 +32,22 @@ Tech News/
 │   ├── resume_video.bat
 │   ├── storyboard_stage.py
 │   ├── storyboard_video.bat
+│   ├── media_index.py
+│   ├── media_index.bat
+│   ├── media_selection_stage.py
+│   ├── media_selection_video.bat
+│   ├── media_index_eval.py
+│   ├── media_retrieval_benchmark.json
 │   ├── content_validation.py
 │   ├── file_utils.py
 │   ├── project_paths.py
 │   ├── tooling.py
 │   ├── processed_urls.json
+│   ├── indexes/
+│   │   └── media_index.json         # generated locally; ignored by Git
 │   ├── tests/
 │   └── tools/
 │       └── ffmpeg/
-├── Media (No-Copyright)/
-│   ├── <company-or-topic>/
-│   └── _Combined/
 ├── Legacy Automation Outputs/
 ├── Video 1/
 ├── Video 2/
@@ -72,16 +80,19 @@ Video N/
 │   ├── storyboard.json
 │   └── story_01_30s_proof.mp4
 ├── 05_visuals/
-│   └── generated/
-│       ├── 01_hero_01.png
-│       ├── 01_hero_02.png
-│       └── ...
+│   ├── media_plan.json
+│   ├── generated/
+│   │   ├── 01_hero_01.png
+│   │   ├── 01_hero_02.png
+│   │   └── ...
+│   └── selected_archive/           # optional when copying is enabled
 └── timing_diagnostic.mp4      # optional local QA render
 ```
 
-`Assets/Media` is the primary reusable visual repository.
-`Media (No-Copyright)` remains a separate licensing-conscious repository until the
-media-index milestone records provenance and attribution requirements.
+`Assets/Media` and `Assets/Media (No-Copyright)` are both indexed reusable visual
+repositories. The second repository is explicitly classified as
+`user_confirmed_no_copyright`; it receives no verification warning or selection
+penalty.
 
 Milestone 4 uses `gpt-5.6-luna` only for selecting two supported, visually
 distinct timed beats and writing the scene-specific prompt. Pixel generation uses

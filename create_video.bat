@@ -260,6 +260,7 @@ echo %GRAY%Zaman :%RESET% %VIDEO_DIR%\story_timing.json
 echo %GRAY%Ayirac:%RESET% %VIDEO_DIR%\03_manual_separators
 echo %GRAY%Plan   :%RESET% %VIDEO_DIR%\04_storyboard\storyboard.json
 echo %GRAY%Gorsel :%RESET% %VIDEO_DIR%\05_visuals\generated
+echo %GRAY%Arsiv  :%RESET% %VIDEO_DIR%\05_visuals\media_plan.json
 echo %GRAY%Log   :%RESET% pipeline.log + elevenlabs.log
 echo.
 

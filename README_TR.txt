@@ -15,6 +15,7 @@ Tech News\
 │   ├── Audio\
 │   │   └── background_music\
 │   ├── Media\
+│   ├── Media (No-Copyright)\
 │   ├── Outro\
 │   └── Overlays\
 ├── Automation\
@@ -26,7 +27,6 @@ Tech News\
 │   ├── preflight.bat
 │   ├── processed_urls.json
 │   └── ...
-├── Media (No-Copyright)\
 ├── Video 1\
 ├── Video 2\
 ├── Video 3\
@@ -373,7 +373,62 @@ geçerli SHA-256 sonucu varsa tekrar API çağrısı yapılmaz. Yanlış boyut v
 görsel reddedilir; kota harcayarak otomatik replacement üretilmez.
 
 
-13. ESKİ OTOMASYON ÇIKTILARI
+13. MEDYA ARŞİVİ İNDEKSİ VE GÖRSEL SEÇİMİ
+------------------------------------------
+
+İki arşiv de kullanılır:
+
+Assets\Media\
+Assets\Media (No-Copyright)\
+
+İkinci arşiv kullanıcı tarafından telifsiz olarak onaylanmıştır. İndekste
+"user_confirmed_no_copyright" olarak tutulur; doğrulama uyarısı veya seçim cezası
+almaz.
+
+Dosya adlarını etiketledikten veya yeniden adlandırdıktan sonra yeniden tarama:
+
+media_index.bat
+
+veya:
+
+.\.venv\Scripts\python.exe media_index.py --scan
+
+Tarama artımlıdır. Değişmeyen dosyalar yeniden analiz edilmez. Dosya yeniden
+adlandırılırsa SHA-256 ile tanınır ve önceki kullanım geçmişi korunur. Otomasyon medya
+dosyalarını yeniden adlandırmaz, taşımaz veya değiştirmez.
+
+AI kullanmadan ücretsiz yerel seçim:
+
+.\.venv\Scripts\python.exe media_selection_stage.py --video 5 --offline
+
+Birinci haber için:
+
+.\.venv\Scripts\python.exe media_selection_stage.py --video 5 --story 1 --offline
+
+gpt-5.6-luna ile son seçim:
+
+.\.venv\Scripts\python.exe media_selection_stage.py --video 5 --confirm-ai-cost
+
+Normal akışta storyboard_video.bat AI görsellerinden sonra media_selection_video.bat
+ekranını açar. Önce indeks otomatik yenilenir. AI'ye bütün klasör ağacı değil, yalnızca
+her 3–7 saniyelik zaman aralığı için kısa yerel aday listesi gönderilir.
+
+Çıktı:
+
+Video 5\05_visuals\media_plan.json
+
+Dosyada her arşiv görselinin tam zamanı, değişmez kaynak yolu, SHA-256 değeri,
+boyutları, güven puanı, seçim nedeni ve alternatifleri bulunur. Varsayılan davranış
+görseli kopyalamak yerine yol + hash kaydetmektir.
+
+Mevcut etiketlenmiş dosyalarla ücretsiz 20 örnek testi:
+
+.\.venv\Scripts\python.exe media_index_eval.py
+
+Etiketleme ilerledikçe aynı komutu yeniden çalıştırabilirsin.
+
+
+14. ESKİ OTOMASYON ÇIKTILARI
 -----------------------------
 
 Automation içindeki eski Old ve Video1 klasörleri silinmeden şuraya taşındı:
@@ -383,7 +438,7 @@ D:\Dosyalar\İş\YouTube\Tech News\Legacy Automation Outputs
 Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkilemez.
 
 
-14. ÖNEMLİ SINIRLAMALAR
+15. ÖNEMLİ SINIRLAMALAR
 -----------------------
 
 - Ödeme duvarı veya giriş ekranı aşılmaz.

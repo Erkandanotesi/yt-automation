@@ -30,6 +30,8 @@ from project_paths import (  # noqa: E402 - .env must be loaded first
 )
 from tooling import find_executable  # noqa: E402 - .env must be loaded first
 from storyboard_stage import StoryboardSettings  # noqa: E402
+from media_index import MediaIndexSettings  # noqa: E402
+from media_selection_stage import MediaSelectionSettings  # noqa: E402
 
 
 PLACEHOLDER_MARKERS = (
@@ -220,6 +222,49 @@ def collect_checks() -> list[Check]:
                 f"size={storyboard_settings.image_size}; "
                 "max paid requests/run="
                 f"{storyboard_settings.maximum_image_requests_per_run}"
+            ),
+        )
+
+    try:
+        media_index_settings = MediaIndexSettings.from_environment()
+        media_index_settings.validate()
+    except (RuntimeError, ValueError) as exc:
+        add("Media index configuration", False, str(exc))
+    else:
+        add(
+            "Media index configuration",
+            True,
+            (
+                f"index={media_index_settings.index_path}; "
+                f"roots={len(media_index_settings.roots)}"
+            ),
+        )
+        for media_root in media_index_settings.roots:
+            add(
+                (
+                    "User-confirmed no-copyright repository"
+                    if media_root.repository_license_hint
+                    == "user_confirmed_no_copyright"
+                    else "Media repository"
+                ),
+                media_root.path.is_dir(),
+                str(media_root.path),
+            )
+
+    try:
+        media_selection_settings = MediaSelectionSettings.from_environment()
+        media_selection_settings.validate()
+    except (RuntimeError, ValueError) as exc:
+        add("Archive selection configuration", False, str(exc))
+    else:
+        add(
+            "Archive selection configuration",
+            True,
+            (
+                f"model={media_selection_settings.model}; "
+                f"shortlist={media_selection_settings.shortlist_size}; "
+                f"windows={media_selection_settings.minimum_window_seconds:g}-"
+                f"{media_selection_settings.maximum_window_seconds:g}s"
             ),
         )
 

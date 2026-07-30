@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "description": "Milestone 5 retrieval checks using the descriptively renamed assets available on 2026-07-30.",
+  "cases": [
+    {
+      "id": "openai_app_screen",
+      "text": "The ChatGPT app opens on its main question screen.",
+      "entities": ["OpenAI", "ChatGPT"],
+      "visual_query": "ChatGPT app main screen",
+      "accepted_path_fragments": ["chatgpt-app-main-screen"]
+    },
+    {
+      "id": "openai_phone_logo",
+      "text": "OpenAI is bringing the service to phones.",
+      "entities": ["OpenAI"],
+      "visual_query": "OpenAI logo displayed on phone",
+      "accepted_path_fragments": ["openai-logo-on-phone"]
+    },
+    {
+      "id": "openai_3d_logo",
+      "text": "OpenAI announced the update.",
+      "entities": ["OpenAI"],
+      "visual_query": "artistic three dimensional OpenAI logo",
+      "accepted_path_fragments": ["openai-logo-artistic-3d"]
+    },
+    {
+      "id": "nvidia_office",
+      "text": "The announcement came from Nvidia headquarters.",
+      "entities": ["Nvidia"],
+      "visual_query": "Nvidia main office exterior",
+      "accepted_path_fragments": ["nvidia-main-office-outside"]
+    },
+    {
+      "id": "nvidia_phone",
+      "text": "Nvidia's service can also be accessed on a phone.",
+      "entities": ["Nvidia"],
+      "visual_query": "person holding phone with Nvidia logo",
+      "accepted_path_fragments": ["man-holds-phone-nvidia-logo-on-phone"]
+    },
+    {
+      "id": "spacex_factory",
+      "text": "Falcon 9 was prepared inside the factory.",
+      "entities": ["SpaceX", "Falcon 9"],
+      "visual_query": "SpaceX Falcon 9 rocket inside factory",
+      "accepted_path_fragments": ["falcon-9-in-factory"]
+    },
+    {
+      "id": "spacex_launch_site",
+      "text": "Falcon 9 moved to the launch site.",
+      "entities": ["SpaceX", "Falcon 9"],
+      "visual_query": "SpaceX Falcon 9 rocket at launch place",
+      "accepted_path_fragments": ["falcon-9-on-launch-place"]
+    },
+    {
+      "id": "meta_headquarters",
+      "text": "Meta made the announcement at its headquarters.",
+      "entities": ["Meta"],
+      "visual_query": "Meta headquarters sign outside",
+      "accepted_path_fragments": ["meta_headquarters_sign"]
+    },
+    {
+      "id": "mark_zuckerberg",
+      "text": "Mark Zuckerberg discussed the new strategy.",
+      "entities": ["Meta", "Mark Zuckerberg"],
+      "visual_query": "Mark Zuckerberg portrait looking at camera",
+      "accepted_path_fragments": ["mark-zuckerberg", "mark zuckerberg"]
+    },
+    {
+      "id": "microsoft_tablet",
+      "text": "Microsoft introduced the software.",
+      "entities": ["Microsoft"],
+      "visual_query": "Microsoft logo shown on tablet",
+      "accepted_path_fragments": ["microsoft-logo-on-tablet"]
+    },
+    {
+      "id": "amazon_phone_app",
+      "text": "Amazon updated its mobile shopping app.",
+      "entities": ["Amazon"],
+      "visual_query": "Amazon app on phone screen",
+      "accepted_path_fragments": ["amazon app on phone screen"]
+    },
+    {
+      "id": "android_apk",
+      "text": "Android users can install the APK.",
+      "entities": ["Android", "Google"],
+      "visual_query": "Google Android APK package",
+      "accepted_path_fragments": ["google-android-apk"]
+    },
+    {
+      "id": "android_mascots",
+      "text": "Android introduced mascots with several shapes.",
+      "entities": ["Android"],
+      "visual_query": "Android mascots different shapes",
+      "accepted_path_fragments": ["android-mascots-with-different-shapes"]
+    },
+    {
+      "id": "linux_beginners",
+      "text": "These Linux distributions are designed for beginners.",
+      "entities": ["Linux"],
+      "visual_query": "best Linux distributions for beginners",
+      "accepted_path_fragments": ["best-linux-distributions-for-beginners"]
+    },
+    {
+      "id": "linus_torvalds",
+      "text": "Linus Torvalds commented on the change.",
+      "entities": ["Linux", "Linus Torvalds"],
+      "visual_query": "Linus Torvalds portrait",
+      "accepted_path_fragments": ["linus-torvalds"]
+    },
+    {
+      "id": "gabe_newell",
+      "text": "Valve founder Gabe Newell discussed Steam.",
+      "entities": ["Valve", "Gabe Newell", "Steam"],
+      "visual_query": "Gabe Newell portrait",
+      "accepted_path_fragments": ["gabe newell", "gaben"]
+    },
+    {
+      "id": "steam_wishlist",
+      "text": "Steam changed its wishlist categories.",
+      "entities": ["Valve", "Steam"],
+      "visual_query": "Steam wishlist categories interface",
+      "accepted_path_fragments": ["steam-wishlist-categories"]
+    },
+    {
+      "id": "byd_dolphin",
+      "text": "The BYD Dolphin received a European award.",
+      "entities": ["BYD", "BYD Dolphin"],
+      "visual_query": "BYD Dolphin car Europe",
+      "accepted_path_fragments": ["byd-dolphin"]
+    },
+    {
+      "id": "tesla_gigafactory",
+      "text": "Tesla expanded production at its Gigafactory.",
+      "entities": ["Tesla"],
+      "visual_query": "Tesla Gigafactory building exterior",
+      "accepted_path_fragments": ["tesla_gigafactory"]
+    },
+    {
+      "id": "hugging_face_ceo",
+      "text": "Hugging Face CEO Clem Delangue explained the decision.",
+      "entities": ["Hugging Face", "Clem Delangue"],
+      "visual_query": "Hugging Face CEO Clem Delangue portrait",
+      "accepted_path_fragments": ["hugging-face-ceo-clem-delangue"]
+    }
+  ]
+}

@@ -49,12 +49,16 @@ if "%IMAGE_CHOICE%"=="1" (
     if errorlevel 1 exit /b 1
     ".venv\Scripts\python.exe" "storyboard_stage.py" --video %VIDEO_NUMBER% --action proof --story 1
     if errorlevel 1 exit /b 1
+    call "media_selection_video.bat" %VIDEO_NUMBER% 1
+    if errorlevel 1 exit /b 1
     exit /b 0
 )
 if "%IMAGE_CHOICE%"=="2" (
     ".venv\Scripts\python.exe" "storyboard_stage.py" --video %VIDEO_NUMBER% --action generate --confirm-cost
     if errorlevel 1 exit /b 1
     ".venv\Scripts\python.exe" "storyboard_stage.py" --video %VIDEO_NUMBER% --action proof --story 1
+    if errorlevel 1 exit /b 1
+    call "media_selection_video.bat" %VIDEO_NUMBER%
     if errorlevel 1 exit /b 1
     exit /b 0
 )

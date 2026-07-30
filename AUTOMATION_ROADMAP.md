@@ -143,10 +143,10 @@ Tech News/
 │   ├── Audio/
 │   │   └── background_music/
 │   ├── Media/
+│   ├── Media (No-Copyright)/
 │   ├── Outro/
 │   │   └── outro_sound/
 │   └── Overlays/
-├── Media (No-Copyright)/
 ├── Legacy Automation Outputs/
 └── Video 5/
     ├── manifest.json
@@ -431,6 +431,8 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
 
 ## Milestone 5 — Index and select archive imagery
 
+**Status: complete (2026-07-30).**
+
 Do not send the full folder tree to an AI on every run. Index once and update only
 changed files.
 
@@ -446,9 +448,10 @@ For every image, store:
 - source URL, creator, license, and attribution requirement;
 - quality flags and prior-use count.
 
-The current `Assets/Media` and `Media (No-Copyright)` repositories become configured
-sources.
-Prefer assets with clear reuse rights. A filename alone is not proof of licensing.
+The current `Assets/Media` and `Assets/Media (No-Copyright)` repositories are
+configured sources. The second repository is classified as
+`user_confirmed_no_copyright` based on the owner's confirmation; it is not marked for
+verification and receives no warning or ranking penalty.
 
 ### Selection flow
 
@@ -470,6 +473,32 @@ Prefer assets with clear reuse rights. A filename alone is not proof of licensin
 
 - Evaluate at least 20 manually labeled narration windows.
 - Track top-1 acceptance, wrong-entity rate, duplicate rate, and crop failures.
+
+### Implemented verification
+
+- `media_index.py` scans both media repositories and stores path, dimensions, aspect
+  ratio, SHA-256, parsed filename/folder keywords, local caption, repository,
+  metadata sidecar fields, quality flags, and prior-use events.
+- Rescans compare path, size, modification time, and metadata-sidecar time. Unchanged
+  files are reused, changed files are reprobed, and checksum matching preserves asset
+  identity and usage history after a rename. Media files are never renamed or edited.
+- `media_index.bat` provides a double-click rescan. Selection also rescans
+  automatically before making a plan.
+- Approved hero-image ranges are subtracted from narration. Remaining time is split
+  into 3–7 second windows at phrase, sentence, or visual-beat boundaries.
+- Local retrieval sends only an eight-item shortlist per window to
+  `gpt-5.6-luna`; a zero-cost deterministic selector is available for tests and
+  emergency offline production. Paid final selection requires explicit confirmation.
+- Production enforcement avoids adjacent duplicates, same-story reuse, and crop-risk
+  choices whenever a safe shortlist alternative exists.
+- `media_plan.json` records exact local/global time ranges, immutable source path,
+  SHA-256, dimensions, repository classification, confidence, reason, override,
+  alternatives, and full shortlist.
+- Six new offline index/selection tests pass (48 total). A 20-case benchmark against the
+  currently renamed assets reached 20/20 top-1 acceptance, zero wrong-entity results,
+  zero adjacent duplicates, and recorded two raw retrieval crop risks. Production
+  crop enforcement replaces those raw risky choices.
+- No OpenAI or ElevenLabs request was made during Milestone 5 verification.
 
 ### Done when
 
