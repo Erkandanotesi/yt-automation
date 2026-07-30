@@ -303,6 +303,8 @@ script plus ElevenLabs alignment, avoiding text substitutions and an extra local
 
 ## Milestone 3 — Manual “Tech News” separator checkpoint
 
+**Status: complete (2026-07-30).**
+
 This is the deliberate human pause.
 
 ### User-facing behavior
@@ -347,6 +349,23 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
 
 - Missing file, corrupt file, wrong resolution, and valid file cases.
 - Close the console while waiting, then resume later without repeating prior stages.
+
+### Implemented verification
+
+- `03_manual_separators/` is created automatically before the workflow pauses.
+- The checkpoint persists `WAITING`, `VALIDATING`, `READY`, or `CANCELLED` in
+  `state.json`; closing the console preserves `WAITING`.
+- `resume_video.bat` opens the newest numbered project directly at this checkpoint,
+  without repeating news, TTS, or alignment.
+- FFprobe checks container metadata, codec, resolution, frame rate, pixel format,
+  duration, and audio presence. FFmpeg then fully decodes every accepted stream.
+- Audio presence follows a configurable policy and defaults to consistent across all
+  separators.
+- Validated real separator durations replace placeholder durations in
+  `story_timing.json`; every downstream narration and beat offset is recalculated.
+- File hashes invalidate `READY` if an approved separator is later changed or removed.
+- Thirty-seven offline tests pass, including five expected filenames, missing, corrupt,
+  wrong-resolution, mixed-audio, valid, cancel, close-window, and resume cases.
 
 ### Done when
 

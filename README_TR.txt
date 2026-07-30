@@ -279,7 +279,58 @@ timing_diagnostic_story_01.mp4
 - Son kelime alignment bitişinden 100 ms'den fazla farklıysa kalite kapısı geçmez.
 
 
-11. ESKİ OTOMASYON ÇIKTILARI
+11. MANUEL TECH NEWS SEPARATOR CHECKPOINT
+-----------------------------------------
+
+Zamanlama bittikten sonra otomasyon önce şu klasörü kendisi oluşturur:
+
+Video N\03_manual_separators\
+
+Beş haber için beklenen adlar:
+
+01_separator.mp4
+02_separator.mp4
+03_separator.mp4
+04_separator.mp4
+05_separator.mp4
+
+Ardından otomasyon şu mesajla bekler:
+
+The summary and the original news texts are saved, waiting for the animation
+production. Press 1 after ready, or 0 for cancelling all process.
+
+Animasyonları klasöre koyduktan sonra 1:
+
+- her dosyayı FFprobe ile inceler;
+- tam FFmpeg decode testi yapar;
+- varsayılan olarak 1920×1080, 30 fps, H.264/HEVC ve yuv420p/yuv420p10le kabul eder;
+- süreyi, video stream'ini ve ses stream'inin varlığını kaydeder;
+- bütün separator dosyalarında ses varlığının tutarlı olmasını ister;
+- gerçek separator süreleriyle story_timing.json global zamanlarını yeniden hesaplar.
+
+0 işlemi durdurur fakat haberleri, sesleri, alignment dosyalarını ve separator
+animasyonlarını silmez. state.json durumu CANCELLED olarak kaydeder.
+
+Pencereyi kapatırsan durum WAITING kalır. Haber/TTS aşamalarını tekrarlamadan devam:
+
+resume_video.bat
+
+veya:
+
+.\.venv\Scripts\python.exe manual_checkpoint.py --video 5
+
+Komut satırı işlemleri:
+
+.\.venv\Scripts\python.exe manual_checkpoint.py --video 5 --action prepare
+.\.venv\Scripts\python.exe manual_checkpoint.py --video 5 --action validate
+.\.venv\Scripts\python.exe manual_checkpoint.py --video 5 --action status
+.\.venv\Scripts\python.exe manual_checkpoint.py --video 5 --action cancel
+
+Onaylanmış bir separator daha sonra değişir veya silinirse SHA-256 kontrolü READY
+durumunu otomatik olarak WAITING'e döndürür.
+
+
+12. ESKİ OTOMASYON ÇIKTILARI
 -----------------------------
 
 Automation içindeki eski Old ve Video1 klasörleri silinmeden şuraya taşındı:
@@ -289,7 +340,7 @@ D:\Dosyalar\İş\YouTube\Tech News\Legacy Automation Outputs
 Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkilemez.
 
 
-12. ÖNEMLİ SINIRLAMALAR
+13. ÖNEMLİ SINIRLAMALAR
 -----------------------
 
 - Ödeme duvarı veya giriş ekranı aşılmaz.

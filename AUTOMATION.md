@@ -25,6 +25,8 @@ Tech News/
 │   ├── elevenlabs_tts.py
 │   ├── alignment_stage.py
 │   ├── alignment_utils.py
+│   ├── manual_checkpoint.py
+│   ├── resume_video.bat
 │   ├── content_validation.py
 │   ├── file_utils.py
 │   ├── project_paths.py
@@ -60,6 +62,10 @@ Video N/
 │       └── *.alignment.json
 ├── project_info.json
 ├── story_timing.json
+├── state.json
+├── 03_manual_separators/
+│   ├── 01_separator.mp4
+│   └── ...
 └── timing_diagnostic.mp4      # optional local QA render
 ```
 
