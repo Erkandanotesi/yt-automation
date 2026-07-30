@@ -1,0 +1,28 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Python environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs and interrupted writes
+*.log
+*.part
+*.tmp
+
+# Legacy/generated video projects do not belong in the code repository
+Video*/
+Old/
+
+# Local editor and operating-system files
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+

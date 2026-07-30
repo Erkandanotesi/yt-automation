@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="1.0">
+  <head><title>Technology feeds</title></head>
+  <body>
+    <outline text="AI" title="AI">
+      <outline type="rss" text="AI Weekly — AI News &amp; Updates" title="AI Weekly — AI News &amp; Updates" xmlUrl="https://aiweekly.co/feed" htmlUrl="https://aiweekly.co/feed"/>
+      <outline type="rss" text="AI | The Verge" title="AI | The Verge" xmlUrl="https://www.theverge.com/rss/ai-artificial-intelligence/index.xml" htmlUrl="https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"/>
+    </outline>
+    <outline text="Tech" title="Tech">
+      <outline type="rss" text="Ars Technica - All content" title="Ars Technica - All content" xmlUrl="https://feeds.arstechnica.com/arstechnica/index" htmlUrl="https://feeds.arstechnica.com/arstechnica/index"/>
+      <outline type="rss" text="CNET" title="CNET" xmlUrl="https://www.cnet.com/rss/news/" htmlUrl="https://www.cnet.com/rss/news/"/>
+      <outline type="rss" text="CNET TV" title="CNET TV" xmlUrl="https://www.youtube.com/feeds/videos.xml?user=CNETTV" htmlUrl="https://www.youtube.com/feeds/videos.xml?user=CNETTV"/>
+      <outline type="rss" text="TechCrunch" title="TechCrunch" xmlUrl="https://feeds.feedburner.com/TechCrunch" htmlUrl="https://feeds.feedburner.com/TechCrunch"/>
+      <outline type="rss" text="Engadget - Technology News &amp; Expert Reviews" title="Engadget - Technology News &amp; Expert Reviews" xmlUrl="https://www.engadget.com/rss.xml" htmlUrl="https://www.engadget.com/rss.xml"/>
+      <outline type="rss" text="Hacker News" title="Hacker News" xmlUrl="https://news.ycombinator.com/rss" htmlUrl="https://news.ycombinator.com/rss"/>
+      <outline type="rss" text="Lifehacker" title="Lifehacker" xmlUrl="https://lifehacker.com/rss" htmlUrl="https://lifehacker.com/rss"/>
+      <outline type="rss" text="NYT &gt; Technology" title="NYT &gt; Technology" xmlUrl="https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml" htmlUrl="https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml"/>
+      <outline type="rss" text="ReadWrite" title="ReadWrite" xmlUrl="https://readwrite.com/feed/" htmlUrl="https://readwrite.com/feed/"/>
+      <outline type="rss" text="Slashdot" title="Slashdot" xmlUrl="https://rss.slashdot.org/Slashdot/slashdotMain" htmlUrl="https://rss.slashdot.org/Slashdot/slashdotMain"/>
+      <outline type="rss" text="Stratechery by Ben Thompson" title="Stratechery by Ben Thompson" xmlUrl="https://stratechery.com/feed/" htmlUrl="https://stratechery.com/feed/"/>
+      <outline type="rss" text="Tech | The Verge" title="Tech | The Verge" xmlUrl="https://theverge.com/rss/tech/index.xml" htmlUrl="https://theverge.com/rss/tech/index.xml"/>
+      <outline type="rss" text="The Next Web" title="The Next Web" xmlUrl="https://thenextweb.com/feed/" htmlUrl="https://thenextweb.com/feed/"/>
+      <outline type="rss" text="The Register" title="The Register" xmlUrl="https://www.theregister.com/headlines.rss" htmlUrl="https://www.theregister.com/headlines.rss"/>
+    </outline>
+    <outline text="Cyber Security" title="Cyber Security">
+      <outline type="rss" text="Security | The Verge" title="Security | The Verge" xmlUrl="https://www.theverge.com/rss/cyber-security/index.xml" htmlUrl="https://www.theverge.com/rss/cyber-security/index.xml"/>
+    </outline>
+  </body>
+</opml>

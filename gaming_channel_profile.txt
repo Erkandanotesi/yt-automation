@@ -1,0 +1,26 @@
+CHANNEL TYPE
+English-language gaming news YouTube channel.
+
+HIGH PRIORITY
+- Major game announcements, releases, delays, cancellations, and updates
+- Important decisions by publishers, studios, and platform holders
+- Steam, Valve, PlayStation, Xbox, Nintendo, Epic Games, and PC gaming
+- Player ownership, preservation, modding, open platforms, and interoperability
+- Privacy, account security, DRM, anti-cheat, and data collection
+- Monetization, subscriptions, pricing, microtransactions, and anti-consumer changes
+- Studio closures, layoffs, acquisitions, lawsuits, regulation, and labor issues
+- Significant hardware or technology changes that materially affect players
+
+LOW PRIORITY / EXCLUDE
+- Routine discounts, shopping lists, and affiliate content
+- Minor cosmetic updates or low-impact patch notes
+- Walkthroughs, cheat lists, and generic tips
+- Reviews or opinion pieces without a concrete news development
+- Unsourced or highly uncertain rumors
+- Repetitive coverage of the same event
+
+PRESENTATION STYLE
+Clear, modern, and engaging. Be skeptical of large publishers, platform
+holders, aggressive monetization, lock-in, and anti-consumer decisions.
+Support player ownership, privacy, modding, open platforms, and free
+expression. Use light sarcasm only when the story supports it.

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<opml version="1.0">
+  <head><title>Gaming feeds</title></head>
+  <body>
+    <outline text="Gaming" title="Gaming">
+      <outline type="rss" text="Eurogamer.net Latest Articles Feed" title="Eurogamer.net Latest Articles Feed" xmlUrl="https://www.eurogamer.net/?format=rss" htmlUrl="https://www.eurogamer.net/?format=rss"/>
+      <outline type="rss" text="GameSpot - All Content" title="GameSpot - All Content" xmlUrl="https://www.gamespot.com/feeds/mashup/" htmlUrl="https://www.gamespot.com/feeds/mashup/"/>
+      <outline type="rss" text="IGN Articles" title="IGN Articles" xmlUrl="https://feeds.ign.com/ign/all" htmlUrl="https://feeds.ign.com/ign/all"/>
+      <outline type="rss" text="Kotaku" title="Kotaku" xmlUrl="https://kotaku.com/rss" htmlUrl="https://kotaku.com/rss"/>
+      <outline type="rss" text="Rock, Paper, Shotgun" title="Rock, Paper, Shotgun" xmlUrl="https://feeds.feedburner.com/RockPaperShotgun" htmlUrl="https://feeds.feedburner.com/RockPaperShotgun"/>
+      <outline type="rss" text="The Escapist" title="The Escapist" xmlUrl="https://www.escapistmagazine.com/v2/feed/" htmlUrl="https://www.escapistmagazine.com/v2/feed/"/>
+      <outline type="rss" text="Gaming | The Verge" title="Gaming | The Verge" xmlUrl="https://www.theverge.com/rss/games/index.xml" htmlUrl="https://www.theverge.com/rss/games/index.xml"/>
+    </outline>
+    <outline text="Tech and Gaming" title="Tech and Gaming">
+      <outline type="rss" text="Ars Technica - All content" title="Ars Technica - All content" xmlUrl="https://feeds.arstechnica.com/arstechnica/index" htmlUrl="https://feeds.arstechnica.com/arstechnica/index"/>
+      <outline type="rss" text="CNET" title="CNET" xmlUrl="https://www.cnet.com/rss/news/" htmlUrl="https://www.cnet.com/rss/news/"/>
+      <outline type="rss" text="Engadget - Technology News &amp; Expert Reviews" title="Engadget - Technology News &amp; Expert Reviews" xmlUrl="https://www.engadget.com/rss.xml" htmlUrl="https://www.engadget.com/rss.xml"/>
+    </outline>
+  </body>
+</opml>

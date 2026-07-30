@@ -1,0 +1,1131 @@
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import logging
+import os
+import re
+import sys
+import time
+import unicodedata
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from typing import TypeVar
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+import feedparser
+import requests
+from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, Field
+from trafilatura import extract
+
+
+# =========================================================
+# TEMEL YOLLAR VE ORTAM AYARLARI
+# =========================================================
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+load_dotenv(SCRIPT_DIR / ".env")
+
+AUTOMATION_ROOT = Path(
+    os.getenv("AUTOMATION_ROOT", r"D:\Dosyalar\Automation")
+).expanduser()
+
+GLOBAL_STATE_PATH = AUTOMATION_ROOT / "processed_urls.json"
+TECH_OPML_PATH = AUTOMATION_ROOT / "feeds.opml"
+GAMING_OPML_PATH = AUTOMATION_ROOT / "gaming_feeds.opml"
+TECH_PROFILE_PATH = AUTOMATION_ROOT / "channel_profile.txt"
+GAMING_PROFILE_PATH = AUTOMATION_ROOT / "gaming_channel_profile.txt"
+
+AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6").strip()
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+
+MAX_AGE_HOURS = int(os.getenv("MAX_AGE_HOURS", "36"))
+MAX_CANDIDATES = int(os.getenv("MAX_CANDIDATES", "25"))
+MAX_FEED_ITEMS = int(os.getenv("MAX_FEED_ITEMS", "30"))
+TOP_N_DEFAULT = int(os.getenv("TOP_N", "5"))
+MIN_SCORE = int(os.getenv("MIN_SCORE", "65"))
+MIN_ARTICLE_CHARS = int(os.getenv("MIN_ARTICLE_CHARS", "500"))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "25"))
+API_RETRIES = int(os.getenv("API_RETRIES", "3"))
+RSS_RETRIES = int(os.getenv("RSS_RETRIES", "2"))
+
+USER_AGENT = os.getenv(
+    "USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 RSSNewsAutomation/1.0",
+)
+
+TRACKING_PARAMETERS = {
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "gclid",
+    "fbclid",
+    "mc_cid",
+    "mc_eid",
+    "ref",
+    "source",
+}
+
+DEFAULT_TECH_KEYWORDS = {
+    "ai",
+    "artificial intelligence",
+    "openai",
+    "chatgpt",
+    "anthropic",
+    "claude",
+    "gemini",
+    "google",
+    "microsoft",
+    "apple",
+    "meta",
+    "amazon",
+    "nvidia",
+    "amd",
+    "intel",
+    "linux",
+    "windows",
+    "android",
+    "security",
+    "cybersecurity",
+    "privacy",
+    "data breach",
+    "cve",
+    "vulnerability",
+    "crypto",
+    "blockchain",
+    "bitcoin",
+    "chip",
+    "semiconductor",
+    "robot",
+    "startup",
+    "regulation",
+    "ban",
+    "lawsuit",
+    "hack",
+    "launch",
+    "model",
+}
+
+DEFAULT_GAMING_KEYWORDS = {
+    "game",
+    "gaming",
+    "gamer",
+    "steam",
+    "valve",
+    "playstation",
+    "xbox",
+    "nintendo",
+    "pc gaming",
+    "console",
+    "release",
+    "launch",
+    "update",
+    "patch",
+    "dlc",
+    "expansion",
+    "studio",
+    "publisher",
+    "developer",
+    "esports",
+    "mod",
+    "modding",
+    "early access",
+    "game pass",
+    "epic games",
+    "ubisoft",
+    "ea",
+    "take-two",
+    "rockstar",
+    "bethesda",
+    "activision",
+    "blizzard",
+}
+
+
+# =========================================================
+# KOMUT SATIRI
+# =========================================================
+
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Scan RSS/Atom feeds, select the best stories, and save "
+            "150-200 word English scripts in a VideoX folder."
+        )
+    )
+    parser.add_argument(
+        "--video",
+        type=int,
+        required=True,
+        help="Video number. Example: --video 1",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=("gemini", "openai"),
+        help="Override AI_PROVIDER from .env for this run.",
+    )
+    parser.add_argument(
+        "--category",
+        choices=("tech", "gaming"),
+        default="tech",
+        help="Content category: tech or gaming.",
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        help="Override TOP_N from .env for this run.",
+    )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Allow stories used in previous videos to be considered again.",
+    )
+    return parser.parse_args()
+
+
+ARGS = parse_arguments()
+
+if ARGS.video < 1:
+    raise ValueError("Video numarası 1 veya daha büyük olmalıdır.")
+
+if ARGS.top is not None and ARGS.top < 1:
+    raise ValueError("--top değeri 1 veya daha büyük olmalıdır.")
+
+VIDEO_NAME = f"Video{ARGS.video}"
+PROJECT_DIR = AUTOMATION_ROOT / VIDEO_NAME
+OUTPUT_DIR = PROJECT_DIR / "Haberler"
+LOG_PATH = PROJECT_DIR / "pipeline.log"
+PROJECT_INFO_PATH = PROJECT_DIR / "project_info.json"
+CANDIDATES_PATH = PROJECT_DIR / "aday_haberler.json"
+COMBINED_SCRIPT_PATH = PROJECT_DIR / "video_script.txt"
+
+PROVIDER = ARGS.provider or AI_PROVIDER
+TOP_N = ARGS.top or TOP_N_DEFAULT
+CONTENT_CATEGORY = ARGS.category
+IS_GAMING = CONTENT_CATEGORY == "gaming"
+CONTENT_LABEL = "gaming news" if IS_GAMING else "technology news"
+OPML_PATH = GAMING_OPML_PATH if IS_GAMING else TECH_OPML_PATH
+CHANNEL_PROFILE_PATH = GAMING_PROFILE_PATH if IS_GAMING else TECH_PROFILE_PATH
+
+
+# =========================================================
+# LOG
+# =========================================================
+
+def configure_logging() -> logging.Logger:
+    PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("rss_news_pipeline")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    file_handler = logging.FileHandler(LOG_PATH, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    return logger
+
+
+LOGGER = configure_logging()
+
+
+# =========================================================
+# YAPILANDIRILMIŞ AI ÇIKTILARI
+# =========================================================
+
+class RankedNews(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(description="Zero-based article index in the candidate list.")
+    score: int = Field(ge=0, le=100)
+    reason: str
+
+
+class RankingResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selected: list[RankedNews]
+
+
+class NewsSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title_en: str
+    summary_en: str
+
+
+SchemaT = TypeVar("SchemaT", bound=BaseModel)
+
+
+# =========================================================
+# YARDIMCI FONKSİYONLAR
+# =========================================================
+
+def strip_html(value: str) -> str:
+    value = html.unescape(value or "")
+    value = re.sub(r"<script.*?</script>", " ", value, flags=re.I | re.S)
+    value = re.sub(r"<style.*?</style>", " ", value, flags=re.I | re.S)
+    value = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def canonical_url(url: str) -> str:
+    parts = urlsplit(url.strip())
+    filtered_query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in TRACKING_PARAMETERS
+    ]
+    return urlunsplit(
+        (
+            parts.scheme.lower(),
+            parts.netloc.lower(),
+            parts.path.rstrip("/"),
+            urlencode(filtered_query),
+            "",
+        )
+    )
+
+
+def normalized_title(title: str) -> str:
+    title = unicodedata.normalize("NFKD", title.lower())
+    title = title.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", " ", title).strip()
+
+
+def slugify(value: str, max_length: int = 90) -> str:
+    value = unicodedata.normalize("NFKD", value)
+    value = value.encode("ascii", "ignore").decode("ascii")
+    value = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
+    return value[:max_length] or "haber"
+
+
+def word_count(text: str) -> int:
+    return len(re.findall(r"\b[\wÀ-ž'-]+\b", text, flags=re.UNICODE))
+
+
+def safe_iso_datetime(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def parse_entry_date(entry: dict) -> datetime:
+    for key in ("published_parsed", "updated_parsed", "created_parsed"):
+        parsed = entry.get(key)
+        if parsed:
+            try:
+                return datetime(*parsed[:6], tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                pass
+
+    for key in ("published", "updated", "created"):
+        raw = entry.get(key)
+        if raw:
+            try:
+                parsed = parsedate_to_datetime(raw)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
+
+    return datetime.now(timezone.utc)
+
+
+def load_channel_profile() -> str:
+    if CHANNEL_PROFILE_PATH.exists():
+        profile = CHANNEL_PROFILE_PATH.read_text(encoding="utf-8").strip()
+        if profile:
+            return profile
+
+    return (
+        "English-language gaming news channel focused on players, games, "
+        "platforms, studios, publishers, ownership, privacy, and player rights."
+        if IS_GAMING
+        else
+        "English-language technology news channel focused on artificial "
+        "intelligence, big tech, privacy, cybersecurity, platforms, chips, "
+        "and technology regulation."
+    )
+
+
+def load_state() -> set[str]:
+    if ARGS.reset:
+        LOGGER.warning("--reset kullanıldı; geçmiş haberler bu çalışmada yeniden değerlendirilecek.")
+        return set()
+
+    if not GLOBAL_STATE_PATH.exists():
+        return set()
+
+    try:
+        data = json.loads(GLOBAL_STATE_PATH.read_text(encoding="utf-8"))
+        return set(data.get("used_urls", []))
+    except (json.JSONDecodeError, OSError) as exc:
+        LOGGER.warning("İşlenmiş URL dosyası okunamadı: %s", exc)
+        return set()
+
+
+def save_state(used_urls: set[str]) -> None:
+    AUTOMATION_ROOT.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "last_video": VIDEO_NAME,
+        "used_urls": sorted(used_urls),
+    }
+    GLOBAL_STATE_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def retry_call(function, *, attempts: int, description: str):
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return function()
+        except Exception as exc:  # noqa: BLE001 - burada genel yeniden deneme amaçlıdır.
+            last_error = exc
+            status_code = getattr(exc, "status_code", None)
+            if (
+                isinstance(status_code, int)
+                and 400 <= status_code < 500
+                and status_code not in {408, 409, 429}
+            ):
+                LOGGER.error(
+                    "%s kalıcı istem hatası verdi (%s); yeniden denenmeyecek: %s",
+                    description,
+                    status_code,
+                    exc,
+                )
+                raise
+            if attempt >= attempts:
+                break
+            wait_seconds = min(2 ** (attempt - 1), 8)
+            LOGGER.warning(
+                "%s başarısız (%s/%s): %s. %s saniye sonra tekrar deneniyor.",
+                description,
+                attempt,
+                attempts,
+                exc,
+                wait_seconds,
+            )
+            time.sleep(wait_seconds)
+
+    if last_error is None:
+        raise RuntimeError(f"{description} başarısız oldu.")
+    raise last_error
+
+
+# =========================================================
+# OPML VE RSS
+# =========================================================
+
+def load_feed_urls() -> list[str]:
+    if not OPML_PATH.exists():
+        raise FileNotFoundError(
+            f"FeedFlow OPML dosyası bulunamadı: {OPML_PATH}"
+        )
+
+    try:
+        root = ET.parse(OPML_PATH).getroot()
+    except ET.ParseError as exc:
+        raise RuntimeError(f"{OPML_PATH.name} geçerli bir OPML/XML dosyası değil: {exc}") from exc
+
+    urls: list[str] = []
+    for element in root.iter():
+        url = element.attrib.get("xmlUrl") or element.attrib.get("xmlurl")
+        if url:
+            url = url.strip()
+            if url and url not in urls:
+                urls.append(url)
+
+    if not urls:
+        raise RuntimeError(
+            f"{OPML_PATH.name} içinde RSS/Atom adresi bulunamadı."
+        )
+
+    return urls
+
+
+def build_http_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": USER_AGENT,
+            "Accept": (
+                "application/rss+xml, application/atom+xml, application/xml, "
+                "text/xml, text/html;q=0.9, */*;q=0.8"
+            ),
+            "Accept-Language": "en-US,en;q=0.8,tr;q=0.7",
+        }
+    )
+    return session
+
+
+HTTP = build_http_session()
+
+
+def fetch_bytes(url: str, *, description: str) -> bytes:
+    def operation() -> bytes:
+        response = HTTP.get(url, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.content
+
+    return retry_call(
+        operation,
+        attempts=RSS_RETRIES,
+        description=description,
+    )
+
+
+def rough_score(candidate: dict, keywords: set[str]) -> float:
+    now = datetime.now(timezone.utc)
+    age_hours = max(
+        0.0,
+        (now - candidate["published"]).total_seconds() / 3600,
+    )
+
+    recency_score = max(0.0, 35.0 - (age_hours * 0.9))
+    searchable = f'{candidate["title"]} {candidate["rss_text"]}'.lower()
+    hits = sum(1 for keyword in keywords if keyword in searchable)
+    keyword_score = min(35.0, hits * 6.0)
+    title_score = 10.0 if 25 <= len(candidate["title"]) <= 170 else 4.0
+    content_score = min(20.0, len(candidate["rss_text"]) / 55)
+
+    return round(recency_score + keyword_score + title_score + content_score, 2)
+
+
+def collect_candidates(feed_urls: list[str], used_urls: set[str]) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    candidates: list[dict] = []
+    current_urls: set[str] = set()
+    current_titles: set[str] = set()
+    keywords = set(
+        DEFAULT_GAMING_KEYWORDS if IS_GAMING else DEFAULT_TECH_KEYWORDS
+    )
+
+    for feed_number, feed_url in enumerate(feed_urls, start=1):
+        LOGGER.info("RSS okunuyor (%s/%s): %s", feed_number, len(feed_urls), feed_url)
+
+        try:
+            raw_feed = fetch_bytes(
+                feed_url,
+                description=f"RSS indirme: {feed_url}",
+            )
+            feed = feedparser.parse(raw_feed)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error("RSS okunamadı: %s | %s", feed_url, exc)
+            continue
+
+        source_name = strip_html(feed.feed.get("title", "")) or urlsplit(feed_url).netloc
+
+        if getattr(feed, "bozo", False):
+            LOGGER.warning(
+                "RSS biçim uyarısı: %s | %s",
+                feed_url,
+                getattr(feed, "bozo_exception", "bilinmeyen hata"),
+            )
+
+        for entry in feed.entries[:MAX_FEED_ITEMS]:
+            raw_url = str(entry.get("link", "")).strip()
+            title = strip_html(str(entry.get("title", "")))
+
+            if not raw_url or not title:
+                continue
+
+            url = canonical_url(raw_url)
+            title_key = normalized_title(title)
+
+            if not url.startswith(("http://", "https://")):
+                continue
+            if url in used_urls or url in current_urls:
+                continue
+            if title_key and title_key in current_titles:
+                continue
+
+            published = parse_entry_date(entry)
+            age_hours = (now - published).total_seconds() / 3600
+
+            # Gelecek tarihli hatalı feed kayıtlarını 0 saat yaşında kabul et.
+            age_hours = max(0.0, age_hours)
+            if age_hours > MAX_AGE_HOURS:
+                continue
+
+            content_parts: list[str] = []
+            for content in entry.get("content", []):
+                value = content.get("value")
+                if value:
+                    content_parts.append(str(value))
+
+            raw_text = " ".join(content_parts)
+            if not raw_text:
+                raw_text = str(entry.get("summary", "") or entry.get("description", ""))
+
+            rss_text = strip_html(raw_text)
+
+            candidate = {
+                "url": url,
+                "title": title,
+                "source": source_name,
+                "feed_url": feed_url,
+                "published": published,
+                "rss_text": rss_text[:4000],
+            }
+            candidate["rough_score"] = rough_score(candidate, keywords)
+
+            candidates.append(candidate)
+            current_urls.add(url)
+            if title_key:
+                current_titles.add(title_key)
+
+    candidates.sort(
+        key=lambda item: (item["rough_score"], item["published"]),
+        reverse=True,
+    )
+    return candidates[:MAX_CANDIDATES]
+
+
+def save_candidates(candidates: list[dict]) -> None:
+    serializable = []
+    for index, candidate in enumerate(candidates):
+        serializable.append(
+            {
+                "index": index,
+                "title": candidate["title"],
+                "source": candidate["source"],
+                "published_utc": safe_iso_datetime(candidate["published"]),
+                "url": candidate["url"],
+                "rough_score": candidate["rough_score"],
+                "rss_summary": candidate["rss_text"],
+            }
+        )
+
+    CANDIDATES_PATH.write_text(
+        json.dumps(serializable, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+# =========================================================
+# AI SAĞLAYICILARI
+# =========================================================
+
+def structured_ai_call(prompt: str, schema_type: type[SchemaT]) -> SchemaT:
+    def operation() -> SchemaT:
+        if PROVIDER == "openai":
+            from openai import OpenAI
+
+            if not os.getenv("OPENAI_API_KEY"):
+                raise RuntimeError("OPENAI_API_KEY .env dosyasında tanımlı değil.")
+
+            client = OpenAI()
+            response = client.responses.parse(
+                model=OPENAI_MODEL,
+                reasoning={"effort": OPENAI_REASONING_EFFORT},
+                input=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"You are a rigorous {CONTENT_LABEL} editor. "
+                            "Use only supplied sources; never invent facts."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                text_format=schema_type,
+            )
+
+            if response.output_parsed is None:
+                raise RuntimeError("OpenAI yapılandırılmış çıktı döndürmedi.")
+
+            return response.output_parsed
+
+        if PROVIDER == "gemini":
+            from google import genai
+
+            if not os.getenv("GEMINI_API_KEY"):
+                raise RuntimeError("GEMINI_API_KEY .env dosyasında tanımlı değil.")
+
+            client = genai.Client()
+            interaction = client.interactions.create(
+                model=GEMINI_MODEL,
+                input=prompt,
+                response_format={
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": schema_type.model_json_schema(),
+                },
+            )
+
+            output_text = interaction.output_text
+            if not output_text:
+                raise RuntimeError("Gemini yapılandırılmış çıktı döndürmedi.")
+
+            return schema_type.model_validate_json(output_text)
+
+        raise ValueError("AI_PROVIDER yalnızca 'gemini' veya 'openai' olabilir.")
+
+    return retry_call(
+        operation,
+        attempts=API_RETRIES,
+        description=f"{PROVIDER} API çağrısı",
+    )
+
+
+# =========================================================
+# HABER SEÇİMİ
+# =========================================================
+
+def rank_candidates(candidates: list[dict], channel_profile: str) -> list[RankedNews]:
+    # Önce yerel puanlama ile küçük bir havuz oluştur. TOP_N=5 için model
+    # azami 15 aday görür; böylece ucuz modeller uzun listede dikkat kaybetmez.
+    ranking_pool_size = min(len(candidates), max(12, TOP_N * 3))
+    ranking_pool = candidates[:ranking_pool_size]
+
+    article_list = []
+    for index, candidate in enumerate(ranking_pool):
+        article_list.append(
+            {
+                "index": index,
+                "title": candidate["title"],
+                "source": candidate["source"],
+                "published_utc": safe_iso_datetime(candidate["published"]),
+                "rss_summary": candidate["rss_text"][:650],
+                "local_pre_score": candidate["rough_score"],
+            }
+        )
+
+    prompt = f"""
+Choose up to {TOP_N} stories for an English-language YouTube {CONTENT_LABEL} video.
+
+CHANNEL PROFILE:
+{channel_profile}
+
+Score relevance (30), impact (25), novelty (20), video potential (15), and
+source clarity (10). Reject ads, deals, minor accessories, opinion-only pieces,
+vague rumors, and duplicates; for duplicate events choose the strongest source.
+Use only supplied data. local_pre_score is a hint, not a verdict. Return valid
+candidate indexes in descending score order.
+
+CANDIDATES:
+{json.dumps(article_list, ensure_ascii=False, indent=2)}
+"""
+
+    try:
+        result = structured_ai_call(prompt, RankingResult)
+        valid: list[RankedNews] = []
+        used_indexes: set[int] = set()
+
+        for item in result.selected:
+            if not 0 <= item.index < len(ranking_pool):
+                continue
+            if item.index in used_indexes:
+                continue
+            used_indexes.add(item.index)
+            valid.append(item)
+
+        return sorted(valid, key=lambda item: item.score, reverse=True)[:TOP_N]
+
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.error("AI haber sıralaması başarısız: %s", exc)
+        LOGGER.warning("Yerel ön puan sıralaması kullanılacak.")
+
+        fallback: list[RankedNews] = []
+        for index, candidate in enumerate(ranking_pool[:TOP_N]):
+            fallback.append(
+                RankedNews(
+                    index=index,
+                    score=min(100, max(0, round(candidate["rough_score"]))),
+                    reason="AI sıralaması kullanılamadığı için yerel güncellik ve anahtar kelime puanı.",
+                )
+            )
+        return fallback
+
+
+# =========================================================
+# HABER METNİNİ ÇIKARMA
+# =========================================================
+
+def extract_article_text(candidate: dict) -> str:
+    def operation() -> str:
+        response = HTTP.get(candidate["url"], timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+
+        extracted = extract(
+            response.text,
+            url=candidate["url"],
+            include_comments=False,
+            include_tables=False,
+            favor_precision=True,
+            output_format="txt",
+        )
+
+        cleaned = re.sub(r"\s+", " ", extracted or "").strip()
+        if cleaned:
+            return cleaned[:35000]
+        return ""
+
+    try:
+        article_text = retry_call(
+            operation,
+            attempts=RSS_RETRIES,
+            description=f"Haber metni çıkarma: {candidate['url']}",
+        )
+        if len(article_text) >= MIN_ARTICLE_CHARS:
+            return article_text
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Tam haber sayfası okunamadı: %s", exc)
+
+    LOGGER.warning("RSS açıklaması yedek kaynak olarak kullanılacak.")
+    return candidate["rss_text"]
+
+
+# =========================================================
+# ÖZET
+# =========================================================
+
+def summarize_article(
+    candidate: dict,
+    article_text: str,
+) -> NewsSummary:
+    if IS_GAMING:
+        writing_brief = """
+Write an English 150-200 word YouTube gaming-news script from the source.
+Preserve every material fact that fits; add nothing unsupported. Attribute
+allegations and retain uncertainty. Be skeptical of large publishers, platform
+holders, aggressive monetization, lock-in, and anti-consumer decisions. Support
+player ownership, privacy, modding, open platforms, and free expression. Use
+light sarcasm only when context supports it; otherwise sound normal.
+"""
+        revision_style = (
+            "Keep the player-rights, ownership, privacy, open-platform, "
+            "anti-lock-in, and anti-exploitation perspective."
+        )
+    else:
+        writing_brief = """
+Write an English 150-200 word YouTube tech-news script from the source.
+Preserve every material fact that fits; add nothing unsupported. Attribute
+allegations and retain uncertainty. Be skeptical of big tech and supportive of
+free speech and privacy; use light sarcasm only when context supports it.
+Otherwise sound normal.
+"""
+        revision_style = (
+            "Keep the skeptical-big-tech, free-speech, and privacy perspective."
+        )
+
+    prompt = f"""
+{writing_brief.strip()}
+Use simple, warm, intimate but formal and kind language. Make it engaging,
+legally cautious, and ready for ElevenLabs. No greeting,
+farewell, heading, bullets, labels, or stage directions. Return title_en as
+metadata and the narration as summary_en.
+
+ORIGINAL TITLE:
+{candidate["title"]}
+
+SOURCE:
+{candidate["source"]}
+
+PUBLISHED UTC:
+{safe_iso_datetime(candidate["published"])}
+
+SOURCE TEXT:
+{article_text}
+"""
+
+    result = structured_ai_call(prompt, NewsSummary)
+
+    for revision_number in range(1, 4):
+        count = word_count(result.summary_en)
+        if 150 <= count <= 200:
+            return result
+
+        LOGGER.warning(
+            "Özet %s kelime; 150-200 aralığı için düzeltme %s/3.",
+            count,
+            revision_number,
+        )
+
+        revision_prompt = f"""
+Rewrite summary_en to 150-200 English words. Preserve supported facts and
+uncertainty; add nothing. Keep the requested skeptical, privacy-conscious,
+warm, legally cautious, ElevenLabs-ready style. {revision_style} No greeting,
+farewell, heading, bullets, labels, or stage directions. Return title_en and
+summary_en.
+
+CURRENT OUTPUT:
+Title: {result.title_en}
+Summary: {result.summary_en}
+
+SOURCE FOR FACT CHECKING:
+{article_text}
+"""
+        result = structured_ai_call(revision_prompt, NewsSummary)
+
+    LOGGER.warning(
+        "Özet son denemeden sonra %s kelime kaldı.",
+        word_count(result.summary_en),
+    )
+    return result
+
+
+# =========================================================
+# DOSYAYA KAYDETME
+# =========================================================
+
+def save_news_file(
+    summary: NewsSummary,
+    article_text: str,
+    order: int,
+) -> tuple[Path, Path]:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    base_name = f"{order:02d}_{slugify(summary.title_en)}"
+    text_path = OUTPUT_DIR / f"{base_name}.txt"
+    original_path = OUTPUT_DIR / f"{base_name}-orijinal.txt"
+    narration = summary.summary_en.strip()
+
+    text_path.write_text(narration + "\n", encoding="utf-8")
+    original_path.write_text(article_text.strip() + "\n", encoding="utf-8")
+    return text_path, original_path
+
+
+def save_combined_script(created_items: list[dict]) -> None:
+    sections: list[str] = []
+
+    for item in created_items:
+        summary: NewsSummary = item["summary"]
+        narration = summary.summary_en.strip()
+        sections.append(narration)
+
+    combined = "\n\n".join(sections).strip()
+    COMBINED_SCRIPT_PATH.write_text(
+        combined + ("\n" if combined else ""),
+        encoding="utf-8",
+    )
+
+
+def save_project_info(
+    candidate_count: int,
+    rankings: list[RankedNews],
+    created_items: list[dict],
+) -> None:
+    payload = {
+        "video_number": ARGS.video,
+        "video_name": VIDEO_NAME,
+        "category": CONTENT_CATEGORY,
+        "feed_file": OPML_PATH.name,
+        "provider": PROVIDER,
+        "model": OPENAI_MODEL if PROVIDER == "openai" else GEMINI_MODEL,
+        "project_directory": str(PROJECT_DIR),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "candidate_count": candidate_count,
+        "ranked_count": len(rankings),
+        "created_count": len(created_items),
+        "files": [
+            {
+                "title": item["summary"].title_en,
+                "text": str(item["text_path"]),
+                "original": str(item["original_path"]),
+                "source_url": item["candidate"]["url"],
+                "score": item["ranking"].score,
+                "word_count": word_count(item["summary"].summary_en),
+            }
+            for item in created_items
+        ],
+    }
+
+    PROJECT_INFO_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+# =========================================================
+# ÖN KONTROL
+# =========================================================
+
+def validate_configuration() -> None:
+    if PROVIDER not in {"gemini", "openai"}:
+        raise ValueError("AI_PROVIDER yalnızca gemini veya openai olabilir.")
+
+    if (
+        PROVIDER == "openai"
+        and OPENAI_REASONING_EFFORT
+        not in {"none", "low", "medium", "high", "xhigh", "max"}
+    ):
+        raise ValueError(
+            "OPENAI_REASONING_EFFORT none, low, medium, high, xhigh veya max olmalıdır."
+        )
+
+    if not AUTOMATION_ROOT.exists():
+        AUTOMATION_ROOT.mkdir(parents=True, exist_ok=True)
+
+    if PROVIDER == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        raise RuntimeError(
+            "Gemini seçili ancak GEMINI_API_KEY eksik. "
+            "D:\\Dosyalar\\Automation\\.env dosyasını düzenle."
+        )
+
+    if PROVIDER == "openai" and not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError(
+            "OpenAI seçili ancak OPENAI_API_KEY eksik. "
+            "D:\\Dosyalar\\Automation\\.env dosyasını düzenle."
+        )
+
+
+# =========================================================
+# ANA İŞLEM
+# =========================================================
+
+def main() -> int:
+    try:
+        validate_configuration()
+
+        LOGGER.info("=" * 68)
+        LOGGER.info("Proje: %s", VIDEO_NAME)
+        LOGGER.info("Proje klasörü: %s", PROJECT_DIR)
+        LOGGER.info("Kategori: %s", CONTENT_CATEGORY)
+        LOGGER.info("Feed dosyası: %s", OPML_PATH.name)
+        LOGGER.info("AI sağlayıcısı: %s", PROVIDER)
+        LOGGER.info(
+            "Model: %s",
+            OPENAI_MODEL if PROVIDER == "openai" else GEMINI_MODEL,
+        )
+        LOGGER.info("Seçilecek azami haber: %s", TOP_N)
+        LOGGER.info("=" * 68)
+
+        channel_profile = load_channel_profile()
+        feed_urls = load_feed_urls()
+        used_urls = load_state()
+
+        LOGGER.info("%s RSS/Atom feed bulundu.", len(feed_urls))
+        LOGGER.info("Önceki videolarda kullanılan URL sayısı: %s", len(used_urls))
+
+        candidates = collect_candidates(feed_urls, used_urls)
+        save_candidates(candidates)
+
+        if not candidates:
+            LOGGER.warning("Yeni aday haber bulunamadı.")
+            save_project_info(0, [], [])
+            return 0
+
+        LOGGER.info("%s aday haber bulundu.", len(candidates))
+        rankings = rank_candidates(candidates, channel_profile)
+
+        if not rankings:
+            LOGGER.warning("Seçilen haber bulunamadı.")
+            save_project_info(len(candidates), [], [])
+            return 0
+
+        created_items: list[dict] = []
+
+        for ranking in rankings:
+            if ranking.score < MIN_SCORE:
+                LOGGER.info(
+                    "Düşük puan nedeniyle atlandı: %s/100 | %s",
+                    ranking.score,
+                    candidates[ranking.index]["title"],
+                )
+                continue
+
+            candidate = candidates[ranking.index]
+            LOGGER.info(
+                "İşleniyor: %s | %s/100",
+                candidate["title"],
+                ranking.score,
+            )
+
+            try:
+                article_text = extract_article_text(candidate)
+
+                if len(article_text) < 200:
+                    LOGGER.warning(
+                        "Kaynak metin çok kısa olduğu için atlandı: %s",
+                        candidate["title"],
+                    )
+                    continue
+
+                summary = summarize_article(
+                    candidate,
+                    article_text,
+                )
+
+                order = len(created_items) + 1
+                text_path, original_path = save_news_file(
+                    summary,
+                    article_text,
+                    order,
+                )
+
+                created_items.append(
+                    {
+                        "order": order,
+                        "candidate": candidate,
+                        "ranking": ranking,
+                        "summary": summary,
+                        "text_path": text_path,
+                        "original_path": original_path,
+                    }
+                )
+                used_urls.add(candidate["url"])
+
+                LOGGER.info(
+                    "Kaydedildi: %s (%s kelime)",
+                    text_path,
+                    word_count(summary.summary_en),
+                )
+
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception(
+                    "Haber işlenirken hata oluştu: %s | %s",
+                    candidate["title"],
+                    exc,
+                )
+
+        save_state(used_urls)
+        save_combined_script(created_items)
+        save_project_info(len(candidates), rankings, created_items)
+
+        if not created_items:
+            LOGGER.error(
+                "Hiçbir haber dosyası oluşturulamadı; işlem başarısız kabul edildi."
+            )
+            return 1
+
+        LOGGER.info("=" * 68)
+        LOGGER.info("%s tamamlandı.", VIDEO_NAME)
+        LOGGER.info("Oluşturulan haber sayısı: %s", len(created_items))
+        LOGGER.info("Haber klasörü: %s", OUTPUT_DIR)
+        LOGGER.info("Birleşik metin: %s", COMBINED_SCRIPT_PATH)
+        LOGGER.info("=" * 68)
+
+        return 0
+
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.exception("İşlem durduruldu: %s", exc)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

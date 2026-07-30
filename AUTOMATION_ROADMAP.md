@@ -1,0 +1,707 @@
+# Tech News Video Automation — Complete Roadmap
+
+## 1. Target outcome
+
+Build a resumable production system that turns ranked technology news into a finished
+YouTube package:
+
+- source articles and faithful narration scripts;
+- ElevenLabs voiceovers with word/character timing;
+- a deliberate manual checkpoint for the creator-made “Tech News” separator animations;
+- two AI-generated hero images for each news story;
+- context-matched archive images for the rest of every narration;
+- restrained image motion, TV frame, glitch accents, sound effects, and repeated background music;
+- synchronized subtitles;
+- an FFmpeg-rendered final video;
+- a thumbnail, title candidates, and publishing metadata.
+
+The final system should be one-button, but it must remain stage-based internally. Every
+stage must be independently testable, repeatable, and resumable.
+
+## 2. What the current editing screenshot tells us
+
+The intended timeline is not a generic slideshow. It has a consistent layered grammar:
+
+1. Caption/text layer.
+2. Story labels or supporting graphics when needed.
+3. A global TV-frame/effect layer.
+4. Manually produced “Tech News” separator animation before each story.
+5. A global/light glitch layer.
+6. A sequence of short supporting-image shots.
+7. Voiceover clips.
+8. A repeated background-music bed across the full program.
+
+The automated render should preserve this grammar. The manual separator animations
+remain human-made; the automation validates and places them.
+
+## 3. Important findings before implementation
+
+These must be fixed before extending the pipeline:
+
+- The current `Automation` folder is not a Git repository.
+- `.venv` is inside the project and must be excluded from Git.
+- `.env` contains secrets and must never be committed.
+- The current scripts and `.env` still default to `D:\Dosyalar\Automation`, while the
+  actual working folder is
+  `D:\Dosyalar\İş\YouTube\Tech News\Automation`.
+- Existing `project_info.json` files therefore contain stale absolute paths.
+- FFmpeg and FFprobe are not currently available on `PATH`.
+- Whisper is not currently installed in the project environment.
+- Existing scripts already cover RSS selection, original text saving, summary creation,
+  and ElevenLabs TTS. These should be stabilized and wrapped, not discarded.
+
+## 4. Core architecture decisions
+
+### 4.1 One manifest is the source of truth
+
+Each `VideoX` project gets a `manifest.json`. All stages read and update this file.
+Filenames are never used as the only source of meaning.
+
+The manifest records:
+
+- project ID, category, creation date, format, resolution, and frame rate;
+- story order, rank, source URL, source text, summary, and factual-review status;
+- voiceover path, duration, checksum, timing/alignment path, and TTS settings;
+- separator animation path and duration;
+- AI-image prompts, generation IDs, paths, and selected story beats;
+- archive-image choices, source/license metadata, and exact in/out times;
+- timeline events, captions, music, effects, render settings, and output paths;
+- per-stage status, timestamps, input fingerprints, output fingerprints, and errors.
+
+### 4.2 Explicit state machine
+
+Use these normal states:
+
+`NEW → NEWS_READY → VOICE_READY → WAITING_FOR_MANUAL_ANIMATIONS →`
+`MANUAL_ANIMATIONS_READY → STORYBOARD_READY → VISUALS_READY →`
+`CAPTIONS_READY → TIMELINE_READY → RENDERED → PUBLISH_PACKAGE_READY`
+
+Exceptional states:
+
+- `FAILED`: retain all successful artifacts and the exact error.
+- `CANCELLED`: stop future work but retain artifacts.
+
+Entering `0` at the manual checkpoint must **not delete anything**. Destructive cleanup
+should be a separate, explicit command such as `--purge-project`.
+
+### 4.3 Idempotent stages
+
+A stage skips valid outputs whose input hashes have not changed. `--force-stage NAME`
+rebuilds only that stage and invalidates its downstream dependents. Interrupted writes
+use temporary files followed by atomic rename.
+
+### 4.4 Timeline as data before video
+
+Create `timeline.json` before rendering. It contains exact events such as:
+
+```json
+{
+  "start": 42.18,
+  "end": 47.90,
+  "story_id": "02",
+  "type": "archive_image",
+  "asset": "D:/.../Media/Android/example.jpg",
+  "motion": "slow_push_in",
+  "caption_segment_ids": [31, 32]
+}
+```
+
+This makes image selection, captions, effects, music, and rendering auditable.
+
+## 5. Proposed folder structure
+
+Migrate non-destructively. Keep old outputs until the new pipeline passes comparison
+tests.
+
+```text
+Automation/
+├── .gitignore
+├── .env
+├── .env.example
+├── README.md
+├── AUTOMATION_ROADMAP.md
+├── requirements.txt
+├── create_video.bat
+├── src/
+│   └── news_studio/
+│       ├── cli.py
+│       ├── orchestrator.py
+│       ├── state.py
+│       ├── news.py
+│       ├── tts.py
+│       ├── alignment.py
+│       ├── storyboard.py
+│       ├── media_index.py
+│       ├── media_select.py
+│       ├── captions.py
+│       ├── timeline.py
+│       ├── audio_mix.py
+│       ├── render.py
+│       ├── publish.py
+│       └── validate.py
+├── config/
+│   ├── tech.yaml
+│   ├── gaming.yaml
+│   └── render.yaml
+├── assets/
+│   ├── audio/
+│   │   ├── background_music/
+│   │   └── sfx/
+│   ├── overlays/
+│   │   └── tv_frame/
+│   ├── fonts/
+│   └── outro/
+├── indexes/
+│   └── media_index.json
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── fixtures/
+└── Video1/
+    ├── manifest.json
+    ├── state.json
+    ├── 01_news/
+    │   ├── sources/
+    │   └── scripts/
+    ├── 02_voice/
+    │   ├── audio/
+    │   └── alignment/
+    ├── 03_manual_separators/
+    ├── 04_storyboard/
+    ├── 05_visuals/
+    │   ├── generated/
+    │   └── selected_archive/
+    ├── 06_captions/
+    ├── 07_timeline/
+    ├── 08_renders/
+    ├── 09_publish/
+    └── logs/
+```
+
+During migration, adapters can continue reading the current `Haberler` and `Sesler`
+directories.
+
+## 6. Implementation milestones
+
+## Milestone 0 — Secure and normalize the existing system
+
+### Work
+
+1. Make `Automation` the only project root.
+2. Replace hard-coded paths with `Path(__file__).resolve()` plus an optional validated
+   `AUTOMATION_ROOT`.
+3. Back up current code and initialize Git.
+4. Add `.gitignore` for `.env`, `.venv`, caches, logs, temporary files, model downloads,
+   rendered video, and generated per-video artifacts as appropriate.
+5. Commit `.env.example`, never `.env`.
+6. Inventory existing scripts, old project folders, media folders, and reusable assets.
+7. Add a preflight command that checks Python, FFmpeg, FFprobe, API configuration,
+   writable directories, fonts, music, overlays, and available disk space.
+8. Normalize UTF-8 console/file handling; the current README display shows encoding
+   corruption in PowerShell output.
+
+### Test
+
+- Run the existing news and TTS flow on a copied fixture, not the only live project.
+- Confirm every output stays under the actual `Automation` root.
+- Confirm `git status` contains no secret or virtual-environment files.
+
+### Done when
+
+- One clean baseline commit exists.
+- A preflight report passes.
+- No output points to the obsolete root.
+
+## Milestone 1 — Stabilize news, scripts, and TTS
+
+### Work
+
+1. Preserve the current two files per story:
+   - faithful extracted original article;
+   - 150–200 word narration script.
+2. Add stable story IDs independent of titles.
+3. Store ranking score and make the highest-rated story `story 01`.
+4. Add factual checks for names, numbers, dates, quotations, and unsupported claims.
+5. Validate file count, non-empty text, word range, source URL, and story ordering.
+6. Wrap existing ElevenLabs logic as a stage.
+7. Record voice settings, request IDs, character cost, duration, checksum, and retry
+   history.
+8. Preserve existing audio unless source text or TTS settings changed.
+
+### Test
+
+- Run one real `VideoX` with five stories.
+- Compare output text/audio with the current working behavior.
+- Simulate one bad API key, one quota failure, and one interrupted file write.
+
+### Done when
+
+- Five valid source/script pairs and five valid voiceovers are reproducibly generated.
+- A rerun does not charge for or overwrite unchanged narration.
+
+## Milestone 2 — Extract speech timing and story beats
+
+### Primary timing method
+
+Switch ElevenLabs generation to its “with timestamps” response, which provides
+character-level alignment, then aggregate it into words, phrases, and sentences.
+For existing MP3 files, use forced alignment against the already known script.
+
+Whisper may be offered as an offline fallback or validation pass. It can produce timed
+segments and subtitle files, but it should not be the default for synthetic narration
+because the canonical script already exists.
+
+### Work
+
+1. Save `alignment.json` for every voiceover.
+2. Generate exact sentence start/end times.
+3. Detect natural visual beats from sentence boundaries and pauses.
+4. Generate an initial story timing map with:
+   - narration in/out;
+   - important claims;
+   - named people, companies, products, and places;
+   - suggested visual queries;
+   - “must show” versus “supporting” importance.
+5. Reserve separator slots before each news story.
+
+### Test
+
+- Render a diagnostic video with a timer, transcript, and sentence-boundary markers.
+- Spot-check first, middle, and last words for drift.
+
+### Done when
+
+- The final narration word ends within 100 ms of the alignment end.
+- No story timing overlaps another story or its separator.
+
+## Milestone 3 — Manual “Tech News” separator checkpoint
+
+This is the deliberate human pause.
+
+### User-facing behavior
+
+After news text and TTS are complete, display:
+
+> The summary and the original news texts are saved, waiting for the animation
+> production. Press 1 after ready, or 0 for cancelling all process.
+
+The prompt must also show:
+
+- project folder;
+- number of required separator animations;
+- expected filenames;
+- accepted codecs/resolution/frame rate;
+- where to place them.
+
+Recommended naming:
+
+```text
+03_manual_separators/
+├── 01_separator.mp4
+├── 02_separator.mp4
+├── 03_separator.mp4
+├── 04_separator.mp4
+└── 05_separator.mp4
+```
+
+### Resume behavior
+
+On `1`, validate every required file with FFprobe:
+
+- video decodes successfully;
+- expected resolution and frame rate;
+- supported pixel format;
+- non-zero duration;
+- audio presence is known and handled consistently.
+
+On `0`, set state to `CANCELLED`, preserve all work, and print the resume command.
+
+### Test
+
+- Missing file, corrupt file, wrong resolution, and valid file cases.
+- Close the console while waiting, then resume later without repeating prior stages.
+
+### Done when
+
+- The project can wait indefinitely and resume safely after a restart.
+
+## Milestone 4 — Storyboard and two AI images per news story
+
+### Work
+
+1. The AI reads each narration plus source text and alignment map.
+2. It selects exactly two important, visually distinct story beats.
+3. Selection rules:
+   - prefer concrete events, products, people, or consequences;
+   - avoid two images showing the same idea;
+   - do not generate logos, UI screenshots, or factual diagrams when archive material
+     is more accurate;
+   - avoid unsupported visual claims;
+   - keep the first/highest-rated story visually strongest because it also drives the
+     thumbnail.
+4. Save `storyboard.json` before generating anything.
+5. Each prompt records story ID, beat text, time range, aspect ratio, visual style,
+   negative constraints, and generation seed/ID when available.
+6. Generate 16:9 images with safe space for captions.
+7. Validate image dimensions, readability, and duplicates.
+
+### Test
+
+- Generate images for one story first.
+- Render a 30-second proof containing its separator, voiceover, two hero images, and
+  temporary archive fillers.
+
+### Done when
+
+- Every story has two approved hero images assigned to exact narration ranges.
+
+## Milestone 5 — Index and select archive imagery
+
+Do not send the full folder tree to an AI on every run. Index once and update only
+changed files.
+
+### Media index
+
+For every image, store:
+
+- absolute and project-relative path;
+- filename and folder/category;
+- extension, width, height, aspect ratio, checksum;
+- parsed filename keywords;
+- optional local visual caption/embedding;
+- source URL, creator, license, and attribution requirement;
+- quality flags and prior-use count.
+
+The current `Media` and `Media (No-Copyright)` repositories become configured sources.
+Prefer assets with clear reuse rights. A filename alone is not proof of licensing.
+
+### Selection flow
+
+1. Split each story’s uncovered narration into 3–7 second visual windows at sentence or
+   phrase boundaries.
+2. Extract entities and scene intent for each window.
+3. Retrieve a small local shortlist using filename/category/semantic similarity.
+4. Send only the shortlist and context to the AI for final selection.
+5. Apply constraints:
+   - no immediate duplicate;
+   - avoid reusing the same asset in one video unless intentional;
+   - favor 16:9 or crop-safe images;
+   - match the precise spoken claim, not merely the company name;
+   - fall back to a neutral category image when confidence is low.
+6. Save every decision, confidence, and alternative in `media_plan.json`.
+7. Copy selected assets into the project or record immutable source paths and hashes.
+
+### Test
+
+- Evaluate at least 20 manually labeled narration windows.
+- Track top-1 acceptance, wrong-entity rate, duplicate rate, and crop failures.
+
+### Done when
+
+- Every non-separator narration interval has a valid visual.
+- At least 80% of selections are accepted without manual replacement in the pilot.
+
+## Milestone 6 — Motion, TV treatment, effects, sound, and music
+
+### Image motion
+
+Use subtle deterministic movement:
+
+- slow push-in, pull-out, or pan;
+- no random aggressive zooms;
+- motion direction alternates to avoid repetition;
+- faces and key products stay inside a safe crop;
+- generated hero images may receive slightly longer screen time.
+
+### TV frame and glitch
+
+Treat these as controlled timeline layers:
+
+- a transparent TV-frame/scanline overlay across the program when desired;
+- short glitch accents at separators and selected cuts;
+- optional RGB split, horizontal displacement, noise, or tape dropout;
+- intensity capped so captions and faces remain readable;
+- never apply heavy glitch continuously.
+
+Build the initial version with FFmpeg filters and reusable overlay assets. Match the
+screenshot’s “Shutter Frame” and “Tape Dropouts” feel using a short approved reference
+render before applying it to a complete video.
+
+### Repeated background music
+
+1. Add a licensed background track to `assets/audio/background_music/`.
+2. Loop it seamlessly for the complete program duration.
+3. Keep it under all voiceover and separator sections.
+4. Apply loudness normalization.
+5. Duck the music automatically while narration is active.
+6. Permit slightly higher music during separators if it does not conflict with their
+   audio.
+7. Add short fades at the start/end and crossfade loop boundaries if the source loop is
+   not seamless.
+8. Record the track, license, gain, loop points, and mix settings in the manifest.
+
+Starting mix targets should be treated as test values, not laws:
+
+- narration: clear and dominant;
+- background music: roughly 18–24 dB below narration during speech;
+- separator/SFX peaks: controlled and non-startling;
+- final YouTube mix: loudness and true-peak checked before approval.
+
+### Test
+
+- Render 60 seconds containing a separator, several stills, captions, a loop boundary,
+  glitch accents, voiceover, and music ducking.
+- Listen on headphones, laptop speakers, and a phone.
+
+### Done when
+
+- Voice remains intelligible, music loops are not distracting, and effects look
+  intentional rather than constant.
+
+## Milestone 7 — Captions
+
+### Work
+
+1. Build captions directly from the canonical narration and TTS alignment.
+2. Export both:
+   - `.srt` for YouTube/editing portability;
+   - `.ass` for styled burned-in captions.
+3. Caption layout rules:
+   - one or two lines;
+   - readable phrase boundaries;
+   - sensible characters per line;
+   - no orphaned article/preposition at a line end;
+   - minimum display duration;
+   - caption-safe lower-third area;
+   - optional active-word highlighting only after the basic version is stable.
+4. Offset each story’s local alignment by its separator and timeline start.
+5. Validate monotonic timestamps, overlaps, missing text, final duration, and safe-area
+   placement.
+
+### Test
+
+- Compare the first and last caption of every story.
+- Render captions over both bright and dark imagery.
+
+### Done when
+
+- Caption text exactly matches the approved narration and stays synchronized through
+  the final word.
+
+## Milestone 8 — Build the FFmpeg timeline and final render
+
+### Work
+
+1. Generate a normalized intermediate for every separator animation.
+2. Build story sequences from timeline events.
+3. Compose layers in this order:
+   - base visual;
+   - image motion/crop;
+   - separator or supporting graphics;
+   - glitch accents;
+   - TV frame;
+   - captions;
+   - voiceover, separator audio, SFX, and looped/ducked music.
+4. Use a consistent production format, initially:
+   - 1920×1080;
+   - 30 fps unless the manual animation reference requires another value;
+   - H.264 delivery video;
+   - AAC 48 kHz audio;
+   - `yuv420p` compatibility.
+5. Produce:
+   - low-resolution preview;
+   - final master;
+   - optional clean master without burned-in captions;
+   - render report from FFprobe.
+6. Add an outro only after the main sequence is stable.
+
+### Automated QA
+
+- file opens and decodes;
+- expected resolution/frame rate/codecs;
+- audio and video durations agree within tolerance;
+- no black gaps, missing assets, frozen invalid frames, or silent narration;
+- no timeline overlaps outside intentional transitions;
+- captions do not extend past video end;
+- output size and duration are plausible;
+- loudness and peak checks pass.
+
+### Done when
+
+- A complete `VideoX` renders from artifacts with one command and passes automated plus
+  human review.
+
+## Milestone 9 — Thumbnail and YouTube title package
+
+The first story is the highest-rated story and drives the publishing package.
+
+### Work
+
+1. Use story 01’s source, approved narration, ranking rationale, and strongest visual
+   concept.
+2. Generate:
+   - 5–10 title candidates;
+   - one recommended title with a reason;
+   - 2–3 thumbnail concepts;
+   - final 1280×720 thumbnail variants;
+   - short thumbnail text options;
+   - description draft, chapter timestamps, source links, and tags.
+3. Keep titles accurate:
+   - no claim stronger than the source;
+   - important company/product term early;
+   - avoid duplicating all thumbnail text in the title;
+   - no fabricated quotation or number.
+4. Score candidates for clarity, curiosity, specificity, and factual risk.
+5. Save all publishing output in `09_publish/`.
+
+### Test
+
+- Verify the final title and thumbnail against the original article, not only the
+  summary.
+- Check thumbnail legibility at phone size.
+
+### Done when
+
+- One approved title and thumbnail pair plus a complete metadata package exist.
+
+## Milestone 10 — One-button orchestration and recovery
+
+### Commands
+
+Provide a small stable command surface:
+
+```text
+create_video.bat
+news-studio new --category tech
+news-studio resume VideoX
+news-studio status VideoX
+news-studio run-stage VideoX captions
+news-studio validate VideoX
+news-studio preview VideoX
+news-studio render VideoX
+```
+
+### One-button behavior
+
+1. Preflight.
+2. Create next project safely.
+3. Produce news/source/scripts.
+4. Produce TTS and alignment.
+5. Enter manual checkpoint.
+6. Resume after separator validation.
+7. Storyboard and generate two AI images per story.
+8. Select archive images.
+9. Generate captions and timeline.
+10. Mix effects/music and render preview.
+11. Require preview approval before expensive final render if configured.
+12. Render final and create publishing package.
+
+### Recovery
+
+- `resume` starts from the first incomplete/invalid stage.
+- Network stages use bounded retries and preserve request IDs.
+- API-cost stages show planned request count before execution.
+- Every stage writes a structured log plus a concise user-facing error.
+- Ctrl+C and shutdown leave the project resumable.
+- A lock file prevents two processes from mutating the same `VideoX`.
+- A `dry-run` shows planned actions without API calls or writes.
+
+### Done when
+
+- A new project can be completed with one initial launch, one manual-animation resume,
+  and one preview approval.
+
+## 7. Recommended implementation order
+
+Use one real project fixture at the end of every phase.
+
+1. Milestone 0: Git, path cleanup, preflight, safe project root.
+2. Milestone 1: stabilize the current news + TTS behavior.
+3. Milestone 2: alignment and timing manifest.
+4. Milestone 3: manual separator checkpoint and resume.
+5. Milestone 7 basic: plain SRT from alignment.
+6. Milestone 4: storyboard and two AI images for one story, then all stories.
+7. Milestone 5: media index and archive selection.
+8. Milestone 6: image motion, TV frame, glitch, SFX, repeated music.
+9. Milestone 8: preview and final FFmpeg render.
+10. Milestone 9: title, thumbnail, description, chapters, sources.
+11. Milestone 10: one-button orchestration, caching, and recovery.
+12. Milestone 7 advanced: styled captions or word highlighting only after stability.
+
+Basic SRT is intentionally implemented early because it is a simple proof that the
+alignment and global timeline are correct.
+
+## 8. Pilot strategy
+
+### Pilot A — 30 seconds
+
+One story excerpt, one separator, two images, captions, TV frame, glitch accent,
+voiceover, and looped/ducked background music.
+
+### Pilot B — One complete story
+
+Full separator plus narration, two AI hero images, archive fillers, captions, music,
+effects, and preview render.
+
+### Pilot C — Existing complete VideoX
+
+Rebuild an already edited project and compare:
+
+- duration;
+- story order;
+- visual pacing;
+- caption sync;
+- voice/music balance;
+- manual replacement count;
+- render time.
+
+### Pilot D — Fresh one-button project
+
+Use new news data, stop at the manual checkpoint, resume, approve preview, and finish
+the publish package.
+
+Only after Pilot D passes twice should the flow be considered production-stable.
+
+## 9. Quality gates
+
+A final render is blocked unless:
+
+- every story has source text, approved narration, audio, timing, and visuals;
+- every expected separator exists and passes FFprobe;
+- exactly two AI hero images are assigned per story unless explicitly overridden;
+- every narration interval is visually covered;
+- media licensing/attribution status is recorded;
+- captions match the canonical narration;
+- background music covers the whole timeline and has no audible broken loop;
+- no missing files, invalid paths, or stale hashes exist;
+- preview approval is recorded;
+- final video passes codec, duration, loudness, and visual sanity checks;
+- title/thumbnail claims are supported by the original first story.
+
+## 10. Decisions to lock during the first implementation phase
+
+These do not block the roadmap, but must become configuration values:
+
+- target resolution and frame rate;
+- separator file format and whether separators carry audio;
+- exact background-music file and its license;
+- final narration/music/SFX mix targets;
+- TV frame asset and preferred glitch intensity;
+- average still-image duration;
+- caption font, colors, placement, and whether subtitles are burned in;
+- image-generation provider and budget;
+- whether selected archive files are copied into each project or referenced by hash;
+- whether the final output contains an intro/outro in addition to separators.
+
+## 11. Technical references behind key choices
+
+- ElevenLabs can return character-level timestamps with generated speech:
+  <https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps>
+- ElevenLabs forced alignment can align existing audio with known text and return word
+  timings:
+  <https://elevenlabs.io/docs/api-reference/forced-alignment/create>
+- OpenAI Whisper supports timed transcription workflows and depends on FFmpeg:
+  <https://github.com/openai/whisper>
+- FFmpeg documentation:
+  <https://ffmpeg.org/documentation.html>
+
