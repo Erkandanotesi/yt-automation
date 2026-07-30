@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import traceback
@@ -12,6 +13,15 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+
+from file_utils import (
+    atomic_write_bytes,
+    atomic_write_json,
+    json_fingerprint,
+    sha256_file,
+    sha256_text,
+)
+from tooling import find_executable
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -129,6 +139,7 @@ def load_api_keys() -> list[tuple[str, str]]:
 API_KEYS = load_api_keys()
 ACTIVE_KEY_INDEX = 0
 KNOWN_REMAINING_CREDITS: dict[str, int] = {}
+REQUEST_ATTEMPT_EVENTS: list[dict] = []
 
 
 class TeeStream:
@@ -337,6 +348,12 @@ def request_with_retry(
 
     for attempt in range(1, RETRIES + 1):
         started = time.monotonic()
+        event = {
+            "method": method.upper(),
+            "endpoint": url.removeprefix(API_BASE),
+            "attempt": attempt,
+            "max_attempts": RETRIES,
+        }
         debug(
             f"HTTP {method} {url} | attempt={attempt}/{RETRIES} | "
             f"timeout={REQUEST_TIMEOUT}s"
@@ -357,9 +374,28 @@ def request_with_retry(
                 f"request_id={response.headers.get('request-id', 'unknown')}"
             )
             if response.status_code < 400:
+                event.update(
+                    {
+                        "result": "success",
+                        "status_code": response.status_code,
+                        "elapsed_seconds": round(elapsed, 3),
+                        "request_id": response.headers.get("request-id", ""),
+                    }
+                )
+                REQUEST_ATTEMPT_EVENTS.append(event)
                 return response
 
             code, message = error_details(response)
+            event.update(
+                {
+                    "result": "http_error",
+                    "status_code": response.status_code,
+                    "error_code": code,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "request_id": response.headers.get("request-id", ""),
+                }
+            )
+            REQUEST_ATTEMPT_EVENTS.append(event)
             warning(
                 f"ElevenLabs rejected request | status={response.status_code} | "
                 f"code={code or 'unknown'} | message={message}"
@@ -378,12 +414,21 @@ def request_with_retry(
             )
         except requests.RequestException as exc:
             last_error = exc
+            event.update(
+                {
+                    "result": "network_error",
+                    "error_type": type(exc).__name__,
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                }
+            )
+            REQUEST_ATTEMPT_EVENTS.append(event)
             warning(
                 f"Network error | type={type(exc).__name__} | message={exc}"
             )
 
         if attempt < RETRIES:
             wait_seconds = min(2 ** (attempt - 1), 8)
+            REQUEST_ATTEMPT_EVENTS[-1]["retry_wait_seconds"] = wait_seconds
             warning(
                 f"Request failed ({attempt}/{RETRIES}); retrying in "
                 f"{wait_seconds}s."
@@ -523,10 +568,155 @@ def validate_voice() -> dict:
     return voice
 
 
+def tts_settings_payload() -> dict:
+    return {
+        "voice_id": VOICE_ID,
+        "model_id": MODEL_ID,
+        "output_format": OUTPUT_FORMAT,
+        "voice_settings": {
+            "speed": SPEED,
+            "stability": STABILITY,
+            "similarity_boost": SIMILARITY_BOOST,
+            "style": STYLE,
+            "use_speaker_boost": SPEAKER_BOOST,
+        },
+        "language_override": LANGUAGE_OVERRIDE,
+        "language_code": LANGUAGE_CODE if LANGUAGE_OVERRIDE else None,
+    }
+
+
+def tts_input_fingerprint(text: str) -> str:
+    return json_fingerprint(
+        {
+            "text_sha256": sha256_text(text),
+            "settings": tts_settings_payload(),
+        }
+    )
+
+
+def probe_audio(path: Path) -> dict:
+    ffprobe = find_executable("ffprobe")
+    if ffprobe is None:
+        raise RuntimeError(
+            "FFprobe is required to validate generated or cached audio. "
+            "Run install_ffmpeg.ps1 or preflight.bat."
+        )
+
+    completed = subprocess.run(
+        [
+            str(ffprobe),
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name,sample_rate,channels:format=duration",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"FFprobe rejected {path.name}: "
+            f"{completed.stderr.strip() or 'unknown media error'}"
+        )
+
+    try:
+        payload = json.loads(completed.stdout)
+        streams = payload.get("streams", [])
+        duration = float(payload.get("format", {}).get("duration", 0))
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"FFprobe returned invalid metadata for {path.name}.") from exc
+
+    if not streams or duration <= 0:
+        raise RuntimeError(f"No valid audio stream was found in {path.name}.")
+
+    stream = streams[0]
+    return {
+        "duration_seconds": round(duration, 3),
+        "codec": stream.get("codec_name", ""),
+        "sample_rate": int(stream.get("sample_rate") or 0),
+        "channels": int(stream.get("channels") or 0),
+    }
+
+
+def load_previous_tts_info(audio_dir: Path) -> dict:
+    path = audio_dir / "tts_info.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        warning(f"Ignoring unreadable TTS metadata: {exc}")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def cached_audio_metadata(
+    *,
+    previous_entry: dict | None,
+    output_path: Path,
+    input_fingerprint: str,
+) -> dict | None:
+    if not previous_entry or not output_path.is_file():
+        return None
+    if previous_entry.get("input_fingerprint") != input_fingerprint:
+        return None
+
+    expected_checksum = previous_entry.get("audio_sha256", "")
+    if not expected_checksum or sha256_file(output_path) != expected_checksum:
+        return None
+
+    media = probe_audio(output_path)
+    return {
+        **previous_entry,
+        **media,
+        "status": "cached",
+        "audio_sha256": expected_checksum,
+    }
+
+
 def summary_files(video_dir: Path) -> list[Path]:
     news_dir = video_dir / "Haberler"
     if not news_dir.exists():
         raise FileNotFoundError(f"News directory not found: {news_dir}")
+
+    project_info_path = video_dir / "project_info.json"
+    if project_info_path.exists():
+        try:
+            project_info = json.loads(project_info_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"Project manifest is unreadable: {project_info_path}"
+            ) from exc
+        if project_info.get("status") != "complete":
+            raise RuntimeError(
+                "News project is incomplete; TTS will not run until its "
+                "project_info.json status is complete."
+            )
+        story_records = project_info.get("stories", [])
+        files = [Path(item["text"]) for item in story_records]
+        expected = int(project_info.get("expected_count", len(files)))
+        if len(files) != expected:
+            raise RuntimeError(
+                f"Project manifest contains {len(files)} stories; expected {expected}."
+            )
+        if any(path.parent.resolve() != news_dir.resolve() for path in files):
+            raise RuntimeError("Project manifest references a text outside Haberler.")
+        missing = [str(path) for path in files if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(
+                "Project manifest references missing narration files: "
+                + ", ".join(missing)
+            )
+        return files
 
     files = sorted(
         path
@@ -727,19 +917,42 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
     if video_number < 1:
         raise ValueError("--video must be 1 or greater.")
 
-    voice = validate_voice()
     video_dir = project_dir(video_number)
     info(f"Starting audio stage for {project_name(video_number)}.")
     debug(f"Video directory: {video_dir}")
     files = summary_files(video_dir)
     audio_dir = video_dir / "Sesler"
     audio_dir.mkdir(parents=True, exist_ok=True)
+    previous_info = load_previous_tts_info(audio_dir)
+    previous_by_name = {
+        Path(item.get("text_file", "")).name: item
+        for item in previous_info.get("files", [])
+        if isinstance(item, dict) and item.get("text_file")
+    }
     info(f"Found {len(files)} summary file(s). Output: {audio_dir}")
 
     results: list[dict] = []
+    voice: dict | None = None
     for index, text_path in enumerate(files, start=1):
         output_path = audio_dir / f"{text_path.stem}.mp3"
         text = text_path.read_text(encoding="utf-8").strip()
+        text_checksum = sha256_text(text)
+        input_fingerprint = tts_input_fingerprint(text)
+        previous_entry = previous_by_name.get(text_path.name)
+        existed_before = output_path.exists()
+        cache_miss_reason = (
+            "forced_overwrite"
+            if overwrite
+            else "missing_audio"
+            if not existed_before
+            else "missing_metadata"
+            if previous_entry is None
+            else "text_or_settings_changed"
+            if previous_entry.get("input_fingerprint") != input_fingerprint
+            else "missing_audio_checksum"
+            if not previous_entry.get("audio_sha256")
+            else "audio_checksum_changed"
+        )
         debug(
             f"Input {index}/{len(files)} | file={text_path.name} | "
             f"characters={len(text)} | output={output_path.name}"
@@ -749,18 +962,35 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
             raise RuntimeError(f"Summary file is empty: {text_path}")
 
         if output_path.exists() and not overwrite:
-            print(f"[{index}/{len(files)}] Existing audio kept: {output_path.name}")
-            results.append(
-                {
-                    "text_file": str(text_path),
-                    "audio_file": str(output_path),
-                    "status": "existing",
-                    "characters": len(text),
-                }
-            )
-            continue
+            try:
+                cached = cached_audio_metadata(
+                    previous_entry=previous_entry,
+                    output_path=output_path,
+                    input_fingerprint=input_fingerprint,
+                )
+            except RuntimeError as exc:
+                warning(f"Cached audio failed validation and will be rebuilt: {exc}")
+                cached = None
+                cache_miss_reason = "invalid_cached_audio"
+            if cached is not None:
+                print(f"[{index}/{len(files)}] Cached audio kept: {output_path.name}")
+                cached.update(
+                    {
+                        "text_file": str(text_path),
+                        "audio_file": str(output_path),
+                        "characters": len(text),
+                        "text_sha256": text_checksum,
+                        "input_fingerprint": input_fingerprint,
+                    }
+                )
+                results.append(cached)
+                continue
+
+        if voice is None:
+            voice = validate_voice()
 
         info(f"[{index}/{len(files)}] Generating: {text_path.name}")
+        attempt_start = len(REQUEST_ATTEMPT_EVENTS)
         try:
             audio, metadata = generate_speech(text)
         except Exception:
@@ -771,17 +1001,33 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
         if not audio:
             raise RuntimeError(f"ElevenLabs returned empty audio for {text_path.name}")
 
-        temporary_path = output_path.with_suffix(".mp3.part")
-        temporary_path.write_bytes(audio)
-        temporary_path.replace(output_path)
+        atomic_write_bytes(
+            output_path,
+            audio,
+            validate_temporary=probe_audio,
+        )
+        media = probe_audio(output_path)
+        cost = metadata.get("character_cost", "")
+        normalized_cost: int | str = int(cost) if str(cost).isdigit() else str(cost)
 
         results.append(
             {
                 "text_file": str(text_path),
                 "audio_file": str(output_path),
-                "status": "generated",
+                "status": (
+                    "regenerated"
+                    if existed_before
+                    else "generated"
+                ),
+                "cache_miss_reason": cache_miss_reason,
                 "characters": len(text),
+                "text_sha256": text_checksum,
+                "input_fingerprint": input_fingerprint,
+                "audio_sha256": sha256_file(output_path),
+                **media,
                 **metadata,
+                "character_cost": normalized_cost,
+                "retry_history": REQUEST_ATTEMPT_EVENTS[attempt_start:],
             }
         )
         info(
@@ -791,27 +1037,21 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
         )
 
     tts_info = {
+        "schema_version": 2,
         "video": project_name(video_number),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "voice_id": VOICE_ID,
-        "voice_name": voice.get("name", ""),
+        "voice_name": (
+            voice.get("name", "")
+            if voice is not None
+            else previous_info.get("voice_name", "")
+        ),
         "model_id": MODEL_ID,
         "output_format": OUTPUT_FORMAT,
-        "voice_settings": {
-            "speed": SPEED,
-            "stability": STABILITY,
-            "similarity_boost": SIMILARITY_BOOST,
-            "style": STYLE,
-            "use_speaker_boost": SPEAKER_BOOST,
-            "is_override": LANGUAGE_OVERRIDE,
-            "language_code": LANGUAGE_CODE if LANGUAGE_OVERRIDE else None,
-        },
+        "settings": tts_settings_payload(),
         "files": results,
     }
-    (audio_dir / "tts_info.json").write_text(
-        json.dumps(tts_info, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(audio_dir / "tts_info.json", tts_info)
     info(f"Audio stage complete: {audio_dir}")
     return 0
 

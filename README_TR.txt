@@ -172,6 +172,10 @@ Her "Video N" klasöründe:
 Haberler\01_haber-basligi.txt
 - ElevenLabs'e gönderilen 150–200 kelimelik anlatım metni.
 
+Yeni dosya adlarında başlıktan bağımsız sabit bir hikâye kimliği de bulunur:
+
+Haberler\01_story_a1b2c3d4e5f6_haber-basligi.txt
+
 Haberler\01_haber-basligi-orijinal.txt
 - Kaynaktan çıkarılan orijinal haber metni.
 
@@ -185,14 +189,46 @@ video_script.txt
 - Seçilen anlatım metinlerinin birleşimi.
 
 project_info.json
-- Proje, kaynak, sıralama ve dosya özeti.
+- Proje durumu, sabit hikâye kimlikleri, kaynak, sıralama, doğrulama ve dosya
+  SHA-256 özetleri.
+
+Sesler\tts_info.json
+- Ses ayarları, giriş parmak izi, istek kimliği, karakter maliyeti, deneme geçmişi,
+  süre, codec ve ses SHA-256 özetleri.
 
 pipeline.log ve elevenlabs.log
 - Teknik işlem günlükleri.
 
 
-9. ALTYAZI ZAMANLAMASI
-----------------------
+9. MILESTONE 1 GÜVENLİK VE ÖNBELLEK DAVRANIŞI
+---------------------------------------------
+
+- Haber sıralaması ana seçimlerle birlikte yedek adaylar da döndürür. Bir sayfa
+  okunamazsa ikinci bir sıralama API çağrısı yapılmadan sıradaki yedek denenir.
+- REQUIRE_FULL_TOP_N=true iken tam TOP_N geçerli haber oluşmazsa proje
+  "incomplete" kalır ve processed_urls.json güncellenmez.
+- Her anlatım 150–200 kelime, boş olmayan kaynak, destekli sayı/doğrudan alıntı,
+  benzersiz kaynak ve azalan puan sırası için doğrulanır.
+- Dosyalar geçici dosya + atomik değiştirme yöntemiyle yazılır. Kesinti eski sağlam
+  dosyayı bozmaz.
+- TTS yalnızca metin veya ses ayarlarının parmak izi değiştiğinde yeniden üretilir.
+  Aynı girişte mevcut MP3'ün SHA-256 özeti ve FFprobe sonucu geçerliyse API çağrısı
+  yapılmadan korunur.
+- project_info.json "complete" değilse TTS başlamaz. Böylece eksik haber grubu
+  yanlışlıkla seslendirilmez.
+- ELEVENLABS_API_KEY_1, _2, _3 ... biçimindeki tüm dolu numaralı anahtarlar sabit
+  bir üst sınır olmadan ve anahtar değerleri loglanmadan okunur.
+- Kota/erişim hatasında sıradaki yetkili anahtar denenebilir; geçersiz metin gibi
+  kalıcı istek hatalarında hemen durulur. IP değiştirme veya sağlayıcı denetimini
+  gizleme uygulanmaz.
+
+Yerel test (OpenAI/ElevenLabs üretim kotası kullanmaz):
+
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+
+10. ALTYAZI ZAMANLAMASI
+-----------------------
 
 Whisper zorunlu değildir ve bu proje için planlanan ana yöntem değildir.
 
@@ -207,8 +243,8 @@ değişmez.
 Bu zamanlama aşaması Milestone 2'de uygulanacaktır.
 
 
-10. ESKİ OTOMASYON ÇIKTILARI
-----------------------------
+11. ESKİ OTOMASYON ÇIKTILARI
+-----------------------------
 
 Automation içindeki eski Old ve Video1 klasörleri silinmeden şuraya taşındı:
 
@@ -217,7 +253,7 @@ D:\Dosyalar\İş\YouTube\Tech News\Legacy Automation Outputs
 Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkilemez.
 
 
-11. ÖNEMLİ SINIRLAMALAR
+12. ÖNEMLİ SINIRLAMALAR
 -----------------------
 
 - Ödeme duvarı veya giriş ekranı aşılmaz.

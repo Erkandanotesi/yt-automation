@@ -22,6 +22,14 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 from trafilatura import extract
 
+from content_validation import ContentValidationError, validate_narration, word_count
+from file_utils import (
+    atomic_write_json,
+    atomic_write_text,
+    sha256_file,
+    stable_story_id,
+)
+
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -57,8 +65,15 @@ MAX_AGE_HOURS = int(os.getenv("MAX_AGE_HOURS", "36"))
 MAX_CANDIDATES = int(os.getenv("MAX_CANDIDATES", "25"))
 MAX_FEED_ITEMS = int(os.getenv("MAX_FEED_ITEMS", "30"))
 TOP_N_DEFAULT = int(os.getenv("TOP_N", "5"))
+RANKING_RESERVE = int(os.getenv("RANKING_RESERVE", "5"))
 MIN_SCORE = int(os.getenv("MIN_SCORE", "65"))
 MIN_ARTICLE_CHARS = int(os.getenv("MIN_ARTICLE_CHARS", "500"))
+REQUIRE_FULL_TOP_N = os.getenv("REQUIRE_FULL_TOP_N", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "25"))
 API_RETRIES = int(os.getenv("API_RETRIES", "3"))
 RSS_RETRIES = int(os.getenv("RSS_RETRIES", "2"))
@@ -274,11 +289,22 @@ class RankingResult(BaseModel):
     selected: list[RankedNews]
 
 
+class FactualReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    names_entities_checked: list[str] = Field(default_factory=list)
+    numbers_dates_checked: list[str] = Field(default_factory=list)
+    quotes_checked: list[str] = Field(default_factory=list)
+    attributions_preserved: list[str] = Field(default_factory=list)
+    unsupported_claims_removed: list[str] = Field(default_factory=list)
+
+
 class NewsSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title_en: str
     summary_en: str
+    factual_review: FactualReview
 
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
@@ -327,8 +353,8 @@ def slugify(value: str, max_length: int = 90) -> str:
     return value[:max_length] or "haber"
 
 
-def word_count(text: str) -> int:
-    return len(re.findall(r"\b[\wÀ-ž'-]+\b", text, flags=re.UNICODE))
+def story_id_for(candidate: dict) -> str:
+    return stable_story_id(canonical_url(candidate["url"]))
 
 
 def safe_iso_datetime(value: datetime | None) -> str:
@@ -400,10 +426,7 @@ def save_state(used_urls: set[str]) -> None:
         "last_video": VIDEO_NAME,
         "used_urls": sorted(used_urls),
     }
-    GLOBAL_STATE_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(GLOBAL_STATE_PATH, payload)
 
 
 def retry_call(function, *, attempts: int, description: str):
@@ -628,10 +651,7 @@ def save_candidates(candidates: list[dict]) -> None:
             }
         )
 
-    CANDIDATES_PATH.write_text(
-        json.dumps(serializable, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(CANDIDATES_PATH, serializable)
 
 
 # =========================================================
@@ -705,9 +725,10 @@ def structured_ai_call(prompt: str, schema_type: type[SchemaT]) -> SchemaT:
 # =========================================================
 
 def rank_candidates(candidates: list[dict], channel_profile: str) -> list[RankedNews]:
-    # Önce yerel puanlama ile küçük bir havuz oluştur. TOP_N=5 için model
-    # azami 15 aday görür; böylece ucuz modeller uzun listede dikkat kaybetmez.
-    ranking_pool_size = min(len(candidates), max(12, TOP_N * 3))
+    # Rank a few reserves so an unreadable or invalid story can be replaced
+    # without paying for a second ranking request.
+    target_count = min(len(candidates), TOP_N + max(0, RANKING_RESERVE))
+    ranking_pool_size = min(len(candidates), max(12, target_count * 2))
     ranking_pool = candidates[:ranking_pool_size]
 
     article_list = []
@@ -724,7 +745,8 @@ def rank_candidates(candidates: list[dict], channel_profile: str) -> list[Ranked
         )
 
     prompt = f"""
-Choose up to {TOP_N} stories for an English-language YouTube {CONTENT_LABEL} video.
+Choose up to {target_count} stories for an English-language YouTube {CONTENT_LABEL}
+video. The first {TOP_N} are primary choices and the rest are ranked reserves.
 
 CHANNEL PROFILE:
 {channel_profile}
@@ -752,14 +774,14 @@ CANDIDATES:
             used_indexes.add(item.index)
             valid.append(item)
 
-        return sorted(valid, key=lambda item: item.score, reverse=True)[:TOP_N]
+        return sorted(valid, key=lambda item: item.score, reverse=True)[:target_count]
 
     except Exception as exc:  # noqa: BLE001
         LOGGER.error("AI haber sıralaması başarısız: %s", exc)
         LOGGER.warning("Yerel ön puan sıralaması kullanılacak.")
 
         fallback: list[RankedNews] = []
-        for index, candidate in enumerate(ranking_pool[:TOP_N]):
+        for index, candidate in enumerate(ranking_pool[:target_count]):
             fallback.append(
                 RankedNews(
                     index=index,
@@ -848,6 +870,12 @@ legally cautious, and ready for ElevenLabs. No greeting,
 farewell, heading, bullets, labels, or stage directions. Return title_en as
 metadata and the narration as summary_en.
 
+Before returning, compare every name/entity, number/date, direct quote, and
+attribution in the narration against SOURCE TEXT. In factual_review, list the
+exact source phrases you checked. List any tempting unsupported claims you
+removed. Do not put source facts in factual_review unless their exact wording
+appears in SOURCE TEXT.
+
 ORIGINAL TITLE:
 {candidate["title"]}
 
@@ -864,22 +892,32 @@ SOURCE TEXT:
     result = structured_ai_call(prompt, NewsSummary)
 
     for revision_number in range(1, 4):
-        count = word_count(result.summary_en)
-        if 150 <= count <= 200:
+        try:
+            validate_narration(
+                title=result.title_en,
+                narration=result.summary_en,
+                source_text=article_text,
+                factual_review=result.factual_review.model_dump(),
+            )
             return result
+        except ContentValidationError as exc:
+            validation_error = str(exc)
 
         LOGGER.warning(
-            "Özet %s kelime; 150-200 aralığı için düzeltme %s/3.",
-            count,
+            "Özet doğrulaması başarısız: %s | düzeltme %s/3.",
+            validation_error,
             revision_number,
         )
 
         revision_prompt = f"""
-Rewrite summary_en to 150-200 English words. Preserve supported facts and
-uncertainty; add nothing. Keep the requested skeptical, privacy-conscious,
-warm, legally cautious, ElevenLabs-ready style. {revision_style} No greeting,
-farewell, heading, bullets, labels, or stage directions. Return title_en and
-summary_en.
+Fix the validation error below. Rewrite summary_en to 150-200 English words.
+Preserve supported facts and uncertainty; add nothing. Keep the requested
+skeptical, privacy-conscious, warm, legally cautious, ElevenLabs-ready style.
+{revision_style} No greeting, farewell, heading, bullets, labels, or stage
+directions. Rebuild factual_review using only exact phrases found in SOURCE.
+
+VALIDATION ERROR:
+{validation_error}
 
 CURRENT OUTPUT:
 Title: {result.title_en}
@@ -890,9 +928,11 @@ SOURCE FOR FACT CHECKING:
 """
         result = structured_ai_call(revision_prompt, NewsSummary)
 
-    LOGGER.warning(
-        "Özet son denemeden sonra %s kelime kaldı.",
-        word_count(result.summary_en),
+    validate_narration(
+        title=result.title_en,
+        narration=result.summary_en,
+        source_text=article_text,
+        factual_review=result.factual_review.model_dump(),
     )
     return result
 
@@ -905,17 +945,24 @@ def save_news_file(
     summary: NewsSummary,
     article_text: str,
     order: int,
-) -> tuple[Path, Path]:
+    story_id: str,
+) -> tuple[Path, Path, dict]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    base_name = f"{order:02d}_{slugify(summary.title_en)}"
+    validation = validate_narration(
+        title=summary.title_en,
+        narration=summary.summary_en,
+        source_text=article_text,
+        factual_review=summary.factual_review.model_dump(),
+    )
+    base_name = f"{order:02d}_{story_id}_{slugify(summary.title_en, 65)}"
     text_path = OUTPUT_DIR / f"{base_name}.txt"
     original_path = OUTPUT_DIR / f"{base_name}-orijinal.txt"
     narration = summary.summary_en.strip()
 
-    text_path.write_text(narration + "\n", encoding="utf-8")
-    original_path.write_text(article_text.strip() + "\n", encoding="utf-8")
-    return text_path, original_path
+    atomic_write_text(text_path, narration + "\n")
+    atomic_write_text(original_path, article_text.strip() + "\n")
+    return text_path, original_path, validation
 
 
 def save_combined_script(created_items: list[dict]) -> None:
@@ -927,16 +974,54 @@ def save_combined_script(created_items: list[dict]) -> None:
         sections.append(narration)
 
     combined = "\n\n".join(sections).strip()
-    COMBINED_SCRIPT_PATH.write_text(
-        combined + ("\n" if combined else ""),
-        encoding="utf-8",
-    )
+    atomic_write_text(COMBINED_SCRIPT_PATH, combined + ("\n" if combined else ""))
+
+
+def validate_created_items(created_items: list[dict]) -> None:
+    if REQUIRE_FULL_TOP_N and len(created_items) != TOP_N:
+        raise RuntimeError(
+            f"Project has {len(created_items)} valid stories; exactly {TOP_N} "
+            "are required. processed_urls.json was not changed."
+        )
+    if not created_items:
+        raise RuntimeError("No valid story was created.")
+
+    orders = [item["order"] for item in created_items]
+    if orders != list(range(1, len(created_items) + 1)):
+        raise RuntimeError(f"Story order is not contiguous: {orders}")
+
+    story_ids = [item["story_id"] for item in created_items]
+    if len(story_ids) != len(set(story_ids)):
+        raise RuntimeError("Duplicate stable story IDs were created.")
+
+    urls = [canonical_url(item["candidate"]["url"]) for item in created_items]
+    if len(urls) != len(set(urls)):
+        raise RuntimeError("Duplicate source URLs were created.")
+
+    scores = [item["ranking"].score for item in created_items]
+    if scores != sorted(scores, reverse=True):
+        raise RuntimeError("Created stories are not in descending ranking order.")
+
+    for item in created_items:
+        for key in ("text_path", "original_path"):
+            path = item[key]
+            if not path.is_file() or path.stat().st_size == 0:
+                raise RuntimeError(f"Required story artifact is missing: {path}")
+        validate_narration(
+            title=item["summary"].title_en,
+            narration=item["summary"].summary_en,
+            source_text=item["article_text"],
+            factual_review=item["summary"].factual_review.model_dump(),
+        )
 
 
 def save_project_info(
     candidate_count: int,
     rankings: list[RankedNews],
     created_items: list[dict],
+    *,
+    status: str,
+    error: str = "",
 ) -> None:
     payload = {
         "video_number": ARGS.video,
@@ -950,23 +1035,32 @@ def save_project_info(
         "candidate_count": candidate_count,
         "ranked_count": len(rankings),
         "created_count": len(created_items),
-        "files": [
+        "expected_count": TOP_N,
+        "status": status,
+        "error": error,
+        "stories": [
             {
+                "story_id": item["story_id"],
+                "order": item["order"],
                 "title": item["summary"].title_en,
+                "source_title": item["candidate"]["title"],
+                "source": item["candidate"]["source"],
+                "published_utc": safe_iso_datetime(item["candidate"]["published"]),
                 "text": str(item["text_path"]),
                 "original": str(item["original_path"]),
                 "source_url": item["candidate"]["url"],
                 "score": item["ranking"].score,
+                "ranking_reason": item["ranking"].reason,
                 "word_count": word_count(item["summary"].summary_en),
+                "narration_sha256": sha256_file(item["text_path"]),
+                "source_sha256": sha256_file(item["original_path"]),
+                "validation": item["validation"],
             }
             for item in created_items
         ],
     }
 
-    PROJECT_INFO_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(PROJECT_INFO_PATH, payload)
 
 
 # =========================================================
@@ -1042,20 +1136,34 @@ def main() -> int:
 
         if not candidates:
             LOGGER.warning("Yeni aday haber bulunamadı.")
-            save_project_info(0, [], [])
-            return 0
+            save_project_info(
+                0,
+                [],
+                [],
+                status="incomplete",
+                error="No new candidate stories were found.",
+            )
+            return 1
 
         LOGGER.info("%s aday haber bulundu.", len(candidates))
         rankings = rank_candidates(candidates, channel_profile)
 
         if not rankings:
             LOGGER.warning("Seçilen haber bulunamadı.")
-            save_project_info(len(candidates), [], [])
-            return 0
+            save_project_info(
+                len(candidates),
+                [],
+                [],
+                status="incomplete",
+                error="No stories were ranked.",
+            )
+            return 1
 
         created_items: list[dict] = []
 
         for ranking in rankings:
+            if len(created_items) >= TOP_N:
+                break
             if ranking.score < MIN_SCORE:
                 LOGGER.info(
                     "Düşük puan nedeniyle atlandı: %s/100 | %s",
@@ -1087,23 +1195,27 @@ def main() -> int:
                 )
 
                 order = len(created_items) + 1
-                text_path, original_path = save_news_file(
+                story_id = story_id_for(candidate)
+                text_path, original_path, validation = save_news_file(
                     summary,
                     article_text,
                     order,
+                    story_id,
                 )
 
                 created_items.append(
                     {
                         "order": order,
+                        "story_id": story_id,
                         "candidate": candidate,
                         "ranking": ranking,
                         "summary": summary,
+                        "article_text": article_text,
                         "text_path": text_path,
                         "original_path": original_path,
+                        "validation": validation,
                     }
                 )
-                used_urls.add(candidate["url"])
 
                 LOGGER.info(
                     "Kaydedildi: %s (%s kelime)",
@@ -1118,15 +1230,28 @@ def main() -> int:
                     exc,
                 )
 
-        save_state(used_urls)
         save_combined_script(created_items)
-        save_project_info(len(candidates), rankings, created_items)
-
-        if not created_items:
-            LOGGER.error(
-                "Hiçbir haber dosyası oluşturulamadı; işlem başarısız kabul edildi."
+        try:
+            validate_created_items(created_items)
+        except Exception as exc:  # noqa: BLE001
+            save_project_info(
+                len(candidates),
+                rankings,
+                created_items,
+                status="incomplete",
+                error=str(exc),
             )
+            LOGGER.error("Proje kalite kapısından geçemedi: %s", exc)
             return 1
+
+        used_urls.update(item["candidate"]["url"] for item in created_items)
+        save_state(used_urls)
+        save_project_info(
+            len(candidates),
+            rankings,
+            created_items,
+            status="complete",
+        )
 
         LOGGER.info("=" * 68)
         LOGGER.info("%s tamamlandı.", VIDEO_NAME)

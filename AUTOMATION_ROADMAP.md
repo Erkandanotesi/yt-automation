@@ -174,6 +174,8 @@ directories.
 
 ## Milestone 0 — Secure and normalize the existing system
 
+**Status: complete (2026-07-30).**
+
 ### Work
 
 1. Make `Automation` the code/data root and its parent the numbered-project root.
@@ -203,6 +205,8 @@ directories.
 
 ## Milestone 1 — Stabilize news, scripts, and TTS
 
+**Status: complete (2026-07-30).**
+
 ### Work
 
 1. Preserve the current two files per story:
@@ -219,14 +223,26 @@ directories.
 
 ### Test
 
-- Run one real `Video N` project with five stories.
+- Run one copied real `Video N` fixture with five stories without modifying the original.
 - Compare output text/audio with the current working behavior.
 - Simulate one bad API key, one quota failure, and one interrupted file write.
+- Keep provider smoke tests very short; do not spend quota on a five-story test run
+  merely to verify local validation and caching.
 
 ### Done when
 
 - Five valid source/script pairs and five valid voiceovers are reproducibly generated.
 - A rerun does not charge for or overwrite unchanged narration.
+
+### Implemented verification
+
+- Seventeen offline unit/integration tests pass.
+- The copied five-story legacy fixture contains five source/script pairs in the
+  150–200 word range and five FFprobe-valid MP3 files.
+- Bad-request, quota-key fallback, incomplete-manifest, stale-file, invalid-audio,
+  and interrupted-atomic-write behavior are tested without contacting a provider.
+- API key slots are numbered without a fixed maximum. Requests are not disguised
+  through IP rotation; configured keys must be used within provider rules.
 
 ## Milestone 2 — Extract speech timing and story beats
 
