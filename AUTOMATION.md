@@ -38,6 +38,9 @@ Tech News/
 │   ├── media_selection_video.bat
 │   ├── media_index_eval.py
 │   ├── media_retrieval_benchmark.json
+│   ├── caption_stage.py
+│   ├── captions_video.bat
+│   ├── test_program.bat
 │   ├── content_validation.py
 │   ├── file_utils.py
 │   ├── project_paths.py
@@ -86,6 +89,11 @@ Video N/
 │   │   ├── 01_hero_02.png
 │   │   └── ...
 │   └── selected_archive/           # optional when copying is enabled
+├── 06_captions/
+│   ├── captions.json
+│   ├── captions.srt
+│   ├── story_01.srt
+│   └── ...
 └── timing_diagnostic.mp4      # optional local QA render
 ```
 
@@ -98,3 +106,9 @@ Milestone 4 uses `gpt-5.6-luna` only for selecting two supported, visually
 distinct timed beats and writing the scene-specific prompt. Pixel generation uses
 the separate `gpt-image-2` model at native 1280x720. The default production quality
 is `medium`; the one-request provider smoke test always overrides this to `low`.
+
+Milestone 7 basic generates plain UTF-8 SubRip captions directly from the approved
+canonical narration and ElevenLabs alignment. It applies the finalized manual
+separator offsets, writes combined and per-story `.srt` files, and makes no
+transcription or provider request. Styled `.ass` captions and word highlighting
+remain deferred.

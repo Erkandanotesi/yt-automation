@@ -32,6 +32,7 @@ from tooling import find_executable  # noqa: E402 - .env must be loaded first
 from storyboard_stage import StoryboardSettings  # noqa: E402
 from media_index import MediaIndexSettings  # noqa: E402
 from media_selection_stage import MediaSelectionSettings  # noqa: E402
+from caption_stage import CaptionSettings  # noqa: E402
 
 
 PLACEHOLDER_MARKERS = (
@@ -265,6 +266,23 @@ def collect_checks() -> list[Check]:
                 f"shortlist={media_selection_settings.shortlist_size}; "
                 f"windows={media_selection_settings.minimum_window_seconds:g}-"
                 f"{media_selection_settings.maximum_window_seconds:g}s"
+            ),
+        )
+
+    try:
+        caption_settings = CaptionSettings.from_environment()
+        caption_settings.validate()
+    except (RuntimeError, ValueError) as exc:
+        add("Basic SRT configuration", False, str(exc))
+    else:
+        add(
+            "Basic SRT configuration",
+            True,
+            (
+                f"lines={caption_settings.max_lines}; "
+                f"characters/line={caption_settings.max_characters_per_line}; "
+                f"words/cue={caption_settings.max_words_per_caption}; "
+                f"minimum={caption_settings.minimum_duration_seconds:g}s"
             ),
         )
 

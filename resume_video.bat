@@ -29,6 +29,13 @@ set "CHECKPOINT_EXIT=%ERRORLEVEL%"
 if "%CHECKPOINT_EXIT%"=="0" (
     echo.
     echo Manuel separator asamasi READY.
+    ".venv\Scripts\python.exe" "caption_stage.py" --video %LATEST_VIDEO_NUMBER% --action generate
+    if errorlevel 1 (
+        echo.
+        echo [HATA] Temel SRT altyazi asamasi tamamlanamadi.
+        pause
+        exit /b 1
+    )
     call "storyboard_video.bat" %LATEST_VIDEO_NUMBER%
     if errorlevel 1 (
         echo.

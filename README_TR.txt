@@ -373,7 +373,51 @@ geçerli SHA-256 sonucu varsa tekrar API çağrısı yapılmaz. Yanlış boyut v
 görsel reddedilir; kota harcayarak otomatik replacement üretilmez.
 
 
-13. MEDYA ARŞİVİ İNDEKSİ VE GÖRSEL SEÇİMİ
+13. TEMEL SRT ALTYAZILARI
+-------------------------
+
+Temel altyazı aşaması Whisper veya yeni bir ElevenLabs isteği kullanmaz. Onaylı
+anlatım metnini, kaydedilmiş ElevenLabs alignment dosyasını ve gerçek separator
+süreleri uygulanmış story_timing.json dosyasını okur.
+
+Normal create_video.bat ve resume_video.bat akışında manuel separatorlar READY
+olduktan hemen sonra otomatik çalışır.
+
+En son Video N projesi için çift tıklama:
+
+captions_video.bat
+
+Komut satırı:
+
+.\.venv\Scripts\python.exe caption_stage.py --video 5 --action generate
+
+Durum kontrolü:
+
+.\.venv\Scripts\python.exe caption_stage.py --video 5 --action status
+
+Çıktılar:
+
+Video 5\06_captions\captions.srt
+Video 5\06_captions\story_01.srt
+Video 5\06_captions\captions.json
+
+captions.srt bütün videonun global zamanlarını kullanır. Her haberin separator süresi
+altyazı başlangıcına otomatik eklenir. captions.json giriş parmak izini, SHA-256
+değerlerini, ilk/son altyazı zamanını ve kalite sonuçlarını kaydeder.
+
+Aynı narration, alignment, separator zamanları ve ayarlarla tekrar çalıştırılırsa
+geçerli SRT dosyaları yeniden yazılmaz. .ass biçimi, ekrana gömülü stil ve kelime
+vurgulama Milestone 7 advanced aşamasına bırakılmıştır.
+
+Programın güncel durumunu API kotası harcamadan test etmek için:
+
+test_program.bat
+
+Bu dosya preflight kontrolünü, bütün yerel testleri ve mevcut medya indeksi durumunu
+çalıştırır.
+
+
+14. MEDYA ARŞİVİ İNDEKSİ VE GÖRSEL SEÇİMİ
 ------------------------------------------
 
 İki arşiv de kullanılır:
@@ -428,7 +472,7 @@ Mevcut etiketlenmiş dosyalarla ücretsiz 20 örnek testi:
 Etiketleme ilerledikçe aynı komutu yeniden çalıştırabilirsin.
 
 
-14. ESKİ OTOMASYON ÇIKTILARI
+15. ESKİ OTOMASYON ÇIKTILARI
 -----------------------------
 
 Automation içindeki eski Old ve Video1 klasörleri silinmeden şuraya taşındı:
@@ -438,7 +482,7 @@ D:\Dosyalar\İş\YouTube\Tech News\Legacy Automation Outputs
 Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkilemez.
 
 
-15. ÖNEMLİ SINIRLAMALAR
+16. ÖNEMLİ SINIRLAMALAR
 -----------------------
 
 - Ödeme duvarı veya giriş ekranı aşılmaz.

@@ -564,6 +564,8 @@ Starting mix targets should be treated as test values, not laws:
 
 ## Milestone 7 — Captions
 
+**Status: basic SRT complete (2026-07-30); advanced styling deferred.**
+
 ### Work
 
 1. Build captions directly from the canonical narration and TTS alignment.
@@ -586,6 +588,29 @@ Starting mix targets should be treated as test values, not laws:
 
 - Compare the first and last caption of every story.
 - Render captions over both bright and dark imagery.
+
+### Basic SRT implemented verification
+
+- `caption_stage.py` reads only the approved canonical narration, its saved
+  ElevenLabs alignment, and the finalized separator/narration offsets in
+  `story_timing.json`. Whisper and provider API calls are not used.
+- Caption chunks follow the saved phrase and exact word boundaries, use one or two
+  lines, and default to 42 characters per line, nine words, and a 350 ms minimum
+  target.
+- The stage writes a combined `06_captions/captions.srt`, per-story SRT files, and an
+  auditable `captions.json` containing checksums, input fingerprint, cue counts, and
+  first/last-caption timing.
+- Validation rejects stale alignment text, non-positive or overlapping cues,
+  separator overlap, line-limit failures, and captions beyond the project duration.
+- A valid unchanged package is reused by checksum without rewriting its SRT files.
+  Changed alignment, narration, settings, or finalized separator timing invalidates
+  the cache.
+- Five caption tests pass offline. The full 53-test suite passes without OpenAI or
+  ElevenLabs usage.
+- `captions_video.bat` runs the caption stage for the latest project, while
+  `test_program.bat` runs preflight, all offline tests, and media-index status.
+- `.ass`, burn-in styling, caption-safe visual rendering, and active-word highlighting
+  are intentionally left for Milestone 7 advanced.
 
 ### Done when
 
