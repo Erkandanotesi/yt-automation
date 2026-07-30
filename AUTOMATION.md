@@ -27,6 +27,8 @@ Tech News/
 │   ├── alignment_utils.py
 │   ├── manual_checkpoint.py
 │   ├── resume_video.bat
+│   ├── storyboard_stage.py
+│   ├── storyboard_video.bat
 │   ├── content_validation.py
 │   ├── file_utils.py
 │   ├── project_paths.py
@@ -66,9 +68,22 @@ Video N/
 ├── 03_manual_separators/
 │   ├── 01_separator.mp4
 │   └── ...
+├── 04_storyboard/
+│   ├── storyboard.json
+│   └── story_01_30s_proof.mp4
+├── 05_visuals/
+│   └── generated/
+│       ├── 01_hero_01.png
+│       ├── 01_hero_02.png
+│       └── ...
 └── timing_diagnostic.mp4      # optional local QA render
 ```
 
 `Assets/Media` is the primary reusable visual repository.
 `Media (No-Copyright)` remains a separate licensing-conscious repository until the
 media-index milestone records provenance and attribution requirements.
+
+Milestone 4 uses `gpt-5.6-luna` only for selecting two supported, visually
+distinct timed beats and writing the scene-specific prompt. Pixel generation uses
+the separate `gpt-image-2` model at native 1280x720. The default production quality
+is `medium`; the one-request provider smoke test always overrides this to `low`.

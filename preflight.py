@@ -29,6 +29,7 @@ from project_paths import (  # noqa: E402 - .env must be loaded first
     project_name,
 )
 from tooling import find_executable  # noqa: E402 - .env must be loaded first
+from storyboard_stage import StoryboardSettings  # noqa: E402
 
 
 PLACEHOLDER_MARKERS = (
@@ -198,6 +199,29 @@ def collect_checks() -> list[Check]:
         configured_secret(provider_key),
         f"{provider_key} is configured without exposing its value.",
     )
+    add(
+        "OpenAI storyboard/image key",
+        configured_secret("OPENAI_API_KEY"),
+        "OPENAI_API_KEY is configured without exposing its value.",
+    )
+    try:
+        storyboard_settings = StoryboardSettings.from_environment()
+        storyboard_settings.validate()
+    except (RuntimeError, ValueError) as exc:
+        add("Storyboard/image configuration", False, str(exc))
+    else:
+        add(
+            "Storyboard/image configuration",
+            True,
+            (
+                f"planner={storyboard_settings.planner_model}; "
+                f"image={storyboard_settings.image_model}; "
+                f"quality={storyboard_settings.image_quality}; "
+                f"size={storyboard_settings.image_size}; "
+                "max paid requests/run="
+                f"{storyboard_settings.maximum_image_requests_per_run}"
+            ),
+        )
 
     elevenlabs_keys = numbered_elevenlabs_keys()
     add(

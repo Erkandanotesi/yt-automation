@@ -29,6 +29,13 @@ set "CHECKPOINT_EXIT=%ERRORLEVEL%"
 if "%CHECKPOINT_EXIT%"=="0" (
     echo.
     echo Manuel separator asamasi READY.
+    call "storyboard_video.bat" %LATEST_VIDEO_NUMBER%
+    if errorlevel 1 (
+        echo.
+        echo [HATA] Storyboard / AI gorsel asamasi tamamlanamadi.
+        pause
+        exit /b 1
+    )
 ) else if "%CHECKPOINT_EXIT%"=="2" (
     echo.
     echo Checkpoint beklemede veya kullanici tarafindan iptal edildi.

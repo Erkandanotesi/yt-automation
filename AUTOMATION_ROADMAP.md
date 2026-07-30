@@ -373,6 +373,8 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
 
 ## Milestone 4 — Storyboard and two AI images per news story
 
+**Status: complete (2026-07-30).**
+
 ### Work
 
 1. The AI reads each narration plus source text and alignment map.
@@ -396,6 +398,32 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
 - Generate images for one story first.
 - Render a 30-second proof containing its separator, voiceover, two hero images, and
   temporary archive fillers.
+
+### Implemented verification
+
+- `gpt-5.6-luna` reads the approved narration, bounded original source text, and the
+  timed candidate map, then returns exactly two distinct candidate IDs through a
+  strict structured-output schema.
+- The application appends a stable API-ready prompt contract: native 1280x720
+  16:9 composition, central crop safety, a calm bottom 22% caption area, factual
+  boundaries, and negative constraints for text, logos, UI, charts, diagrams,
+  watermarks, and unsupported details.
+- `storyboard.json` is atomically saved before any image request. It records story
+  ID, exact local/global time range, prompt, style, constraints, model, quality,
+  request/generation ID, nullable seed, checksums, and validation results.
+- Pixel generation uses the dedicated `gpt-image-2` Image API model. Production
+  defaults to balanced `medium` quality; the isolated live smoke uses `low`.
+- Paid generation requires `--confirm-cost`, respects a hard request limit, caches
+  unchanged valid images, and never auto-buys a retry for a visual duplicate.
+- FFprobe/FFmpeg verify dimensions and decodability. A perceptual dHash rejects
+  near-duplicates, while a local lower-third luma/edge proxy records caption-safe
+  readability warnings without another paid vision request.
+- The pilot renderer creates a 30-second proof with the validated manual separator,
+  narration, both hero images, and a temporary archive filler.
+- Forty-two offline tests pass, including saved-before-generation, exact timing,
+  cost blocking, cache reuse, duplicate rejection, and the 30-second proof.
+- One authorized live low-quality 1280x720 request verifies current provider access;
+  the temporary test image is deleted after validation.
 
 ### Done when
 

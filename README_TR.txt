@@ -330,7 +330,50 @@ Onaylanmış bir separator daha sonra değişir veya silinirse SHA-256 kontrolü
 durumunu otomatik olarak WAITING'e döndürür.
 
 
-12. ESKİ OTOMASYON ÇIKTILARI
+12. STORYBOARD VE HABER BAŞINA İKİ AI GÖRSELİ
+---------------------------------------------
+
+Manuel separator checkpoint READY olduktan sonra:
+
+storyboard_video.bat
+
+komutu her haberin onaylı anlatımını, orijinal kaynak metnini ve alignment zamanlarını
+okur. gpt-5.6-luna tam olarak iki farklı görsel an seçer ve API'ye gönderilecek promptu
+yazar. Görselin kendisini ayrı gpt-image-2 modeli üretir.
+
+Varsayılan dengeli ayarlar:
+
+STORYBOARD_MODEL=gpt-5.6-luna
+OPENAI_IMAGE_MODEL=gpt-image-2
+OPENAI_IMAGE_QUALITY=medium
+OPENAI_IMAGE_SIZE=1280x720
+
+Ücretli görsel isteği otomatik başlamaz. storyboard_video.bat önce seçim ister:
+
+1  Yalnızca birinci haber için 2 görsel ve 30 saniyelik proof
+2  Bütün haberler için 2'şer görsel ve birinci haber proof
+0  Yalnızca storyboard.json kaydet; görsel üretme
+
+Elle kullanım:
+
+.\.venv\Scripts\python.exe storyboard_stage.py --video 5 --action plan
+.\.venv\Scripts\python.exe storyboard_stage.py --video 5 --action generate --story 1 --confirm-cost --max-requests 2
+.\.venv\Scripts\python.exe storyboard_stage.py --video 5 --action proof --story 1
+.\.venv\Scripts\python.exe storyboard_stage.py --video 5 --action status
+
+Çıktılar:
+
+Video 5\04_storyboard\storyboard.json
+Video 5\04_storyboard\story_01_30s_proof.mp4
+Video 5\05_visuals\generated\01_hero_01.png
+Video 5\05_visuals\generated\01_hero_02.png
+
+storyboard.json görsel API çağrısından önce kaydedilir. Aynı prompt/model/ayar ve
+geçerli SHA-256 sonucu varsa tekrar API çağrısı yapılmaz. Yanlış boyut veya benzer
+görsel reddedilir; kota harcayarak otomatik replacement üretilmez.
+
+
+13. ESKİ OTOMASYON ÇIKTILARI
 -----------------------------
 
 Automation içindeki eski Old ve Video1 klasörleri silinmeden şuraya taşındı:
@@ -340,7 +383,7 @@ D:\Dosyalar\İş\YouTube\Tech News\Legacy Automation Outputs
 Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkilemez.
 
 
-13. ÖNEMLİ SINIRLAMALAR
+14. ÖNEMLİ SINIRLAMALAR
 -----------------------
 
 - Ödeme duvarı veya giriş ekranı aşılmaz.

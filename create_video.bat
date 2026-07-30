@@ -35,7 +35,7 @@ if not exist ".env" (
     exit /b 1
 )
 
-echo %CYAN%[0/5]%RESET% Sistem kontrol ediliyor...
+echo %CYAN%[0/6]%RESET% Sistem kontrol ediliyor...
 ".venv\Scripts\python.exe" "preflight.py"
 if errorlevel 1 (
     echo.
@@ -120,7 +120,7 @@ if "%SKIP_NEWS%"=="0" if not exist "%FEED_FILE%" (
 )
 
 echo.
-echo %CYAN%[1/5]%RESET% ElevenLabs kontrol ediliyor...
+echo %CYAN%[1/6]%RESET% ElevenLabs kontrol ediliyor...
 ".venv\Scripts\python.exe" "elevenlabs_tts.py" --check > "%TEMP%\news_studio_eleven_check.log" 2>&1
 if errorlevel 1 (
     echo.
@@ -155,9 +155,9 @@ if "%SKIP_NEWS%"=="0" (
     if "%REBUILD_PROJECT%"=="1" (
         echo.
         echo %YELLOW%[!] Override:%RESET% Video %VIDEO_NUMBER% bastan yazilacak.
-        echo %CYAN%[2/5]%RESET% Eski proje ciktilari temizleniyor...
+        echo %CYAN%[2/6]%RESET% Eski proje ciktilari temizleniyor...
 
-        powershell.exe -NoProfile -Command "$root=[IO.Path]::GetFullPath('%PROJECTS_ROOT%').TrimEnd('\'); $target=[IO.Path]::GetFullPath('%VIDEO_DIR%'); if ([IO.Path]::GetDirectoryName($target) -ne $root -or [IO.Path]::GetFileName($target) -notmatch '^Video [0-9]+$') { throw 'Guvenli olmayan proje yolu: ' + $target }; foreach ($name in @('Haberler','Sesler')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; foreach ($name in @('aday_haberler.json','video_script.txt','project_info.json','story_timing.json','state.json','timing_diagnostic_story_01.mp4','pipeline.log','elevenlabs.log')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }"
+        powershell.exe -NoProfile -Command "$root=[IO.Path]::GetFullPath('%PROJECTS_ROOT%').TrimEnd('\'); $target=[IO.Path]::GetFullPath('%VIDEO_DIR%'); if ([IO.Path]::GetDirectoryName($target) -ne $root -or [IO.Path]::GetFileName($target) -notmatch '^Video [0-9]+$') { throw 'Guvenli olmayan proje yolu: ' + $target }; foreach ($name in @('Haberler','Sesler','04_storyboard','05_visuals')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; foreach ($name in @('aday_haberler.json','video_script.txt','project_info.json','story_timing.json','state.json','timing_diagnostic_story_01.mp4','pipeline.log','elevenlabs.log')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }"
         if errorlevel 1 (
             echo.
             echo %RED%[X] Eski proje ciktilari temizlenemedi.%RESET%
@@ -169,9 +169,9 @@ if "%SKIP_NEWS%"=="0" (
     if not exist "%VIDEO_DIR%" mkdir "%VIDEO_DIR%"
 
     if "%REBUILD_PROJECT%"=="1" (
-        echo %CYAN%[2/5]%RESET% Video %VIDEO_NUMBER% yeniden hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
+        echo %CYAN%[2/6]%RESET% Video %VIDEO_NUMBER% yeniden hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
     ) else (
-        echo %CYAN%[2/5]%RESET% Video %VIDEO_NUMBER% hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
+        echo %CYAN%[2/6]%RESET% Video %VIDEO_NUMBER% hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
     )
 
     ".venv\Scripts\python.exe" "news_pipeline.py" --video %VIDEO_NUMBER% --category %CONTENT_CATEGORY% >nul 2>&1
@@ -186,12 +186,12 @@ if "%SKIP_NEWS%"=="0" (
     )
     echo       %GREEN%OK%RESET%  %GRAY%Haberler ve transcriptler hazir.%RESET%
 ) else (
-    echo %CYAN%[2/5]%RESET% Transcript atlandi  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
+    echo %CYAN%[2/6]%RESET% Transcript atlandi  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
     echo       %GREEN%OK%RESET%
 )
 
 echo.
-echo %CYAN%[3/5]%RESET% Sesler uretiliyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
+echo %CYAN%[3/6]%RESET% Sesler uretiliyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
 if defined TTS_OVERWRITE_ARG (
     echo       %YELLOW%Override acik%RESET%
 ) else (
@@ -210,7 +210,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo %CYAN%[4/5]%RESET% Kelime ve cumle zamanlari hazirlaniyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
+echo %CYAN%[4/6]%RESET% Kelime ve cumle zamanlari hazirlaniyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
 ".venv\Scripts\python.exe" "alignment_stage.py" --video %VIDEO_NUMBER%
 if errorlevel 1 (
     echo.
@@ -222,7 +222,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo %CYAN%[5/5]%RESET% Manuel separator animasyonlari bekleniyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
+echo %CYAN%[5/6]%RESET% Manuel separator animasyonlari bekleniyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
 ".venv\Scripts\python.exe" "manual_checkpoint.py" --video %VIDEO_NUMBER%
 set "CHECKPOINT_EXIT=%ERRORLEVEL%"
 if "%CHECKPOINT_EXIT%"=="2" (
@@ -241,12 +241,25 @@ if not "%CHECKPOINT_EXIT%"=="0" (
 )
 
 echo.
+echo %CYAN%[6/6]%RESET% Storyboard ve AI gorselleri  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
+call "storyboard_video.bat" %VIDEO_NUMBER%
+if errorlevel 1 (
+    echo.
+    echo %RED%%BOLD% STORYBOARD / AI GORSEL ASAMASI TAMAMLANAMADI%RESET%
+    echo %GRAY%Kaydedilmis storyboard ve gorseller korunur; storyboard_video.bat ile devam edebilirsin.%RESET%
+    pause
+    exit /b 1
+)
+
+echo.
 echo %GREEN%%BOLD% TAMAMLANDI  Video %VIDEO_NUMBER%%RESET%
 echo %BLUE%------------------------------------------------------------%RESET%
 echo %GRAY%Metin :%RESET% %VIDEO_DIR%\Haberler
 echo %GRAY%Ses   :%RESET% %VIDEO_DIR%\Sesler
 echo %GRAY%Zaman :%RESET% %VIDEO_DIR%\story_timing.json
 echo %GRAY%Ayirac:%RESET% %VIDEO_DIR%\03_manual_separators
+echo %GRAY%Plan   :%RESET% %VIDEO_DIR%\04_storyboard\storyboard.json
+echo %GRAY%Gorsel :%RESET% %VIDEO_DIR%\05_visuals\generated
 echo %GRAY%Log   :%RESET% pipeline.log + elevenlabs.log
 echo.
 
