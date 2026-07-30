@@ -11,15 +11,21 @@ D:\Dosyalar\İş\YouTube\Tech News
 Automation yalnızca kod, ayar, bağımlılık ve otomasyon durum verilerini tutar:
 
 Tech News\
+├── Assets\
+│   ├── Audio\
+│   │   └── background_music\
+│   ├── Media\
+│   ├── Outro\
+│   └── Overlays\
 ├── Automation\
 │   ├── .env
+│   ├── AUTOMATION.md
 │   ├── create_video.bat
 │   ├── news_pipeline.py
 │   ├── elevenlabs_tts.py
 │   ├── preflight.bat
 │   ├── processed_urls.json
 │   └── ...
-├── Media\
 ├── Media (No-Copyright)\
 ├── Video 1\
 ├── Video 2\
@@ -232,15 +238,45 @@ Yerel test (OpenAI/ElevenLabs üretim kotası kullanmaz):
 
 Whisper zorunlu değildir ve bu proje için planlanan ana yöntem değildir.
 
-Yeni seslerde ElevenLabs "with timestamps" yanıtı kullanılacaktır. Bu yanıtın
-karakter zamanları kelime, cümle, görsel değişim noktaları ve SRT/ASS altyazıya
-dönüştürülecektir.
+Yeni seslerde ElevenLabs "with timestamps" yanıtı kullanılır. Orijinal metne ait
+karakter zamanları MP3 ile aynı çalışmada kaydedilir.
 
 Daha önce üretilmiş MP3 dosyaları ElevenLabs Forced Alignment API ile mevcut
 onaylı metne hizalanacaktır. Böylece altyazı metni tekrar transkripsiyonla
 değişmez.
 
-Bu zamanlama aşaması Milestone 2'de uygulanacaktır.
+Normal akışta create_video.bat TTS'den sonra zamanlama aşamasını otomatik çalıştırır.
+
+Elle çalıştırma:
+
+.\.venv\Scripts\python.exe alignment_stage.py --video 5
+
+Birinci haber için timer, transcript ve cümle sınırı kontrol videosu:
+
+.\.venv\Scripts\python.exe alignment_stage.py --video 5 --diagnostic --story 1
+
+Üretilen dosyalar:
+
+Sesler\alignments\<ses-adi>.alignment.json
+- Canonical metin, karakter, kelime, phrase ve cümle zamanları; ses/metin SHA-256
+  değerleri; final kelime sapması; önemli iddialar, entity adayları ve görsel sorguları.
+
+story_timing.json
+- Her haberden önce ayrılmış separator aralığı, global narration başlangıç/bitişi,
+  global cümle/phrase/görsel-beat zamanları ve overlap kalite kapısı.
+
+timing_diagnostic_story_01.mp4
+- Yalnızca --diagnostic istendiğinde oluşan 1280×720 yerel kontrol videosu.
+
+Önbellek davranışı:
+
+- Geçerli alignment dosyası metin ve MP3 SHA-256 değerleri değişmedikçe korunur.
+- Yeni timestamped ses için ikinci hizalama API çağrısı yapılmaz.
+- Eski MP3'te alignment yoksa yalnızca Forced Alignment çağrısı yapılır; MP3 yeniden
+  üretilmez.
+- Sağlayıcının döndürdüğü metin onaylı narration ile karakter karakter aynı değilse
+  işlem durur.
+- Son kelime alignment bitişinden 100 ms'den fazla farklıysa kalite kapısı geçmez.
 
 
 11. ESKİ OTOMASYON ÇIKTILARI

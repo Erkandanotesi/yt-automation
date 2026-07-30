@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -10,16 +11,23 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import requests
 from dotenv import load_dotenv
 
+from alignment_utils import (
+    alignment_input_fingerprint,
+    build_alignment_artifact,
+    merge_timestamp_alignments,
+)
 from file_utils import (
     atomic_write_bytes,
     atomic_write_json,
     json_fingerprint,
     sha256_file,
     sha256_text,
+    stable_story_id,
 )
 from tooling import find_executable
 
@@ -728,6 +736,27 @@ def summary_files(video_dir: Path) -> list[Path]:
     return files
 
 
+def story_ids_by_text_file(video_dir: Path, files: list[Path]) -> dict[str, str]:
+    project_info_path = video_dir / "project_info.json"
+    if project_info_path.exists():
+        try:
+            payload = json.loads(project_info_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        mapped = {
+            Path(item.get("text", "")).name: item.get("story_id", "")
+            for item in payload.get("stories", [])
+            if isinstance(item, dict)
+        }
+    else:
+        mapped = {}
+    return {
+        path.name: mapped.get(path.name)
+        or stable_story_id(f"legacy:{path.stem}")
+        for path in files
+    }
+
+
 def speech_request(text: str, api_key: str) -> requests.Response:
     payload = {
         "text": text,
@@ -745,15 +774,39 @@ def speech_request(text: str, api_key: str) -> requests.Response:
 
     return request_with_retry(
         "POST",
-        f"{API_BASE}/v1/text-to-speech/{VOICE_ID}",
+        f"{API_BASE}/v1/text-to-speech/{VOICE_ID}/with-timestamps",
         headers={
             "xi-api-key": api_key,
-            "Accept": "audio/mpeg",
+            "Accept": "application/json",
             "Content-Type": "application/json",
         },
         params={"output_format": OUTPUT_FORMAT},
         json=payload,
     )
+
+
+def decode_timestamp_response(response: requests.Response) -> tuple[bytes, dict]:
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("ElevenLabs timestamped TTS returned invalid JSON.") from exc
+
+    encoded_audio = payload.get("audio_base64", "")
+    if not encoded_audio:
+        raise RuntimeError("ElevenLabs timestamped TTS returned no audio_base64.")
+    try:
+        audio = base64.b64decode(encoded_audio, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError(
+            "ElevenLabs timestamped TTS returned invalid base64 audio."
+        ) from exc
+
+    alignment = payload.get("alignment")
+    if not isinstance(alignment, dict):
+        raise RuntimeError(
+            "ElevenLabs timestamped TTS returned no original-text alignment."
+        )
+    return audio, alignment
 
 
 def split_text_for_capacities(
@@ -821,7 +874,7 @@ def strip_id3v2(data: bytes) -> bytes:
 def generate_speech_with_pooled_credits(
     text: str,
     remaining_by_slot: dict[str, int],
-) -> tuple[bytes, dict[str, str]]:
+) -> tuple[bytes, dict[str, Any], dict]:
     global ACTIVE_KEY_INDEX
 
     # Keep a tiny safety margin because the service may count a boundary
@@ -846,6 +899,7 @@ def generate_speech_with_pooled_credits(
     audio_parts: list[bytes] = []
     used_slots: list[str] = []
     request_ids: list[str] = []
+    timestamp_chunks: list[tuple[str, dict]] = []
     total_cost = 0
 
     for part_number, (label, api_key, chunk) in enumerate(chunks, start=1):
@@ -854,9 +908,11 @@ def generate_speech_with_pooled_credits(
             f"({len(chunk)} characters)"
         )
         response = speech_request(chunk, api_key)
+        audio, alignment = decode_timestamp_response(response)
         audio_parts.append(
-            response.content if part_number == 1 else strip_id3v2(response.content)
+            audio if part_number == 1 else strip_id3v2(audio)
         )
+        timestamp_chunks.append((chunk, alignment))
         used_slots.append(label)
         request_ids.append(response.headers.get("request-id", ""))
         cost = response.headers.get("character-cost", "")
@@ -873,17 +929,22 @@ def generate_speech_with_pooled_credits(
         )
 
     combined = b"".join(audio_parts)
-    return combined, {
-        "api_key_slot": "+".join(used_slots),
-        "character_cost": str(total_cost),
-        "request_id": ",".join(item for item in request_ids if item),
-        "content_type": "audio/mpeg",
-        "response_bytes": len(combined),
-        "parts": len(chunks),
-    }
+    merged_alignment = merge_timestamp_alignments(text, timestamp_chunks)
+    return (
+        combined,
+        {
+            "api_key_slot": "+".join(used_slots),
+            "character_cost": str(total_cost),
+            "request_id": ",".join(item for item in request_ids if item),
+            "content_type": "audio/mpeg",
+            "response_bytes": len(combined),
+            "parts": len(chunks),
+        },
+        merged_alignment,
+    )
 
 
-def generate_speech(text: str) -> tuple[bytes, dict[str, str]]:
+def generate_speech(text: str) -> tuple[bytes, dict[str, Any], dict]:
     def operation(api_key: str) -> requests.Response:
         return speech_request(text, api_key)
 
@@ -899,18 +960,25 @@ def generate_speech(text: str) -> tuple[bytes, dict[str, str]]:
             text,
             exc.remaining_by_slot,
         )
-    content_type = response.headers.get("content-type", "")
-    if "audio" not in content_type.lower():
+    response_content_type = response.headers.get("content-type", "")
+    if "json" not in response_content_type.lower():
         warning(
-            f"Unexpected successful response type: {content_type or 'missing'}"
+            "Unexpected timestamped response type: "
+            f"{response_content_type or 'missing'}"
         )
-    return response.content, {
-        "api_key_slot": key_label,
-        "character_cost": response.headers.get("character-cost", ""),
-        "request_id": response.headers.get("request-id", ""),
-        "content_type": content_type,
-        "response_bytes": len(response.content),
-    }
+    audio, alignment = decode_timestamp_response(response)
+    return (
+        audio,
+        {
+            "api_key_slot": key_label,
+            "character_cost": response.headers.get("character-cost", ""),
+            "request_id": response.headers.get("request-id", ""),
+            "content_type": "audio/mpeg",
+            "response_content_type": response_content_type,
+            "response_bytes": len(audio),
+        },
+        alignment,
+    )
 
 
 def synthesize_video(video_number: int, overwrite: bool) -> int:
@@ -921,7 +989,9 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
     info(f"Starting audio stage for {project_name(video_number)}.")
     debug(f"Video directory: {video_dir}")
     files = summary_files(video_dir)
+    story_ids = story_ids_by_text_file(video_dir, files)
     audio_dir = video_dir / "Sesler"
+    alignment_dir = audio_dir / "alignments"
     audio_dir.mkdir(parents=True, exist_ok=True)
     previous_info = load_previous_tts_info(audio_dir)
     previous_by_name = {
@@ -992,7 +1062,7 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
         info(f"[{index}/{len(files)}] Generating: {text_path.name}")
         attempt_start = len(REQUEST_ATTEMPT_EVENTS)
         try:
-            audio, metadata = generate_speech(text)
+            audio, metadata, raw_alignment = generate_speech(text)
         except Exception:
             warning(
                 f"Generation failed for {text_path.name}. No output file was committed."
@@ -1001,12 +1071,44 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
         if not audio:
             raise RuntimeError(f"ElevenLabs returned empty audio for {text_path.name}")
 
+        alignment_path = alignment_dir / f"{text_path.stem}.alignment.json"
+        validated: dict[str, Any] = {}
+
+        def validate_generated_audio(temporary_path: Path) -> None:
+            temporary_media = probe_audio(temporary_path)
+            temporary_checksum = sha256_file(temporary_path)
+            temporary_alignment = build_alignment_artifact(
+                story_id=story_ids[text_path.name],
+                canonical_text=text,
+                raw_alignment=raw_alignment,
+                method="tts_with_timestamps",
+                audio_sha256=temporary_checksum,
+                audio_duration_seconds=temporary_media["duration_seconds"],
+                request_id=str(metadata.get("request_id", "")),
+            )
+            temporary_alignment["input_fingerprint"] = (
+                alignment_input_fingerprint(
+                    text=text,
+                    audio_sha256=temporary_checksum,
+                )
+            )
+            validated.update(
+                {
+                    "media": temporary_media,
+                    "audio_sha256": temporary_checksum,
+                    "alignment": temporary_alignment,
+                }
+            )
+
         atomic_write_bytes(
             output_path,
             audio,
-            validate_temporary=probe_audio,
+            validate_temporary=validate_generated_audio,
         )
-        media = probe_audio(output_path)
+        media = validated["media"]
+        audio_checksum = validated["audio_sha256"]
+        alignment_artifact = validated["alignment"]
+        atomic_write_json(alignment_path, alignment_artifact)
         cost = metadata.get("character_cost", "")
         normalized_cost: int | str = int(cost) if str(cost).isdigit() else str(cost)
 
@@ -1023,11 +1125,15 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
                 "characters": len(text),
                 "text_sha256": text_checksum,
                 "input_fingerprint": input_fingerprint,
-                "audio_sha256": sha256_file(output_path),
+                "audio_sha256": audio_checksum,
                 **media,
                 **metadata,
                 "character_cost": normalized_cost,
                 "retry_history": REQUEST_ATTEMPT_EVENTS[attempt_start:],
+                "alignment_file": str(alignment_path),
+                "alignment_sha256": sha256_file(alignment_path),
+                "alignment_method": "tts_with_timestamps",
+                "alignment_status": "generated",
             }
         )
         info(

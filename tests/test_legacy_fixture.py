@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import elevenlabs_tts as tts
+from alignment_stage import build_story_timing_manifest
+from alignment_utils import build_alignment_artifact
 from content_validation import word_count
 from elevenlabs_tts import (
     cached_audio_metadata,
@@ -15,6 +17,7 @@ from elevenlabs_tts import (
     tts_input_fingerprint,
 )
 from file_utils import sha256_file, sha256_text
+from tests.test_alignment_utils import proportional_alignment
 
 
 class FiveStoryLegacyFixtureTests(unittest.TestCase):
@@ -153,6 +156,60 @@ class FiveStoryLegacyFixtureTests(unittest.TestCase):
             [item["status"] for item in updated["files"]],
             ["cached"] * 5,
         )
+
+    def test_five_story_timing_manifest_is_non_overlapping_offline(self) -> None:
+        news_dir = self.fixture / "Haberler"
+        audio_dir = self.fixture / "Sesler"
+        summaries = sorted(
+            path
+            for path in news_dir.glob("*.txt")
+            if not path.stem.endswith("-orijinal")
+        )
+        records = []
+        for index, summary in enumerate(summaries, start=1):
+            text = summary.read_text(encoding="utf-8").strip()
+            audio = audio_dir / f"{summary.stem}.mp3"
+            media = probe_audio(audio)
+            artifact = build_alignment_artifact(
+                story_id=f"story_{index:012x}",
+                canonical_text=text,
+                raw_alignment=proportional_alignment(
+                    text,
+                    media["duration_seconds"],
+                ),
+                method="offline_fixture_proportional",
+                audio_sha256=sha256_file(audio),
+                audio_duration_seconds=media["duration_seconds"],
+            )
+            records.append(
+                {
+                    "story_id": f"story_{index:012x}",
+                    "title": summary.stem,
+                    "text_path": summary,
+                    "audio_path": audio,
+                    "alignment_path": (
+                        audio_dir / "alignments" / f"{summary.stem}.alignment.json"
+                    ),
+                    "alignment": artifact,
+                }
+            )
+
+        timing = build_story_timing_manifest(
+            video_number=1,
+            records=records,
+            separator_duration_seconds=3.0,
+        )
+
+        self.assertEqual(timing["required_separator_count"], 5)
+        self.assertTrue(timing["quality"]["no_story_or_separator_overlaps"])
+        self.assertGreater(timing["duration_seconds"], 5 * 3)
+        for story in timing["stories"]:
+            self.assertGreater(len(story["sentences"]), 0)
+            self.assertGreater(len(story["visual_beats"]), 0)
+            self.assertLessEqual(
+                story["separator"]["end"],
+                story["narration"]["start"],
+            )
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ if not exist ".env" (
     exit /b 1
 )
 
-echo %CYAN%[0/3]%RESET% Sistem kontrol ediliyor...
+echo %CYAN%[0/4]%RESET% Sistem kontrol ediliyor...
 ".venv\Scripts\python.exe" "preflight.py"
 if errorlevel 1 (
     echo.
@@ -120,7 +120,7 @@ if "%SKIP_NEWS%"=="0" if not exist "%FEED_FILE%" (
 )
 
 echo.
-echo %CYAN%[1/3]%RESET% ElevenLabs kontrol ediliyor...
+echo %CYAN%[1/4]%RESET% ElevenLabs kontrol ediliyor...
 ".venv\Scripts\python.exe" "elevenlabs_tts.py" --check > "%TEMP%\news_studio_eleven_check.log" 2>&1
 if errorlevel 1 (
     echo.
@@ -155,9 +155,9 @@ if "%SKIP_NEWS%"=="0" (
     if "%REBUILD_PROJECT%"=="1" (
         echo.
         echo %YELLOW%[!] Override:%RESET% Video %VIDEO_NUMBER% bastan yazilacak.
-        echo %CYAN%[2/3]%RESET% Eski proje ciktilari temizleniyor...
+        echo %CYAN%[2/4]%RESET% Eski proje ciktilari temizleniyor...
 
-        powershell.exe -NoProfile -Command "$root=[IO.Path]::GetFullPath('%PROJECTS_ROOT%').TrimEnd('\'); $target=[IO.Path]::GetFullPath('%VIDEO_DIR%'); if ([IO.Path]::GetDirectoryName($target) -ne $root -or [IO.Path]::GetFileName($target) -notmatch '^Video [0-9]+$') { throw 'Guvenli olmayan proje yolu: ' + $target }; foreach ($name in @('Haberler','Sesler')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; foreach ($name in @('aday_haberler.json','video_script.txt','project_info.json','pipeline.log','elevenlabs.log')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }"
+        powershell.exe -NoProfile -Command "$root=[IO.Path]::GetFullPath('%PROJECTS_ROOT%').TrimEnd('\'); $target=[IO.Path]::GetFullPath('%VIDEO_DIR%'); if ([IO.Path]::GetDirectoryName($target) -ne $root -or [IO.Path]::GetFileName($target) -notmatch '^Video [0-9]+$') { throw 'Guvenli olmayan proje yolu: ' + $target }; foreach ($name in @('Haberler','Sesler')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; foreach ($name in @('aday_haberler.json','video_script.txt','project_info.json','story_timing.json','timing_diagnostic_story_01.mp4','pipeline.log','elevenlabs.log')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }"
         if errorlevel 1 (
             echo.
             echo %RED%[X] Eski proje ciktilari temizlenemedi.%RESET%
@@ -169,9 +169,9 @@ if "%SKIP_NEWS%"=="0" (
     if not exist "%VIDEO_DIR%" mkdir "%VIDEO_DIR%"
 
     if "%REBUILD_PROJECT%"=="1" (
-        echo %CYAN%[2/3]%RESET% Video %VIDEO_NUMBER% yeniden hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
+        echo %CYAN%[2/4]%RESET% Video %VIDEO_NUMBER% yeniden hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
     ) else (
-        echo %CYAN%[2/3]%RESET% Video %VIDEO_NUMBER% hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
+        echo %CYAN%[2/4]%RESET% Video %VIDEO_NUMBER% hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
     )
 
     ".venv\Scripts\python.exe" "news_pipeline.py" --video %VIDEO_NUMBER% --category %CONTENT_CATEGORY% >nul 2>&1
@@ -186,12 +186,12 @@ if "%SKIP_NEWS%"=="0" (
     )
     echo       %GREEN%OK%RESET%  %GRAY%Haberler ve transcriptler hazir.%RESET%
 ) else (
-    echo %CYAN%[2/3]%RESET% Transcript atlandi  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
+    echo %CYAN%[2/4]%RESET% Transcript atlandi  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
     echo       %GREEN%OK%RESET%
 )
 
 echo.
-echo %CYAN%[3/3]%RESET% Sesler uretiliyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
+echo %CYAN%[3/4]%RESET% Sesler uretiliyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
 if defined TTS_OVERWRITE_ARG (
     echo       %YELLOW%Override acik%RESET%
 ) else (
@@ -210,10 +210,23 @@ if errorlevel 1 (
 )
 
 echo.
+echo %CYAN%[4/4]%RESET% Kelime ve cumle zamanlari hazirlaniyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
+".venv\Scripts\python.exe" "alignment_stage.py" --video %VIDEO_NUMBER%
+if errorlevel 1 (
+    echo.
+    echo %RED%%BOLD% ZAMANLAMA URETILEMEDI%RESET%
+    echo %GRAY%Mevcut MP3 korunur; baglanti geldikten sonra ayni komutu yeniden calistirabilirsin.%RESET%
+    echo.
+    pause
+    exit /b 1
+)
+
+echo.
 echo %GREEN%%BOLD% TAMAMLANDI  Video %VIDEO_NUMBER%%RESET%
 echo %BLUE%------------------------------------------------------------%RESET%
 echo %GRAY%Metin :%RESET% %VIDEO_DIR%\Haberler
 echo %GRAY%Ses   :%RESET% %VIDEO_DIR%\Sesler
+echo %GRAY%Zaman :%RESET% %VIDEO_DIR%\story_timing.json
 echo %GRAY%Log   :%RESET% pipeline.log + elevenlabs.log
 echo.
 

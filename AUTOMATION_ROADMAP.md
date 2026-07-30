@@ -103,7 +103,7 @@ Create `timeline.json` before rendering. It contains exact events such as:
   "end": 47.90,
   "story_id": "02",
   "type": "archive_image",
-  "asset": "D:/.../Media/Android/example.jpg",
+  "asset": "D:/.../Assets/Media/Android/example.jpg",
   "motion": "slow_push_in",
   "caption_segment_ids": [31, 32]
 }
@@ -123,6 +123,7 @@ Tech News/
 │   ├── .gitignore
 │   ├── .env
 │   ├── .env.example
+│   ├── AUTOMATION.md
 │   ├── README_TR.txt
 │   ├── AUTOMATION_ROADMAP.md
 │   ├── create_video.bat
@@ -130,20 +131,21 @@ Tech News/
 │   ├── project_paths.py
 │   ├── news_pipeline.py
 │   ├── elevenlabs_tts.py
+│   ├── alignment_stage.py
+│   ├── alignment_utils.py
 │   ├── processed_urls.json
 │   ├── tools/
 │   │   └── ffmpeg/
-│   ├── assets/
-│   │   ├── audio/
-│   │   │   ├── background_music/
-│   │   │   └── sfx/
-│   │   ├── overlays/
-│   │   │   └── tv_frame/
-│   │   └── fonts/
 │   ├── indexes/
 │   │   └── media_index.json
 │   └── tests/
-├── Media/
+├── Assets/
+│   ├── Audio/
+│   │   └── background_music/
+│   ├── Media/
+│   ├── Outro/
+│   │   └── outro_sound/
+│   └── Overlays/
 ├── Media (No-Copyright)/
 ├── Legacy Automation Outputs/
 └── Video 5/
@@ -246,6 +248,8 @@ directories.
 
 ## Milestone 2 — Extract speech timing and story beats
 
+**Status: complete (2026-07-30).**
+
 ### Primary timing method
 
 Switch ElevenLabs generation to its “with timestamps” response, which provides
@@ -277,6 +281,25 @@ script plus ElevenLabs alignment, avoiding text substitutions and an extra local
 
 - The final narration word ends within 100 ms of the alignment end.
 - No story timing overlaps another story or its separator.
+
+### Implemented verification
+
+- New TTS uses the timestamped endpoint and stores original-text character alignment
+  beside each MP3.
+- Existing MP3 files use forced alignment with the approved narration; they are not
+  retranscribed.
+- Alignment is rejected if reconstructed text differs from the canonical script,
+  timestamps are non-monotonic, hashes are stale, or the final-word delta exceeds
+  100 ms.
+- Character timing is deterministically aggregated into words, phrases, sentences,
+  named-entity candidates, important claims, visual queries, and two initial
+  `must_show` beats per story.
+- `story_timing.json` reserves one configured separator slot before each narration and
+  validates that all global ranges are non-overlapping.
+- Twenty-eight offline tests pass, including a copied five-story timeline and an
+  FFmpeg timer/transcript diagnostic render.
+- A live 12-character timestamp smoke test succeeded with a 0 ms final-word delta and
+  a reported character cost of 12.
 
 ## Milestone 3 — Manual “Tech News” separator checkpoint
 
@@ -376,7 +399,8 @@ For every image, store:
 - source URL, creator, license, and attribution requirement;
 - quality flags and prior-use count.
 
-The current `Media` and `Media (No-Copyright)` repositories become configured sources.
+The current `Assets/Media` and `Media (No-Copyright)` repositories become configured
+sources.
 Prefer assets with clear reuse rights. A filename alone is not proof of licensing.
 
 ### Selection flow
@@ -433,7 +457,7 @@ render before applying it to a complete video.
 
 ### Repeated background music
 
-1. Add a licensed background track to `assets/audio/background_music/`.
+1. Add a licensed background track to `Assets/Audio/background_music/`.
 2. Loop it seamlessly for the complete program duration.
 3. Keep it under all voiceover and separator sections.
 4. Apply loudness normalization.
