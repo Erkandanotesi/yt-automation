@@ -34,27 +34,30 @@ The intended timeline is not a generic slideshow. It has a consistent layered gr
 The automated render should preserve this grammar. The manual separator animations
 remain human-made; the automation validates and places them.
 
-## 3. Important findings before implementation
+## 3. Milestone 0 baseline
 
-These must be fixed before extending the pipeline:
+Completed on 2026-07-30:
 
-- The current `Automation` folder is not a Git repository.
-- `.venv` is inside the project and must be excluded from Git.
-- `.env` contains secrets and must never be committed.
-- The current scripts and `.env` still default to `D:\Dosyalar\Automation`, while the
-  actual working folder is
-  `D:\Dosyalar\İş\YouTube\Tech News\Automation`.
-- Existing `project_info.json` files therefore contain stale absolute paths.
-- FFmpeg and FFprobe are not currently available on `PATH`.
-- Whisper is not currently installed in the project environment.
-- Existing scripts already cover RSS selection, original text saving, summary creation,
-  and ElevenLabs TTS. These should be stabilized and wrapped, not discarded.
+- `Automation` is now a Git repository.
+- `.env`, `.venv`, caches, portable binaries, and generated projects are excluded.
+- `.env` remains beside the scripts for simple local loading; `.env.example` is tracked.
+- `AUTOMATION_ROOT` resolves to the code/data directory and `PROJECTS_ROOT` resolves to
+  `D:\Dosyalar\İş\YouTube\Tech News`.
+- Numbered projects use the exact `Video N` form. Existing `Video 1` through `Video 4`
+  make `Video 5` the next project.
+- Legacy `Old` and `Video1` outputs were preserved under
+  `Legacy Automation Outputs`, outside the code directory.
+- FFmpeg and FFprobe 8.1.2 are installed portably and checksum-verified.
+- `preflight.py` validates paths, secrets, dependencies, feeds, disk space, and the next
+  project number before production begins.
+- Whisper is not a dependency. ElevenLabs timestamps and forced alignment will handle
+  all narration timing and caption alignment.
 
 ## 4. Core architecture decisions
 
 ### 4.1 One manifest is the source of truth
 
-Each `VideoX` project gets a `manifest.json`. All stages read and update this file.
+Each `Video N` project gets a `manifest.json`. All stages read and update this file.
 Filenames are never used as the only source of meaning.
 
 The manifest records:
@@ -114,50 +117,36 @@ Migrate non-destructively. Keep old outputs until the new pipeline passes compar
 tests.
 
 ```text
-Automation/
-├── .gitignore
-├── .env
-├── .env.example
-├── README.md
-├── AUTOMATION_ROADMAP.md
-├── requirements.txt
-├── create_video.bat
-├── src/
-│   └── news_studio/
-│       ├── cli.py
-│       ├── orchestrator.py
-│       ├── state.py
-│       ├── news.py
-│       ├── tts.py
-│       ├── alignment.py
-│       ├── storyboard.py
-│       ├── media_index.py
-│       ├── media_select.py
-│       ├── captions.py
-│       ├── timeline.py
-│       ├── audio_mix.py
-│       ├── render.py
-│       ├── publish.py
-│       └── validate.py
-├── config/
-│   ├── tech.yaml
-│   ├── gaming.yaml
-│   └── render.yaml
-├── assets/
-│   ├── audio/
-│   │   ├── background_music/
-│   │   └── sfx/
-│   ├── overlays/
-│   │   └── tv_frame/
-│   ├── fonts/
-│   └── outro/
-├── indexes/
-│   └── media_index.json
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── fixtures/
-└── Video1/
+Tech News/
+├── Automation/
+│   ├── .git/
+│   ├── .gitignore
+│   ├── .env
+│   ├── .env.example
+│   ├── README_TR.txt
+│   ├── AUTOMATION_ROADMAP.md
+│   ├── create_video.bat
+│   ├── preflight.py
+│   ├── project_paths.py
+│   ├── news_pipeline.py
+│   ├── elevenlabs_tts.py
+│   ├── processed_urls.json
+│   ├── tools/
+│   │   └── ffmpeg/
+│   ├── assets/
+│   │   ├── audio/
+│   │   │   ├── background_music/
+│   │   │   └── sfx/
+│   │   ├── overlays/
+│   │   │   └── tv_frame/
+│   │   └── fonts/
+│   ├── indexes/
+│   │   └── media_index.json
+│   └── tests/
+├── Media/
+├── Media (No-Copyright)/
+├── Legacy Automation Outputs/
+└── Video 5/
     ├── manifest.json
     ├── state.json
     ├── 01_news/
@@ -187,9 +176,9 @@ directories.
 
 ### Work
 
-1. Make `Automation` the only project root.
-2. Replace hard-coded paths with `Path(__file__).resolve()` plus an optional validated
-   `AUTOMATION_ROOT`.
+1. Make `Automation` the code/data root and its parent the numbered-project root.
+2. Replace hard-coded paths with validated `AUTOMATION_ROOT` and `PROJECTS_ROOT`
+   values resolved relative to the scripts.
 3. Back up current code and initialize Git.
 4. Add `.gitignore` for `.env`, `.venv`, caches, logs, temporary files, model downloads,
    rendered video, and generated per-video artifacts as appropriate.
@@ -230,7 +219,7 @@ directories.
 
 ### Test
 
-- Run one real `VideoX` with five stories.
+- Run one real `Video N` project with five stories.
 - Compare output text/audio with the current working behavior.
 - Simulate one bad API key, one quota failure, and one interrupted file write.
 
@@ -247,9 +236,8 @@ Switch ElevenLabs generation to its “with timestamps” response, which provid
 character-level alignment, then aggregate it into words, phrases, and sentences.
 For existing MP3 files, use forced alignment against the already known script.
 
-Whisper may be offered as an offline fallback or validation pass. It can produce timed
-segments and subtitle files, but it should not be the default for synthetic narration
-because the canonical script already exists.
+Do not retranscribe synthetic narration. All timing work uses the approved canonical
+script plus ElevenLabs alignment, avoiding text substitutions and an extra local model.
 
 ### Work
 
@@ -528,7 +516,7 @@ Starting mix targets should be treated as test values, not laws:
 
 ### Done when
 
-- A complete `VideoX` renders from artifacts with one command and passes automated plus
+- A complete `Video N` project renders from artifacts with one command and passes automated plus
   human review.
 
 ## Milestone 9 — Thumbnail and YouTube title package
@@ -573,12 +561,12 @@ Provide a small stable command surface:
 ```text
 create_video.bat
 news-studio new --category tech
-news-studio resume VideoX
-news-studio status VideoX
-news-studio run-stage VideoX captions
-news-studio validate VideoX
-news-studio preview VideoX
-news-studio render VideoX
+news-studio resume "Video N"
+news-studio status "Video N"
+news-studio run-stage "Video N" captions
+news-studio validate "Video N"
+news-studio preview "Video N"
+news-studio render "Video N"
 ```
 
 ### One-button behavior
@@ -603,7 +591,7 @@ news-studio render VideoX
 - API-cost stages show planned request count before execution.
 - Every stage writes a structured log plus a concise user-facing error.
 - Ctrl+C and shutdown leave the project resumable.
-- A lock file prevents two processes from mutating the same `VideoX`.
+- A lock file prevents two processes from mutating the same `Video N` project.
 - A `dry-run` shows planned actions without API calls or writes.
 
 ### Done when
@@ -643,7 +631,7 @@ voiceover, and looped/ducked background music.
 Full separator plus narration, two AI hero images, archive fillers, captions, music,
 effects, and preview render.
 
-### Pilot C — Existing complete VideoX
+### Pilot C — Existing complete `Video N`
 
 Rebuild an already edited project and compare:
 
@@ -700,8 +688,5 @@ These do not block the roadmap, but must become configuration values:
 - ElevenLabs forced alignment can align existing audio with known text and return word
   timings:
   <https://elevenlabs.io/docs/api-reference/forced-alignment/create>
-- OpenAI Whisper supports timed transcription workflows and depends on FFmpeg:
-  <https://github.com/openai/whisper>
 - FFmpeg documentation:
   <https://ffmpeg.org/documentation.html>
-

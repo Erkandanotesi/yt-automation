@@ -7,7 +7,7 @@
     <!--
       Bu bir şablondur.
       FeedFlow uygulamasından gerçek OPML dosyanı dışa aktar ve bu dosyanın
-      üzerine D:\Dosyalar\Automation\feeds.opml adıyla kaydet.
+      üzerine Automation\feeds.opml adıyla kaydet.
 
       Örnek biçim:
       <outline text="Kaynak adı"

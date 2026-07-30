@@ -4,6 +4,7 @@ setlocal EnableExtensions
 
 cd /d "%~dp0"
 title News Studio Automation
+for %%I in ("%~dp0..") do set "PROJECTS_ROOT=%%~fI"
 
 for /F "delims=" %%E in ('powershell.exe -NoProfile -Command "[char]27"') do set "ESC=%%E"
 set "RESET=%ESC%[0m"
@@ -33,6 +34,18 @@ if not exist ".env" (
     pause
     exit /b 1
 )
+
+echo %CYAN%[0/3]%RESET% Sistem kontrol ediliyor...
+".venv\Scripts\python.exe" "preflight.py"
+if errorlevel 1 (
+    echo.
+    echo %RED%[X] Sistem kontrolu basarisiz.%RESET%
+    echo %GRAY%Yukaridaki FAIL satirlarini duzeltip tekrar calistir.%RESET%
+    echo.
+    pause
+    exit /b 1
+)
+echo.
 
 echo %BOLD%Ne yapmak istiyorsun?%RESET%
 echo   %CYAN%[1]%RESET% Tech     %GRAY%Yeni video%RESET%
@@ -120,7 +133,7 @@ if errorlevel 1 (
 echo       %GREEN%OK%RESET%
 
 set "LATEST_VIDEO_NUMBER="
-for /f %%N in ('powershell.exe -NoProfile -Command "$max=0; foreach($d in (Get-ChildItem -LiteralPath '.' -Directory)){ if($d.Name -match '^Video([0-9]+)$'){ $n=[int]$Matches[1]; if($n -gt $max){ $max=$n } } }; $max"') do set "LATEST_VIDEO_NUMBER=%%N"
+for /f %%N in ('powershell.exe -NoProfile -Command "$max=0; foreach($d in (Get-ChildItem -LiteralPath '%PROJECTS_ROOT%' -Directory)){ if($d.Name -match '^Video ([0-9]+)$'){ $n=[int]$Matches[1]; if($n -gt $max){ $max=$n } } }; $max"') do set "LATEST_VIDEO_NUMBER=%%N"
 
 if not defined LATEST_VIDEO_NUMBER set "LATEST_VIDEO_NUMBER=0"
 
@@ -132,19 +145,19 @@ if "%SKIP_NEWS%"=="0" if "%REBUILD_PROJECT%"=="0" set /a VIDEO_NUMBER=LATEST_VID
 if not defined VIDEO_NUMBER set "VIDEO_NUMBER=0"
 if "%VIDEO_NUMBER%"=="0" (
     echo.
-        echo %RED%[X] Kullanilabilecek VideoX klasoru bulunamadi.%RESET%
+        echo %RED%[X] Kullanilabilecek "Video N" klasoru bulunamadi.%RESET%
     pause
     exit /b 1
 )
 
-set "VIDEO_DIR=D:\Dosyalar\Automation\Video%VIDEO_NUMBER%"
+set "VIDEO_DIR=%PROJECTS_ROOT%\Video %VIDEO_NUMBER%"
 if "%SKIP_NEWS%"=="0" (
     if "%REBUILD_PROJECT%"=="1" (
         echo.
-        echo %YELLOW%[!] Override:%RESET% Video%VIDEO_NUMBER% bastan yazilacak.
+        echo %YELLOW%[!] Override:%RESET% Video %VIDEO_NUMBER% bastan yazilacak.
         echo %CYAN%[2/3]%RESET% Eski proje ciktilari temizleniyor...
 
-        powershell.exe -NoProfile -Command "$root=[IO.Path]::GetFullPath('%~dp0').TrimEnd('\'); $target=[IO.Path]::GetFullPath('%VIDEO_DIR%'); if ([IO.Path]::GetDirectoryName($target) -ne $root -or [IO.Path]::GetFileName($target) -notmatch '^Video[0-9]+$') { throw 'Guvenli olmayan proje yolu: ' + $target }; foreach ($name in @('Haberler','Sesler')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; foreach ($name in @('aday_haberler.json','video_script.txt','project_info.json','pipeline.log','elevenlabs.log')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }"
+        powershell.exe -NoProfile -Command "$root=[IO.Path]::GetFullPath('%PROJECTS_ROOT%').TrimEnd('\'); $target=[IO.Path]::GetFullPath('%VIDEO_DIR%'); if ([IO.Path]::GetDirectoryName($target) -ne $root -or [IO.Path]::GetFileName($target) -notmatch '^Video [0-9]+$') { throw 'Guvenli olmayan proje yolu: ' + $target }; foreach ($name in @('Haberler','Sesler')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force } }; foreach ($name in @('aday_haberler.json','video_script.txt','project_info.json','pipeline.log','elevenlabs.log')) { $path=Join-Path $target $name; if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }"
         if errorlevel 1 (
             echo.
             echo %RED%[X] Eski proje ciktilari temizlenemedi.%RESET%
@@ -156,9 +169,9 @@ if "%SKIP_NEWS%"=="0" (
     if not exist "%VIDEO_DIR%" mkdir "%VIDEO_DIR%"
 
     if "%REBUILD_PROJECT%"=="1" (
-        echo %CYAN%[2/3]%RESET% Video%VIDEO_NUMBER% yeniden hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
+        echo %CYAN%[2/3]%RESET% Video %VIDEO_NUMBER% yeniden hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
     ) else (
-        echo %CYAN%[2/3]%RESET% Video%VIDEO_NUMBER% hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
+        echo %CYAN%[2/3]%RESET% Video %VIDEO_NUMBER% hazirlaniyor  %GRAY%[%CATEGORY_NAME%]%RESET%
     )
 
     ".venv\Scripts\python.exe" "news_pipeline.py" --video %VIDEO_NUMBER% --category %CONTENT_CATEGORY% >nul 2>&1
@@ -173,12 +186,12 @@ if "%SKIP_NEWS%"=="0" (
     )
     echo       %GREEN%OK%RESET%  %GRAY%Haberler ve transcriptler hazir.%RESET%
 ) else (
-    echo %CYAN%[2/3]%RESET% Transcript atlandi  %GRAY%[Video%VIDEO_NUMBER%]%RESET%
+    echo %CYAN%[2/3]%RESET% Transcript atlandi  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
     echo       %GREEN%OK%RESET%
 )
 
 echo.
-echo %CYAN%[3/3]%RESET% Sesler uretiliyor  %GRAY%[Video%VIDEO_NUMBER%]%RESET%
+echo %CYAN%[3/3]%RESET% Sesler uretiliyor  %GRAY%[Video %VIDEO_NUMBER%]%RESET%
 if defined TTS_OVERWRITE_ARG (
     echo       %YELLOW%Override acik%RESET%
 ) else (
@@ -197,7 +210,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo %GREEN%%BOLD% TAMAMLANDI  Video%VIDEO_NUMBER%%RESET%
+echo %GREEN%%BOLD% TAMAMLANDI  Video %VIDEO_NUMBER%%RESET%
 echo %BLUE%------------------------------------------------------------%RESET%
 echo %GRAY%Metin :%RESET% %VIDEO_DIR%\Haberler
 echo %GRAY%Ses   :%RESET% %VIDEO_DIR%\Sesler

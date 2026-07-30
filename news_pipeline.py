@@ -23,6 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from trafilatura import extract
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # =========================================================
 # TEMEL YOLLAR VE ORTAM AYARLARI
 # =========================================================
@@ -30,9 +35,12 @@ from trafilatura import extract
 SCRIPT_DIR = Path(__file__).resolve().parent
 load_dotenv(SCRIPT_DIR / ".env")
 
-AUTOMATION_ROOT = Path(
-    os.getenv("AUTOMATION_ROOT", r"D:\Dosyalar\Automation")
-).expanduser()
+from project_paths import (  # noqa: E402 - .env must be loaded first
+    AUTOMATION_ROOT,
+    PROJECTS_ROOT,
+    project_dir,
+    project_name,
+)
 
 GLOBAL_STATE_PATH = AUTOMATION_ROOT / "processed_urls.json"
 TECH_OPML_PATH = AUTOMATION_ROOT / "feeds.opml"
@@ -159,7 +167,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Scan RSS/Atom feeds, select the best stories, and save "
-            "150-200 word English scripts in a VideoX folder."
+            "150-200 word English scripts in a Video N project folder."
         )
     )
     parser.add_argument(
@@ -200,8 +208,8 @@ if ARGS.video < 1:
 if ARGS.top is not None and ARGS.top < 1:
     raise ValueError("--top değeri 1 veya daha büyük olmalıdır.")
 
-VIDEO_NAME = f"Video{ARGS.video}"
-PROJECT_DIR = AUTOMATION_ROOT / VIDEO_NAME
+VIDEO_NAME = project_name(ARGS.video)
+PROJECT_DIR = project_dir(ARGS.video)
 OUTPUT_DIR = PROJECT_DIR / "Haberler"
 LOG_PATH = PROJECT_DIR / "pipeline.log"
 PROJECT_INFO_PATH = PROJECT_DIR / "project_info.json"
@@ -981,16 +989,23 @@ def validate_configuration() -> None:
     if not AUTOMATION_ROOT.exists():
         AUTOMATION_ROOT.mkdir(parents=True, exist_ok=True)
 
+    if AUTOMATION_ROOT.resolve() == PROJECTS_ROOT.resolve():
+        raise RuntimeError(
+            "AUTOMATION_ROOT and PROJECTS_ROOT must be different directories."
+        )
+
+    PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+
     if PROVIDER == "gemini" and not os.getenv("GEMINI_API_KEY"):
         raise RuntimeError(
             "Gemini seçili ancak GEMINI_API_KEY eksik. "
-            "D:\\Dosyalar\\Automation\\.env dosyasını düzenle."
+            f"{AUTOMATION_ROOT / '.env'} dosyasını düzenle."
         )
 
     if PROVIDER == "openai" and not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError(
             "OpenAI seçili ancak OPENAI_API_KEY eksik. "
-            "D:\\Dosyalar\\Automation\\.env dosyasını düzenle."
+            f"{AUTOMATION_ROOT / '.env'} dosyasını düzenle."
         )
 
 

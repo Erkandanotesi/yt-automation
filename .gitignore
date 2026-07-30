@@ -20,9 +20,11 @@ __pycache__/
 Video*/
 Old/
 
+# Portable third-party binaries
+tools/ffmpeg/
+
 # Local editor and operating-system files
 .idea/
 .vscode/
 Thumbs.db
 Desktop.ini
-

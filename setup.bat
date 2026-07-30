@@ -34,6 +34,10 @@ if errorlevel 1 goto :install_error
 ".venv\Scripts\python.exe" -m pip install -r "requirements.txt"
 if errorlevel 1 goto :install_error
 
+echo FFmpeg kontrol ediliyor...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "install_ffmpeg.ps1"
+if errorlevel 1 goto :install_error
+
 if not exist ".env" (
     copy /y ".env.example" ".env" >nul
     echo .env dosyasi olusturuldu.

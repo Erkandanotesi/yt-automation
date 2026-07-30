@@ -1,274 +1,227 @@
-RSS HABER OTOMASYONU — TÜRKÇE KURULUM
-=============================================
+NEWS STUDIO OTOMASYONU — TÜRKÇE KULLANIM
+=========================================
 
-Bu paket aşağıdaki konuma yerleştirilmek üzere hazırlanmıştır:
+1. KLASÖR DÜZENİ
+----------------
 
-D:\Dosyalar\Automation
+Ana çalışma klasörü:
 
-OLUŞACAK YAPI
---------------
+D:\Dosyalar\İş\YouTube\Tech News
 
-D:\Dosyalar\Automation\
-│
-├── news_pipeline.py
-├── elevenlabs_tts.py
-├── setup.bat
-├── create_video.bat
-├── requirements.txt
-├── .env
-├── feeds.opml
-├── gaming_feeds.opml
-├── channel_profile.txt
-├── gaming_channel_profile.txt
-├── processed_urls.json
-│
-├── Video1\
-│   ├── Haberler\
-│   ├── Sesler\
-│   ├── aday_haberler.json
-│   ├── video_script.txt
-│   ├── project_info.json
-│   └── pipeline.log
-│
-└── Video2\ ...
+Automation yalnızca kod, ayar, bağımlılık ve otomasyon durum verilerini tutar:
+
+Tech News\
+├── Automation\
+│   ├── .env
+│   ├── create_video.bat
+│   ├── news_pipeline.py
+│   ├── elevenlabs_tts.py
+│   ├── preflight.bat
+│   ├── processed_urls.json
+│   └── ...
+├── Media\
+├── Media (No-Copyright)\
+├── Video 1\
+├── Video 2\
+├── Video 3\
+└── Video 4\
+
+Yeni proje klasörleri Automation içine değil, Tech News ana klasörüne yazılır.
+Yalnızca tam olarak "Video N" biçimindeki klasörler numaralandırmaya katılır.
+Video 1–Video 4 varsa sıradaki proje Video 5 olur.
 
 
-1. DOSYALARI YERLEŞTİR
------------------------
+2. GİT VE GİZLİ BİLGİLER
+------------------------
 
-ZIP dosyasını aç ve içindeki bütün dosyaları şu klasöre kopyala:
+Git deposu Automation klasöründedir.
 
-D:\Dosyalar\Automation
+.env aynı klasörde kalır fakat .gitignore tarafından dışlanır. API anahtarları
+Git'e eklenmez. .env.example yalnızca güvenli örnek değerleri içerir.
+
+Kontrol:
+
+git check-ignore -v .env
+
+Beklenen sonuç .gitignore içindeki .env kuralıdır.
 
 
-2. PYTHON KUR
--------------
-
-Bilgisayarında Python 3.11 veya daha yeni bir sürüm bulunmalı.
-Python kurulurken "Add Python to PATH" seçeneğini işaretle.
-
-
-3. KURULUMU ÇALIŞTIR
---------------------
+3. KURULUM
+----------
 
 setup.bat dosyasına çift tıkla.
 
-Bu işlem:
-- .venv sanal ortamını oluşturur.
-- Gerekli Python paketlerini kurar.
-- .env dosyasını oluşturur.
-- Eksikse feeds.opml ve channel_profile.txt şablonlarını oluşturur.
+Kurulum:
+
+- .venv Python ortamını oluşturur;
+- requirements.txt paketlerini kurar;
+- eksikse .env dosyasını .env.example üzerinden oluşturur;
+- FFmpeg ve FFprobe'u Automation\tools\ffmpeg altına taşınabilir olarak kurar;
+- eksik şablon dosyalarını oluşturur.
+
+Sistem genelinde yönetici yetkili FFmpeg kurulumu gerekmez.
 
 
-4. API ANAHTARINI EKLE
-----------------------
+4. ÖN KONTROL
+-------------
 
-D:\Dosyalar\Automation\.env dosyasını Not Defteri ile aç.
+preflight.bat dosyasına çift tıkla veya:
 
-Gemini için:
+.\.venv\Scripts\python.exe preflight.py
 
-AI_PROVIDER=gemini
-GEMINI_API_KEY=gerçek_anahtarın
-GEMINI_MODEL=gemini-3.6-flash
+Kontrol edilenler:
 
-OpenAI için:
+- Python sürümü;
+- Automation ve proje köklerinin ayrılmış olması;
+- sıradaki Video N klasörü;
+- yazma izinleri;
+- .env dosyasının Git'ten dışlanması;
+- seçilen AI ve ElevenLabs ayarlarının varlığı;
+- feed ve kanal profil dosyaları;
+- FFmpeg ve FFprobe;
+- boş disk alanı.
+
+Tüm zorunlu kontroller PASS ve sonuç READY olmalıdır.
+
+
+5. .ENV AYARLARI
+----------------
+
+Klasör değerleri göreli tutulur:
+
+AUTOMATION_ROOT=.
+PROJECTS_ROOT=..
+
+Göreli yollar Automation klasörüne göre çözülür.
+
+AI sağlayıcısı:
 
 AI_PROVIDER=openai
-OPENAI_API_KEY=gerçek_anahtarın
-OPENAI_MODEL=gpt-5.6
-OPENAI_REASONING_EFFORT=low
+OPENAI_API_KEY=GERCEK_ANAHTAR
 
-Model hesabında kullanılamıyorsa .env içindeki model adını erişebildiğin
-başka bir uyumlu model adıyla değiştir.
+veya:
 
+AI_PROVIDER=gemini
+GEMINI_API_KEY=GERCEK_ANAHTAR
 
-5. FEEDFLOW OPML DOSYASINI EKLE
--------------------------------
+ElevenLabs:
 
-FeedFlow'dan feed listesini OPML olarak dışa aktar.
+ELEVENLABS_API_KEY_1=GERCEK_ANAHTAR
+ELEVENLABS_API_KEY_2=ISTEGE_BAGLI_IKINCI_ANAHTAR
+ELEVENLABS_VOICE_ID=SES_KIMLIGI
 
-Dışa aktarılan dosyanın adını:
-
-feeds.opml
-
-yap ve şuraya kaydet:
-
-D:\Dosyalar\Automation\feeds.opml
-
-Paketle gelen boş şablonun üzerine yazmalısın.
+Gerçek anahtarlar loglara veya Git'e yazılmaz.
 
 
-6. HER VİDEO İÇİN ÇALIŞTIR
---------------------------
+6. YENİ VİDEO OLUŞTURMA
+-----------------------
 
-create_video.bat
+create_video.bat dosyasına çift tıkla.
 
-Dosyaya çift tıkla ve kaynak türünü seç:
+Seçimler:
 
-1-Tech News -> feeds.opml ve teknoloji promptu
-2-Gaming    -> gaming_feeds.opml ve oyun promptu
+1  Tech News için yeni proje
+2  Gaming için yeni proje
+0  En son Video N projesinin yalnızca TTS aşaması
 
-Program yalnızca ana Automation klasöründeki VideoX klasörlerini kontrol eder,
-en büyük numaranın bir sonrasını otomatik oluşturur. Old klasörü
-numaralandırmaya dahil edilmez.
+"o" eki mevcut çıktıları yeniden üretmek için kullanılır:
 
-ElevenLabs ayarları:
+1 o
+2 o
+0 o
 
-.env dosyasına şu değerleri ekle:
+Program önce preflight çalıştırır, sonra Tech News ana klasöründeki en büyük
+"Video N" numarasını bulur.
 
-ELEVENLABS_API_KEY_1=BIRINCI_API_ANAHTARIN
-ELEVENLABS_API_KEY_2=IKINCI_API_ANAHTARIN
-ELEVENLABS_API_KEY_3=UCUNCU_API_ANAHTARIN
-ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
-ELEVENLABS_MODEL_ID=eleven_multilingual_v2
-ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
-ELEVENLABS_SPEED=1.0
-ELEVENLABS_STABILITY=0.5
-ELEVENLABS_SIMILARITY_BOOST=0.75
-ELEVENLABS_STYLE=0.5
-ELEVENLABS_SPEAKER_BOOST=true
-ELEVENLABS_IS_OVERRIDE=false
-ELEVENLABS_LANGUAGE_CODE=en
 
-Test sesi: Adam - Dominant, Firm (premade).
-Language Override kapalıdır; API isteğine language_code gönderilmez.
+7. KOMUT SATIRI KULLANIMI
+-------------------------
 
-Numaralı API anahtarları sayısal sırayla kullanılır. Bir anahtar geçersizse,
-kotası bittiyse veya ödeme/erişim hatası verirse sıradaki anahtara geçilir.
-Geçici rate-limit hatalarında aynı anahtar kısa beklemelerle yeniden denenir.
-Anahtarların gerçek değerleri log veya tts_info.json dosyasına yazılmaz;
-yalnızca kullanılan slot numarası kaydedilir.
+Automation klasöründe:
 
-Hesabındaki voice ID değerlerini görmek için:
+Video 5 için teknoloji haberleri:
+
+.\.venv\Scripts\python.exe news_pipeline.py --video 5 --category tech
+
+Video 5 için oyun haberleri:
+
+.\.venv\Scripts\python.exe news_pipeline.py --video 5 --category gaming
+
+Video 5 seslerini üret:
+
+.\.venv\Scripts\python.exe elevenlabs_tts.py --video 5
+
+Mevcut sesleri yeniden üret:
+
+.\.venv\Scripts\python.exe elevenlabs_tts.py --video 5 --overwrite
+
+ElevenLabs ayarlarını kontrol et:
+
+.\.venv\Scripts\python.exe elevenlabs_tts.py --check
+
+Hesaptaki sesleri listele:
 
 .\.venv\Scripts\python.exe elevenlabs_tts.py --list-voices
 
-create_video.bat önce ElevenLabs anahtarını ve sesi doğrular. Ardından her
-özet dosyasını ayrı istekle gönderir. -orijinal.txt dosyaları gönderilmez.
-Sesler VideoX\Sesler klasörüne özetlerle aynı temel dosya adıyla kaydedilir.
 
-Önceden hazırlanmış bir videonun seslerini üretmek için:
-
-.\.venv\Scripts\python.exe elevenlabs_tts.py --video 1
-
-Mevcut MP3 dosyalarını yeniden üretmek için:
-
-.\.venv\Scripts\python.exe elevenlabs_tts.py --video 1 --overwrite
-
-
-7. POWERSHELL ÜZERİNDEN ÇALIŞTIRMA
-----------------------------------
-
-cd D:\Dosyalar\Automation
-
-Video 1:
-.\.venv\Scripts\python.exe news_pipeline.py --video 1 --category tech
-
-Gaming Video 2:
-.\.venv\Scripts\python.exe news_pipeline.py --video 2 --category gaming
-
-OpenAI ile:
-.\.venv\Scripts\python.exe news_pipeline.py --video 3 --provider openai
-
-Gemini ile:
-.\.venv\Scripts\python.exe news_pipeline.py --video 4 --provider gemini
-
-En fazla 3 haber:
-.\.venv\Scripts\python.exe news_pipeline.py --video 5 --top 3
-
-Eski haberleri de tekrar değerlendirmek:
-.\.venv\Scripts\python.exe news_pipeline.py --video 6 --reset
-
-
-8. ÇIKTI DOSYALARI
+8. MEVCUT ÇIKTILAR
 ------------------
 
-Her VideoX klasöründe:
+Her "Video N" klasöründe:
 
 Haberler\01_haber-basligi.txt
-- Doğrudan ElevenLabs'e gönderebileceğin sade 150-200 kelimelik metin.
-- Başlık, hook, kaynak, puan veya başka bir etiket içermez.
+- ElevenLabs'e gönderilen 150–200 kelimelik anlatım metni.
 
 Haberler\01_haber-basligi-orijinal.txt
-- Haber animasyonunda kullanmak için çıkarılmış orijinal haber metni.
-- Özet dosyasıyla aynı temel dosya adına sahiptir.
+- Kaynaktan çıkarılan orijinal haber metni.
 
-video_script.txt
-- Seçilen bütün sade seslendirme metinlerinin birleştirilmiş hali.
+Sesler\01_haber-basligi.mp3
+- Anlatım metninden üretilen ses.
 
 aday_haberler.json
-- RSS taramasında bulunan aday haberler.
+- RSS taramasında bulunan adaylar.
+
+video_script.txt
+- Seçilen anlatım metinlerinin birleşimi.
 
 project_info.json
-- Çalışma özeti ve üretilen dosyalar.
+- Proje, kaynak, sıralama ve dosya özeti.
 
-pipeline.log
-- Hata ve işlem kayıtları.
-
-
-9. AYARLAR
-----------
-
-.env içindeki önemli değerler:
-
-MAX_AGE_HOURS=36
-Yalnızca son 36 saatteki haberleri değerlendirir.
-
-MAX_CANDIDATES=25
-AI sıralamasına gönderilecek en fazla aday sayısı.
-
-TOP_N=5
-
-Haber seçimi iki aşamalıdır:
-
-1. Bütün RSS adayları ücretsiz yerel kurallarla puanlanır.
-2. En güçlü küçük havuz (TOP_N değerinin yaklaşık üç katı) tek AI çağrısında
-   karşılaştırılır. Yalnızca seçilen haberlerin tam metni indirilir ve her
-   haber ayrı bir AI çağrısında 150-200 kelimelik metne dönüştürülür.
-
-Bu yöntem, bütün tam haberleri aynı anda modele göndermekten daha ucuz ve
-özellikle gpt-5.6-luna gibi yüksek hacimli kullanıma uygun modellerde daha
-tutarlıdır.
-Video için üretilecek en fazla haber sayısı.
-
-MIN_SCORE=65
-65 puanın altındaki haberleri özetlemez.
-
-MIN_ARTICLE_CHARS=500
-Tam haber metninin yeterli kabul edilmesi için gereken karakter sayısı.
+pipeline.log ve elevenlabs.log
+- Teknik işlem günlükleri.
 
 
-10. AYNI HABERİN TEKRARLANMASI
-------------------------------
+9. ALTYAZI ZAMANLAMASI
+----------------------
 
-Başarıyla dosyaya kaydedilen haber URL'leri şu dosyada tutulur:
+Whisper zorunlu değildir ve bu proje için planlanan ana yöntem değildir.
 
-D:\Dosyalar\Automation\processed_urls.json
+Yeni seslerde ElevenLabs "with timestamps" yanıtı kullanılacaktır. Bu yanıtın
+karakter zamanları kelime, cümle, görsel değişim noktaları ve SRT/ASS altyazıya
+dönüştürülecektir.
 
-Video2 hazırlanırken Video1'de kullanılan haberler otomatik olarak atlanır.
+Daha önce üretilmiş MP3 dosyaları ElevenLabs Forced Alignment API ile mevcut
+onaylı metne hizalanacaktır. Böylece altyazı metni tekrar transkripsiyonla
+değişmez.
 
-Geçmiş haberleri yalnızca bir çalışmada yeniden değerlendirmek için:
-
-news_pipeline.py --video X --reset
-
-komutunu kullan. Bu seçenek processed_urls.json dosyasını silmez.
-
-
-11. KANAL TERCİHLERİNİ DEĞİŞTİR
--------------------------------
-
-D:\Dosyalar\Automation\channel_profile.txt
-
-dosyasını düzenleyerek hangi haberlerin yüksek veya düşük öncelikli olduğunu
-değiştirebilirsin. Bu metin AI haber seçim prompt'una otomatik eklenir.
+Bu zamanlama aşaması Milestone 2'de uygulanacaktır.
 
 
-12. ÖNEMLİ SINIRLAMALAR
+10. ESKİ OTOMASYON ÇIKTILARI
+----------------------------
+
+Automation içindeki eski Old ve Video1 klasörleri silinmeden şuraya taşındı:
+
+D:\Dosyalar\İş\YouTube\Tech News\Legacy Automation Outputs
+
+Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkilemez.
+
+
+11. ÖNEMLİ SINIRLAMALAR
 -----------------------
 
 - Ödeme duvarı veya giriş ekranı aşılmaz.
-- Haber sayfası okunamazsa RSS açıklaması kullanılmaya çalışılır.
-- AI özetini videoya koymadan önce isimleri, sayıları, tarihleri ve önemli
-  iddiaları kaynağa karşı manuel kontrol et.
-- ChatGPT/Gemini web uygulamasına giriş yapmak yeterli değildir; ilgili API
-  anahtarı .env dosyasına eklenmelidir.
+- Okunamayan sayfalarda RSS açıklaması yedek kaynak olarak denenebilir.
+- İsim, sayı, tarih ve önemli iddialar yayın öncesinde kaynağa karşı kontrol edilmelidir.
+- .env veya API anahtarları Git'e zorla eklenmemelidir.
+- Video klasörleri yalnızca "Video N" adıyla Tech News ana klasöründe oluşturulmalıdır.

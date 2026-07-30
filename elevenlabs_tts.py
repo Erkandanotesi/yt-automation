@@ -14,9 +14,19 @@ import requests
 from dotenv import load_dotenv
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 load_dotenv(SCRIPT_DIR / ".env")
 
+from project_paths import (  # noqa: E402 - .env must be loaded first
+    AUTOMATION_ROOT,
+    project_dir,
+    project_name,
+)
 
 def env_bool(name: str, default: bool) -> bool:
     raw_value = os.getenv(name)
@@ -41,10 +51,6 @@ def env_float(name: str, default: float) -> float:
     value = os.getenv(name, "").strip()
     return float(value) if value else default
 
-
-AUTOMATION_ROOT = Path(
-    os.getenv("AUTOMATION_ROOT", r"D:\Dosyalar\Automation")
-).expanduser()
 
 API_BASE = "https://api.elevenlabs.io"
 VOICE_ID = env_text(
@@ -262,7 +268,7 @@ def require_api_key() -> None:
         raise RuntimeError(
             "No ElevenLabs API key is configured. Add ELEVENLABS_API_KEY_1, "
             "ELEVENLABS_API_KEY_2, ... to "
-            r"D:\Dosyalar\Automation\.env."
+            f"{AUTOMATION_ROOT / '.env'}."
         )
 
 
@@ -487,7 +493,7 @@ def list_voices() -> int:
 
     print(
         "\nCopy the desired voice ID into "
-        r"D:\Dosyalar\Automation\.env as ELEVENLABS_VOICE_ID."
+        f"{AUTOMATION_ROOT / '.env'} as ELEVENLABS_VOICE_ID."
     )
     return 0
 
@@ -722,8 +728,8 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
         raise ValueError("--video must be 1 or greater.")
 
     voice = validate_voice()
-    video_dir = AUTOMATION_ROOT / f"Video{video_number}"
-    info(f"Starting audio stage for Video{video_number}.")
+    video_dir = project_dir(video_number)
+    info(f"Starting audio stage for {project_name(video_number)}.")
     debug(f"Video directory: {video_dir}")
     files = summary_files(video_dir)
     audio_dir = video_dir / "Sesler"
@@ -785,7 +791,7 @@ def synthesize_video(video_number: int, overwrite: bool) -> int:
         )
 
     tts_info = {
-        "video": f"Video{video_number}",
+        "video": project_name(video_number),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "voice_id": VOICE_ID,
         "voice_name": voice.get("name", ""),
@@ -815,8 +821,14 @@ def main() -> int:
     log_file = None
 
     if args.video is not None:
-        video_dir = AUTOMATION_ROOT / f"Video{args.video}"
-        video_dir.mkdir(parents=True, exist_ok=True)
+        video_dir = project_dir(args.video)
+        if not video_dir.is_dir():
+            print(
+                f"[TTS ERROR] Project directory not found: {video_dir}. "
+                "Run the news stage first.",
+                file=sys.stderr,
+            )
+            return 1
         log_path = video_dir / "elevenlabs.log"
         log_file = log_path.open("a", encoding="utf-8")
         sys.stdout = TeeStream(sys.__stdout__, log_file, compact=args.compact)
@@ -854,7 +866,7 @@ def main() -> int:
             )
             traceback.print_exc(file=sys.stderr)
         if args.video is not None:
-            error_log = AUTOMATION_ROOT / f"Video{args.video}" / "elevenlabs.log"
+            error_log = project_dir(args.video) / "elevenlabs.log"
             if args.compact:
                 print(f"Technical details: {error_log}", file=sys.stderr)
             else:
