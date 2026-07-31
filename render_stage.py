@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -72,6 +73,9 @@ class RenderSettings:
     title_font_size: int = 30
     title_margin_left: int = 110
     title_margin_top: int = 70
+    attribution_font_size: int = 20
+    attribution_margin_right: int = 115
+    attribution_margin_bottom: int = 135
 
     @classmethod
     def from_environment(cls) -> "RenderSettings":
@@ -96,6 +100,15 @@ class RenderSettings:
             title_font_size=int(os.getenv("TITLE_FONT_SIZE", "30")),
             title_margin_left=int(os.getenv("TITLE_MARGIN_LEFT", "110")),
             title_margin_top=int(os.getenv("TITLE_MARGIN_TOP", "70")),
+            attribution_font_size=int(
+                os.getenv("ATTRIBUTION_FONT_SIZE", "20")
+            ),
+            attribution_margin_right=int(
+                os.getenv("ATTRIBUTION_MARGIN_RIGHT", "115")
+            ),
+            attribution_margin_bottom=int(
+                os.getenv("ATTRIBUTION_MARGIN_BOTTOM", "135")
+            ),
         )
 
     def validate(self) -> None:
@@ -117,6 +130,10 @@ class RenderSettings:
             raise ValueError("TITLE_FONT_SIZE must be between 12 and 96.")
         if self.title_margin_left < 0 or self.title_margin_top < 0:
             raise ValueError("Title margins cannot be negative.")
+        if not 12 <= self.attribution_font_size <= 48:
+            raise ValueError("ATTRIBUTION_FONT_SIZE must be between 12 and 48.")
+        if self.attribution_margin_right < 0 or self.attribution_margin_bottom < 0:
+            raise ValueError("Attribution margins cannot be negative.")
 
 
 def _run(command: list[str], label: str) -> subprocess.CompletedProcess[str]:
@@ -185,6 +202,31 @@ def _compact_story_title(title: str, order: int) -> str:
         placeholder="...",
     )
     return f"{lines[0]}\n{second}"
+
+
+def _compact_source_attribution(attribution: dict) -> str:
+    creator = re.sub(r"\s+", " ", str(attribution.get("creator", ""))).strip()
+    source_url = str(attribution.get("source_url", "")).strip()
+    license_name = re.sub(
+        r"\s+",
+        " ",
+        str(attribution.get("license_name", "")),
+    ).strip()
+    host = urlparse(source_url).netloc.casefold()
+    provider = "Wikimedia Commons" if "wikimedia.org" in host else host.removeprefix("www.")
+    if not creator:
+        provided = re.sub(
+            r"\s+",
+            " ",
+            str(attribution.get("provided_text", "")),
+        ).strip()
+        creator = provided.split(";")[0].split("—")[-1].strip()
+    parts = []
+    for value in (creator, provider, license_name):
+        if value and value not in parts:
+            parts.append(value)
+    text = "Source: " + " · ".join(parts)
+    return text if len(text) <= 125 else text[:122].rstrip() + "..."
 
 
 def _db_factor(value: float) -> float:
@@ -265,6 +307,8 @@ def build_render_plan(
     output_dir = video_dir / "08_render"
     title_dir = output_dir / "titles"
     title_dir.mkdir(parents=True, exist_ok=True)
+    attribution_dir = output_dir / "attributions"
+    attribution_dir.mkdir(parents=True, exist_ok=True)
     titles = []
     for story in timing.get("stories", []):
         order = int(story["order"])
@@ -279,6 +323,26 @@ def build_render_plan(
                 "end": story["narration"]["end"],
                 "text": display_title,
                 "text_file": str(title_file),
+            }
+        )
+    attributions = []
+    for event in visuals:
+        attribution = event.get("attribution")
+        if not attribution or attribution.get("required") is not True:
+            continue
+        text_file = attribution_dir / f"{event['event_id']}_source.txt"
+        display_text = _compact_source_attribution(attribution)
+        atomic_write_text(text_file, display_text)
+        attributions.append(
+            {
+                "event_id": event["event_id"],
+                "story_id": event["story_id"],
+                "start": event["timeline_start"],
+                "end": event["timeline_end"],
+                "text": display_text,
+                "text_file": str(text_file),
+                "source_url": attribution.get("source_url", ""),
+                "license_name": attribution.get("license_name", ""),
             }
         )
     frame = effects.get("tv_frame") or {}
@@ -299,6 +363,7 @@ def build_render_plan(
         "glitch_events": effects.get("glitch_events", []),
         "tv_frame": frame,
         "story_titles": titles,
+        "source_attributions": attributions,
         "captions": {
             "file": str(caption_file),
             "sha256": sha256_file(caption_file),
@@ -324,12 +389,17 @@ def build_render_plan(
             "persistent_titles_cover_all_stories": len(titles) == len(narration),
             "visual_count": len(visuals),
             "persistent_title_count": len(titles),
+            "source_attribution_count": len(attributions),
         },
     }
     if not all(
         value
         for key, value in payload["quality"].items()
-        if key not in {"visual_count", "persistent_title_count"}
+        if key not in {
+            "visual_count",
+            "persistent_title_count",
+            "source_attribution_count",
+        }
     ):
         raise RuntimeError(f"Milestone 8 plan quality failed: {payload['quality']}")
     fingerprint_payload = {
@@ -845,6 +915,23 @@ def _compose_video_track(
             f"reload=0:fontcolor=white:fontsize={settings.title_font_size}:"
             "line_spacing=7:box=1:boxcolor=black@0.72:boxborderw=13:"
             f"x={settings.title_margin_left}:y={settings.title_margin_top}:"
+            f"enable='between(t\\,{start:.6f}\\,{end:.6f})'[{next_label}]"
+        )
+        current = next_label
+    for index, attribution in enumerate(
+        plan.get("source_attributions", []),
+        start=1,
+    ):
+        start = float(attribution["start"])
+        end = float(attribution["end"])
+        next_label = f"vattribution{index}"
+        filters.append(
+            f"[{current}]drawtext=textfile='"
+            f"{_filter_path(Path(attribution['text_file']))}':reload=0:"
+            f"fontcolor=white@0.94:fontsize={settings.attribution_font_size}:"
+            "box=1:boxcolor=black@0.68:boxborderw=8:"
+            f"x=w-text_w-{settings.attribution_margin_right}:"
+            f"y=h-text_h-{settings.attribution_margin_bottom}:"
             f"enable='between(t\\,{start:.6f}\\,{end:.6f})'[{next_label}]"
         )
         current = next_label

@@ -32,6 +32,7 @@ from tooling import find_executable  # noqa: E402 - .env must be loaded first
 from storyboard_stage import StoryboardSettings  # noqa: E402
 from media_index import MediaIndexSettings  # noqa: E402
 from media_selection_stage import MediaSelectionSettings  # noqa: E402
+from online_media_stage import OnlineMediaSettings  # noqa: E402
 from caption_stage import CaptionSettings  # noqa: E402
 from effects_stage import EffectsSettings, SUPPORTED_AUDIO  # noqa: E402
 from render_stage import RenderSettings  # noqa: E402
@@ -265,6 +266,32 @@ def collect_checks() -> list[Check]:
                 f"{media_selection_settings.maximum_window_seconds:g}s"
             ),
         )
+        if media_selection_settings.wikimedia_fallback_enabled:
+            try:
+                online_media_settings = OnlineMediaSettings.from_environment()
+                online_media_settings.validate()
+            except (RuntimeError, ValueError) as exc:
+                add("Wikimedia fallback configuration", False, str(exc))
+            else:
+                add(
+                    "Wikimedia fallback configuration",
+                    True,
+                    (
+                        f"search cap="
+                        f"{media_selection_settings.wikimedia_max_searches_per_video}; "
+                        f"download cap="
+                        f"{media_selection_settings.wikimedia_max_downloads_per_video}; "
+                        f"request interval="
+                        f"{online_media_settings.request_interval_seconds:g}s; "
+                        f"destination={online_media_settings.destination}"
+                    ),
+                )
+        else:
+            add(
+                "Wikimedia fallback configuration",
+                True,
+                "Disabled; irrelevant local shortlists use the local fallback.",
+            )
 
     try:
         caption_settings = CaptionSettings.from_environment()
@@ -327,7 +354,8 @@ def collect_checks() -> list[Check]:
             (
                 f"final={render_settings.width}x{render_settings.height}; "
                 f"preview={render_settings.preview_width}x{render_settings.preview_height}; "
-                f"fps={render_settings.fps}; preset={render_settings.preset}"
+                f"fps={render_settings.fps}; preset={render_settings.preset}; "
+                "attribution=bottom-right inside TV frame"
             ),
         )
 

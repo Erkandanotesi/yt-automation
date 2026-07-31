@@ -385,6 +385,27 @@ def _asset_record(path_value: str, expected_sha256: str = "") -> dict:
     return {"file": str(path), "sha256": checksum}
 
 
+def _attribution_record(selected: dict) -> dict | None:
+    license_info = selected.get("license", {})
+    if license_info.get("attribution_required") is not True:
+        return None
+    creator = str(selected.get("creator", "")).strip()
+    source_url = str(selected.get("source_url", "")).strip()
+    license_name = str(license_info.get("name", "")).strip()
+    provided = str(license_info.get("attribution_text", "")).strip()
+    if not any((creator, source_url, license_name, provided)):
+        raise RuntimeError(
+            "An attribution-required asset is missing source attribution metadata."
+        )
+    return {
+        "required": True,
+        "creator": creator,
+        "source_url": source_url,
+        "license_name": license_name,
+        "provided_text": provided,
+    }
+
+
 def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) -> list[dict]:
     timing_by_id = {story["story_id"]: story for story in timing.get("stories", [])}
     raw_events: list[dict] = []
@@ -410,6 +431,7 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                     "timeline_end": narration_start + end,
                     "asset": asset,
                     "crop_risk": False,
+                    "attribution": None,
                 }
             )
         for window in story_plan.get("windows", []):
@@ -436,6 +458,7 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                     ),
                     "asset": asset,
                     "crop_risk": "crop_risk" in selected.get("quality_flags", []),
+                    "attribution": _attribution_record(selected),
                 }
             )
     timed_stories = timing.get("stories", [])
@@ -468,6 +491,7 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                 "timeline_end": hold_end,
                 "asset": dict(source["asset"]),
                 "crop_risk": bool(source["crop_risk"]),
+                "attribution": source.get("attribution"),
             }
         )
     raw_events.sort(key=lambda item: (item["timeline_start"], item["timeline_end"]))
@@ -714,6 +738,7 @@ def _filter_templates(settings: EffectsSettings) -> dict:
             "manual_separator",
             "tv_frame",
             "persistent_story_title",
+            "source_attribution_bottom_right",
             "captions",
         ],
         "motion": {
@@ -1252,6 +1277,9 @@ def build_effects_plan(
             "glitch_timeline_coverage_ratio": round(glitch_coverage, 6),
             "glitch_under_three_percent": glitch_coverage <= 0.03,
             "captions_remain_top_layer": True,
+            "attribution_event_count": sum(
+                item.get("attribution") is not None for item in visuals
+            ),
             "music_covers_complete_timeline": not settings.music_enabled or (
                 music is not None
                 and music["loop_count"] * music["track_duration_seconds"] >= duration

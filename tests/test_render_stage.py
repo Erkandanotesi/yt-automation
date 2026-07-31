@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from render_stage import RenderSettings, build_render_plan
+from render_stage import RenderSettings, _compose_video_track, build_render_plan
 
 
 def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
@@ -57,6 +57,16 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
                 "duration": 2,
                 "asset": {"file": str(visual)},
                 "motion": {"type": "slow_push_in", "maximum_scale": 1.008},
+                "story_id": "story_1",
+                "timeline_start": 0,
+                "timeline_end": 2,
+                "attribution": {
+                    "required": True,
+                    "creator": "Example Creator",
+                    "source_url": "https://commons.wikimedia.org/wiki/File:Example",
+                    "license_name": "CC BY-SA 4.0",
+                    "provided_text": "Example Creator; CC BY-SA 4.0",
+                },
             }
         ],
         "glitch_events": [],
@@ -82,6 +92,47 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
 
 
 class RenderStageTests(unittest.TestCase):
+    def test_attribution_filter_is_anchored_bottom_right(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = RenderSettings(
+                width=320,
+                height=180,
+                attribution_margin_right=17,
+                attribution_margin_bottom=23,
+            )
+            plan = {
+                "duration_seconds": 2,
+                "separators": [],
+                "glitch_events": [],
+                "tv_frame": {},
+                "story_titles": [],
+                "source_attributions": [
+                    {
+                        "start": 0.25,
+                        "end": 1.75,
+                        "text_file": str(root / "source.txt"),
+                    }
+                ],
+                "captions": {"file": str(root / "captions.srt")},
+            }
+            with (
+                patch("render_stage._ffmpeg", return_value=Path("ffmpeg")),
+                patch("render_stage._run") as run,
+            ):
+                _compose_video_track(
+                    root,
+                    plan,
+                    root / "base.mp4",
+                    [],
+                    settings,
+                )
+
+            command = run.call_args.args[0]
+            filters = command[command.index("-filter_complex") + 1]
+            self.assertIn("x=w-text_w-17:y=h-text_h-23", filters)
+            self.assertIn("between(t\\,0.250000\\,1.750000)", filters)
+
     def test_plan_requires_separator_overlay_timing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 5"
@@ -110,6 +161,8 @@ class RenderStageTests(unittest.TestCase):
             self.assertTrue(plan["quality"]["no_directional_pans"])
             self.assertTrue(plan["quality"]["persistent_titles_cover_all_stories"])
             self.assertEqual(len(plan["story_titles"]), 1)
+            self.assertEqual(len(plan["source_attributions"]), 1)
+            self.assertIn("Source: Example Creator", plan["source_attributions"][0]["text"])
 
 
 if __name__ == "__main__":

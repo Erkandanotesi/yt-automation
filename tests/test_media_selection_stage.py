@@ -11,8 +11,10 @@ from file_utils import sha256_file
 from media_index import MediaIndexSettings, MediaRoot
 from media_selection_stage import (
     MediaSelectionSettings,
+    WindowDecision,
     build_archive_windows,
     coverage_quality,
+    resolve_wikimedia_fallbacks,
     run_media_selection,
     shortlist_assets,
 )
@@ -131,6 +133,175 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_existing_wikimedia_asset_is_reused_without_network(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = make_asset(
+                root,
+                "Local/generic_technology.png",
+                ["generic", "technology"],
+                "user_confirmed_no_copyright",
+            )
+            online = make_asset(
+                root,
+                "Online/wikimedia_microsoft-outlook_logo.png",
+                ["microsoft", "outlook", "logo"],
+                "public_domain",
+            )
+            online["source_url"] = (
+                "https://commons.wikimedia.org/wiki/File:Microsoft_Outlook.png"
+            )
+            online["license"] = {
+                "status": "public_domain",
+                "name": "CC0",
+                "attribution_required": False,
+            }
+            window = {
+                "window_id": "story_01_archive_001",
+                "text": "Microsoft Outlook added a new control.",
+                "entities": ["Microsoft Outlook"],
+                "scene_intent": "neutral_technology_context",
+                "visual_queries": [],
+                "shortlist": [
+                    {
+                        "asset_id": local["asset_id"],
+                        "sha256": local["sha256"],
+                        "quality_flags": [],
+                        "local_score": 1.0,
+                    }
+                ],
+            }
+            decision = WindowDecision(
+                window_id=window["window_id"],
+                relevance_status="images_are_irrelevant",
+                selected_asset_id=None,
+                confidence=0.9,
+                selection_reason="The local image is unrelated.",
+                online_search_query="Microsoft Outlook logo",
+                required_entity="Microsoft Outlook",
+            )
+            with patch(
+                "online_media_stage.search_wikimedia_commons"
+            ) as online_search:
+                resolved, refreshed, used, searches = resolve_wikimedia_fallbacks(
+                    video_number=5,
+                    windows=[window],
+                    decisions={window["window_id"]: decision},
+                    media_index={"assets": [local, online]},
+                    index_settings=MediaIndexSettings(
+                        index_path=root / "index.json",
+                        roots=(MediaRoot("test", root, "unknown"),),
+                    ),
+                    settings=selection_settings(),
+                    remaining_downloads=1,
+                    remaining_searches=1,
+                )
+
+            online_search.assert_not_called()
+            self.assertEqual(used, 0)
+            self.assertEqual(searches, 0)
+            self.assertEqual(refreshed["assets"], [local, online])
+            self.assertEqual(
+                resolved[window["window_id"]].selected_asset_id,
+                online["asset_id"],
+            )
+
+    def test_irrelevant_ai_decision_uses_wikimedia_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = make_asset(
+                root,
+                "Local/generic_technology.png",
+                ["generic", "technology"],
+                "user_confirmed_no_copyright",
+            )
+            online = make_asset(
+                root,
+                "Online/microsoft_outlook_logo.png",
+                ["microsoft", "outlook", "logo", "email"],
+                "public_domain",
+            )
+            online["source_url"] = "https://commons.wikimedia.org/wiki/File:Outlook.png"
+            online["creator"] = "Example Creator"
+            online["license"] = {
+                "status": "creative_commons_commercial_reuse",
+                "name": "CC BY-SA 4.0",
+                "url": "https://creativecommons.org/licenses/by-sa/4.0/",
+                "attribution_required": True,
+                "attribution_text": "Example Creator; CC BY-SA 4.0",
+            }
+            window = {
+                "window_id": "story_01_archive_001",
+                "text": "Microsoft Outlook Web Access was targeted.",
+                "entities": ["Microsoft Outlook"],
+                "scene_intent": "neutral_technology_context",
+                "visual_queries": [],
+                "shortlist": [
+                    {
+                        "asset_id": local["asset_id"],
+                        "sha256": local["sha256"],
+                        "quality_flags": [],
+                        "local_score": 1.0,
+                    }
+                ],
+            }
+            decision = WindowDecision(
+                window_id=window["window_id"],
+                relevance_status="images_are_irrelevant",
+                selected_asset_id=None,
+                confidence=0.8,
+                selection_reason="The local image is unrelated to Microsoft Outlook.",
+                online_search_query="Microsoft Outlook logo",
+                required_entity="Microsoft Outlook",
+            )
+            index_settings = MediaIndexSettings(
+                index_path=root / "index.json",
+                roots=(MediaRoot("test", root, "unknown"),),
+            )
+            search_result = {
+                "candidates": [
+                    {
+                        "page_id": 1,
+                        "title": "Microsoft Outlook logo.png",
+                        "license": {"allowed": True},
+                    }
+                ]
+            }
+            with (
+                patch(
+                    "online_media_stage.search_wikimedia_commons",
+                    return_value=search_result,
+                ),
+                patch("online_media_stage.save_search_manifest"),
+                patch(
+                    "online_media_stage.download_candidate",
+                    return_value={"sha256": online["sha256"]},
+                ),
+                patch(
+                    "media_selection_stage.load_media_index",
+                    return_value={"assets": [local, online]},
+                ),
+            ):
+                resolved, refreshed, used, searches = resolve_wikimedia_fallbacks(
+                    video_number=5,
+                    windows=[window],
+                    decisions={window["window_id"]: decision},
+                    media_index={"assets": [local]},
+                    index_settings=index_settings,
+                    settings=selection_settings(),
+                    remaining_downloads=1,
+                    remaining_searches=1,
+                )
+
+            self.assertEqual(used, 1)
+            self.assertEqual(searches, 1)
+            self.assertEqual(len(refreshed["assets"]), 2)
+            self.assertEqual(
+                resolved[window["window_id"]].selected_asset_id,
+                online["asset_id"],
+            )
+            self.assertEqual(window["shortlist"][0]["asset_id"], online["asset_id"])
+
     def test_uncovered_windows_follow_boundaries_and_cover_every_second(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

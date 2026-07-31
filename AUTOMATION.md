@@ -16,6 +16,8 @@ Tech News/
 │   │       └── glitch_transition.license.json
 │   ├── Media/
 │   │   ├── AI Generated/       # approved AI images with descriptive filenames
+│   │   ├── Online Retrieved/
+│   │   │   └── Wikimedia Commons/ # downloaded images + metadata sidecars
 │   │   ├── <company-or-topic>/
 │   │   └── _combined/
 │   ├── Media (No-Copyright)/
@@ -45,6 +47,9 @@ Tech News/
 │   ├── media_index.bat
 │   ├── media_selection_stage.py
 │   ├── media_selection_video.bat
+│   ├── online_media_stage.py
+│   ├── online_media.bat
+│   ├── ONLINE_MEDIA.md
 │   ├── media_index_eval.py
 │   ├── media_retrieval_benchmark.json
 │   ├── caption_stage.py
@@ -98,6 +103,7 @@ Video N/
 │   └── story_01_30s_proof.mp4
 ├── 05_visuals/
 │   ├── media_plan.json
+│   ├── online_searches/             # auditable Commons search manifests
 │   ├── generated/
 │   │   ├── 01_hero_01.png
 │   │   ├── 01_hero_02.png
@@ -118,6 +124,7 @@ Video N/
 ├── 08_render/
 │   ├── render_plan.json
 │   ├── render_report.json
+│   ├── attributions/                # generated drawtext files per visual event
 │   ├── Video N_final.mp4
 │   ├── Video N_preview_540p.mp4
 │   ├── milestone8_contact_sheet.jpg
@@ -129,6 +136,14 @@ Video N/
 repositories. The user has explicitly classified both repositories as
 `user_confirmed_no_copyright`; neither receives a verification warning or selection
 penalty.
+
+When the Milestone 5 selector explicitly reports `images_are_irrelevant` for every
+local shortlist candidate, the production flow can query Wikimedia Commons for an
+exact named entity. Only accepted commercial-reuse licenses, supported bitmap
+formats, adequate resolution, and exact title/object-name evidence are allowed.
+Downloads remain reusable assets under `Assets/Media/Online Retrieved/Wikimedia
+Commons`, with adjacent attribution metadata. Disable this removable provider layer
+with `WIKIMEDIA_FALLBACK_ENABLED=false`; local selection continues unchanged.
 
 Milestone 4 uses `gpt-5.6-luna` only for selecting two supported, visually
 distinct timed beats and writing the scene-specific prompt. Pixel generation uses
@@ -158,4 +173,7 @@ H.264/AAC master and 540p preview. QA checks both stream durations—not only co
 duration—plus codecs, pixel format, sample rate, channels, and measured audio peak.
 Following the CapCut reference, each story title remains visible above the TV frame
 for the complete narration range, and burned-in captions use a raised lower-third
-margin.
+margin. When a selected asset's sidecar says attribution is required, a compact
+`Source: creator · provider · license` label appears at the bottom-right inside the
+TV frame for exactly that asset's visible interval. Public-domain and CC0 assets do
+not receive an unnecessary label.

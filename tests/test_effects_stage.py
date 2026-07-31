@@ -98,6 +98,13 @@ def write_plan_fixture(root: Path) -> dict[str, Path]:
                         "selected_asset": {
                             "absolute_path": str(assets[1]),
                             "sha256": sha256_file(assets[1]),
+                            "source_url": "https://commons.wikimedia.org/wiki/File:Test",
+                            "creator": "Test Creator",
+                            "license": {
+                                "name": "CC BY-SA 4.0",
+                                "attribution_required": True,
+                                "attribution_text": "Test Creator; CC BY-SA 4.0",
+                            },
                             "quality_flags": [],
                         },
                     },
@@ -184,8 +191,14 @@ class EffectsStageTests(unittest.TestCase):
                     "manual_separator",
                     "tv_frame",
                     "persistent_story_title",
+                    "source_attribution_bottom_right",
                     "captions",
                 ],
+            )
+            self.assertEqual(plan["quality"]["attribution_event_count"], 1)
+            self.assertEqual(
+                sum(item.get("attribution") is not None for item in plan["visual_events"]),
+                1,
             )
             self.assertEqual(cached["run_status"], "cached")
             state = json.loads((root / "state.json").read_text(encoding="utf-8"))

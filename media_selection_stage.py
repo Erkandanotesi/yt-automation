@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import time
@@ -11,10 +12,10 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -56,6 +57,9 @@ class MediaSelectionSettings:
     api_retries: int = 2
     timeout_seconds: float = 120.0
     copy_selected_assets: bool = False
+    wikimedia_fallback_enabled: bool = True
+    wikimedia_max_downloads_per_video: int = 10
+    wikimedia_max_searches_per_video: int = 6
 
     @classmethod
     def from_environment(cls) -> "MediaSelectionSettings":
@@ -90,6 +94,17 @@ class MediaSelectionSettings:
                 "false",
             ).strip().lower()
             in {"1", "true", "yes", "on"},
+            wikimedia_fallback_enabled=os.getenv(
+                "WIKIMEDIA_FALLBACK_ENABLED",
+                "true",
+            ).strip().lower()
+            in {"1", "true", "yes", "on"},
+            wikimedia_max_downloads_per_video=int(
+                os.getenv("WIKIMEDIA_MAX_DOWNLOADS_PER_VIDEO", "10")
+            ),
+            wikimedia_max_searches_per_video=int(
+                os.getenv("WIKIMEDIA_MAX_SEARCHES_PER_VIDEO", "6")
+            ),
         )
 
     def validate(self) -> None:
@@ -114,16 +129,43 @@ class MediaSelectionSettings:
             raise ValueError("Media window duration settings are inconsistent.")
         if self.api_retries < 1 or self.timeout_seconds <= 0:
             raise ValueError("Media selection API retry/timeout must be positive.")
+        if not 0 <= self.wikimedia_max_downloads_per_video <= 30:
+            raise ValueError(
+                "WIKIMEDIA_MAX_DOWNLOADS_PER_VIDEO must be between 0 and 30."
+            )
+        if not 0 <= self.wikimedia_max_searches_per_video <= 30:
+            raise ValueError(
+                "WIKIMEDIA_MAX_SEARCHES_PER_VIDEO must be between 0 and 30."
+            )
 
 
 class WindowDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     window_id: str = Field(min_length=1)
-    selected_asset_id: str = Field(min_length=1)
+    relevance_status: Literal["relevant", "images_are_irrelevant"] = "relevant"
+    selected_asset_id: str | None = None
     confidence: float = Field(ge=0, le=1)
     selection_reason: str = Field(min_length=12, max_length=700)
     alternative_asset_ids: list[str] = Field(default_factory=list, max_length=3)
+    online_search_query: str = Field(default="", max_length=180)
+    required_entity: str = Field(default="", max_length=120)
+
+    @model_validator(mode="after")
+    def validate_relevance_outcome(self) -> "WindowDecision":
+        if self.relevance_status == "relevant" and not self.selected_asset_id:
+            raise ValueError("A relevant decision requires selected_asset_id.")
+        if self.relevance_status == "images_are_irrelevant":
+            if self.selected_asset_id is not None:
+                raise ValueError(
+                    "An irrelevant-candidates decision cannot select a local asset."
+                )
+            if not self.online_search_query.strip() or not self.required_entity.strip():
+                raise ValueError(
+                    "An irrelevant-candidates decision requires an online query "
+                    "and exact required entity."
+                )
+        return self
 
 
 class StoryMediaDecisions(BaseModel):
@@ -605,8 +647,8 @@ def selection_prompt(story: dict, windows: list[dict]) -> str:
             }
         )
     return f"""
-Select one archive image for every narration window in this technology-news story.
-You may choose only an asset_id listed in that window's candidates.
+Evaluate the archive candidates for every narration window in this technology-news
+story. Select one only when it is clearly relevant to the exact spoken context.
 
 Rules:
 - Match the precise spoken claim and entity, not merely a broad technology category.
@@ -615,7 +657,13 @@ Rules:
 - Prefer crop-safe 16:9 assets without low-resolution or crop-risk flags.
 - The `user_confirmed_no_copyright` status is cleared for use.
 - An `unknown` license is allowed for planning but must remain visibly recorded.
-- If every candidate is generic, choose the most neutral one and lower confidence.
+- If every candidate is unrelated, merely shares a broad company/category, or would
+  visually misrepresent the spoken claim, return relevance_status exactly as
+  `images_are_irrelevant`, selected_asset_id as null, and supply a concise Wikimedia
+  search query plus one exact required_entity visible in the spoken text/entities.
+- Never force a local selection after deciding the images are irrelevant.
+- For a normal choice, return relevance_status=`relevant` and choose only an asset_id
+  listed in that window's candidates.
 - Return exactly one decision for every window, in the same order.
 - Alternatives must also come from that window's candidate list.
 
@@ -702,6 +750,7 @@ def local_story_selector(
         decisions.append(
             WindowDecision(
                 window_id=window["window_id"],
+                relevance_status="relevant",
                 selected_asset_id=chosen["asset_id"],
                 confidence=min(0.95, max(0.2, 0.45 + chosen["local_score"] / 20)),
                 selection_reason=(
@@ -732,16 +781,266 @@ def _validate_decisions(
             candidate["asset_id"]
             for candidate in window["shortlist"]
         }
-        if decision.selected_asset_id not in allowed:
+        if (
+            decision.relevance_status == "relevant"
+            and decision.selected_asset_id not in allowed
+        ):
             raise RuntimeError(
                 f"Selector returned an asset outside {window['window_id']}'s shortlist."
             )
-        if any(asset_id not in allowed for asset_id in decision.alternative_asset_ids):
-            raise RuntimeError(
-                f"Selector returned an invalid alternative for {window['window_id']}."
+        decision.alternative_asset_ids = [
+            asset_id
+            for asset_id in decision.alternative_asset_ids
+            if asset_id in allowed
+        ][:3]
+        if decision.relevance_status == "images_are_irrelevant":
+            allowed_entity_text = normalize_search_text(
+                " ".join(
+                    [
+                        window.get("text", ""),
+                        *window.get("entities", []),
+                    ]
+                )
             )
+            if normalize_search_text(decision.required_entity) not in allowed_entity_text:
+                raise RuntimeError(
+                    f"Selector returned an ungrounded required entity for "
+                    f"{window['window_id']}."
+                )
         result[decision.window_id] = decision
     return result
+
+
+def _fallback_to_local_candidate(
+    decision: WindowDecision,
+    window: dict,
+    reason: str,
+) -> WindowDecision:
+    chosen = window["shortlist"][0]
+    alternatives = [
+        item["asset_id"]
+        for item in window["shortlist"][1:4]
+    ]
+    return WindowDecision(
+        window_id=window["window_id"],
+        relevance_status="relevant",
+        selected_asset_id=chosen["asset_id"],
+        confidence=0.15,
+        selection_reason=(
+            "AI rejected the local candidates, but Wikimedia could not provide "
+            f"a safe exact-entity replacement. {reason}"
+        )[:700],
+        alternative_asset_ids=alternatives,
+    )
+
+
+def resolve_wikimedia_fallbacks(
+    *,
+    video_number: int,
+    windows: list[dict],
+    decisions: dict[str, WindowDecision],
+    media_index: dict,
+    index_settings: MediaIndexSettings,
+    settings: MediaSelectionSettings,
+    remaining_downloads: int,
+    remaining_searches: int,
+) -> tuple[dict[str, WindowDecision], dict, int, int]:
+    irrelevant = [
+        window
+        for window in windows
+        if decisions[window["window_id"]].relevance_status
+        == "images_are_irrelevant"
+    ]
+    if not irrelevant:
+        return decisions, media_index, 0, 0
+    if not settings.wikimedia_fallback_enabled:
+        reason = (
+            "The Wikimedia fallback is disabled or its per-video download cap "
+            "has been reached."
+        )
+        updated = dict(decisions)
+        for window in irrelevant:
+            current = decisions[window["window_id"]]
+            updated[window["window_id"]] = _fallback_to_local_candidate(
+                current,
+                window,
+                reason,
+            )
+        return updated, media_index, 0, 0
+
+    from online_media_stage import (
+        OnlineMediaSettings,
+        download_candidate,
+        save_search_manifest,
+        search_wikimedia_commons,
+    )
+
+    online_settings = OnlineMediaSettings.from_environment()
+    resolved_assets: dict[str, dict] = {}
+    pending_downloads: dict[str, dict] = {}
+    updated = dict(decisions)
+    downloads_used = 0
+    searches_used = 0
+    cached_queries: dict[str, dict] = {}
+    online_throttled = False
+
+    def existing_asset(required_entity: str) -> dict | None:
+        exact = re.sub(
+            r"[^a-z0-9]+",
+            " ",
+            normalize_search_text(required_entity),
+        ).strip()
+        matches = []
+        for asset in media_index.get("assets", []):
+            source_url = str(asset.get("source_url", "")).casefold()
+            identity = re.sub(
+                r"[^a-z0-9]+",
+                " ",
+                normalize_search_text(
+                    " ".join(
+                        [
+                            asset.get("filename", ""),
+                            asset.get("local_caption", ""),
+                        ]
+                    )
+                ),
+            ).strip()
+            license_status = asset.get("license", {}).get("status", "unknown")
+            if (
+                "commons.wikimedia.org" in source_url
+                and exact in identity
+                and license_status not in {"", "unknown"}
+            ):
+                matches.append(asset)
+        return max(
+            matches,
+            key=lambda item: (
+                float(item.get("crop_retention_16_9", 0)),
+                int(item.get("width", 0)) * int(item.get("height", 0)),
+            ),
+            default=None,
+        )
+
+    for window in irrelevant:
+        current = decisions[window["window_id"]]
+        reusable = existing_asset(current.required_entity)
+        if reusable is not None:
+            resolved_assets[window["window_id"]] = reusable
+            continue
+        if online_throttled:
+            updated[window["window_id"]] = _fallback_to_local_candidate(
+                current,
+                window,
+                "Wikimedia throttled the current run, so further searches stopped.",
+            )
+            continue
+        if searches_used >= remaining_searches:
+            updated[window["window_id"]] = _fallback_to_local_candidate(
+                current,
+                window,
+                "The per-video Wikimedia search cap was reached.",
+            )
+            continue
+        cache_key = normalize_search_text(current.required_entity)
+        try:
+            search = cached_queries.get(cache_key)
+            if search is None:
+                if online_settings.request_interval_seconds:
+                    time.sleep(online_settings.request_interval_seconds)
+                search = search_wikimedia_commons(
+                    query=current.online_search_query,
+                    required_entity=current.required_entity,
+                    context=window.get("text", ""),
+                    settings=online_settings,
+                )
+                cached_queries[cache_key] = search
+                searches_used += 1
+                save_search_manifest(search, video_number=video_number)
+            if not search.get("candidates"):
+                raise RuntimeError("No exact-title, accepted-license result was found.")
+            if downloads_used >= remaining_downloads:
+                raise RuntimeError("The per-video Wikimedia download cap was reached.")
+            downloaded = download_candidate(
+                search["candidates"][0],
+                query=current.online_search_query,
+                required_entity=current.required_entity,
+                context=window.get("text", ""),
+                settings=online_settings,
+            )
+            pending_downloads[window["window_id"]] = {
+                "download": downloaded,
+                "decision": current,
+            }
+            downloads_used += 1
+        except Exception as exc:  # noqa: BLE001
+            if "429" in str(exc) or "too many requests" in str(exc).casefold():
+                online_throttled = True
+            updated[window["window_id"]] = _fallback_to_local_candidate(
+                current,
+                window,
+                f"Online fallback error: {exc}",
+            )
+
+    refreshed = (
+        load_media_index(index_settings, rescan=True)
+        if pending_downloads
+        else media_index
+    )
+    assets_by_sha = {
+        item.get("sha256"): item
+        for item in refreshed.get("assets", [])
+        if item.get("sha256")
+    }
+    for window in irrelevant:
+        item = pending_downloads.get(window["window_id"])
+        asset = resolved_assets.get(window["window_id"])
+        if asset is None and item is not None:
+            asset = assets_by_sha.get(item["download"]["sha256"])
+        if asset is None and item is None:
+            continue
+        if asset is None:
+            updated[window["window_id"]] = _fallback_to_local_candidate(
+                item["decision"],
+                window,
+                "The downloaded Wikimedia file was not found after media re-indexing.",
+            )
+            continue
+        online_shortlist = shortlist_assets(
+            {"assets": [asset]},
+            window,
+            settings,
+        )[0]
+        online_shortlist["online_fallback"] = True
+        window["shortlist"] = [
+            online_shortlist,
+            *[
+                candidate
+                for candidate in window["shortlist"]
+                if candidate["asset_id"] != online_shortlist["asset_id"]
+            ],
+        ][: settings.shortlist_size]
+        updated[window["window_id"]] = WindowDecision(
+            window_id=window["window_id"],
+            relevance_status="relevant",
+            selected_asset_id=asset["asset_id"],
+            confidence=max(
+                0.7,
+                min(
+                    0.95,
+                    (item["decision"] if item else decisions[window["window_id"]]).confidence,
+                ),
+            ),
+            selection_reason=(
+                "AI returned images_are_irrelevant for every local candidate. "
+                "Selected the highest-ranked Wikimedia Commons result after exact-"
+                "title entity, license, resolution, and metadata relevance gates."
+            ),
+            alternative_asset_ids=[
+                candidate["asset_id"]
+                for candidate in window["shortlist"][1:4]
+            ],
+        )
+    return updated, refreshed, downloads_used, searches_used
 
 
 def _enforce_selection_constraints(
@@ -776,15 +1075,28 @@ def _enforce_selection_constraints(
                 return False
             return "crop_risk" not in candidate.get("quality_flags", [])
 
-        chosen_id = next(
-            (
-                asset_id
-                for asset_id in deduplicated_ids
-                if acceptable(asset_id, allow_story_reuse=False)
-            ),
-            None,
-        )
-        override_reason = ""
+        preferred_online = candidate_by_id.get(decision.selected_asset_id or "", {})
+        if (
+            preferred_online.get("online_fallback") is True
+            and "crop_risk" not in preferred_online.get("quality_flags", [])
+        ):
+            chosen_id = decision.selected_asset_id
+            override_reason = (
+                "Intentional Wikimedia reuse was preferred over an unrelated local "
+                "candidate."
+                if preferred_online.get("sha256") in used_sha
+                else ""
+            )
+        else:
+            chosen_id = next(
+                (
+                    asset_id
+                    for asset_id in deduplicated_ids
+                    if acceptable(asset_id, allow_story_reuse=False)
+                ),
+                None,
+            )
+            override_reason = ""
         if chosen_id is None:
             chosen_id = next(
                 (
@@ -826,6 +1138,8 @@ def _enforce_selection_constraints(
                     "height": asset["height"],
                     "aspect_ratio": asset["aspect_ratio"],
                     "crop_retention_16_9": asset["crop_retention_16_9"],
+                    "source_url": asset.get("source_url", ""),
+                    "creator": asset.get("creator", ""),
                     "license": asset.get("license", {}),
                     "quality_flags": asset.get("quality_flags", []),
                 },
@@ -974,6 +1288,8 @@ def run_media_selection(
     else:
         selection_function = select_story_with_openai
 
+    wikimedia_download_count = 0
+    wikimedia_search_count = 0
     for story in selected_timing:
         storyboard_story = storyboard_by_id.get(story["story_id"])
         if storyboard_story is None:
@@ -1007,6 +1323,35 @@ def run_media_selection(
 
         decisions = selection_function(story, windows, settings)
         decision_by_window = _validate_decisions(decisions, windows)
+        (
+            decision_by_window,
+            media_index,
+            downloads_used,
+            searches_used,
+        ) = resolve_wikimedia_fallbacks(
+            video_number=video_number,
+            windows=windows,
+            decisions=decision_by_window,
+            media_index=media_index,
+            index_settings=index_settings,
+            settings=settings,
+            remaining_downloads=max(
+                0,
+                settings.wikimedia_max_downloads_per_video
+                - wikimedia_download_count,
+            ),
+            remaining_searches=max(
+                0,
+                settings.wikimedia_max_searches_per_video
+                - wikimedia_search_count,
+            ),
+        )
+        wikimedia_download_count += downloads_used
+        wikimedia_search_count += searches_used
+        assets_by_id = {
+            item["asset_id"]: item
+            for item in media_index.get("assets", [])
+        }
         selected_windows = _enforce_selection_constraints(
             windows,
             decision_by_window,
@@ -1146,6 +1491,8 @@ def run_media_selection(
         "selection_mode": (
             "copied" if settings.copy_selected_assets else "immutable_reference"
         ),
+        "wikimedia_download_count": wikimedia_download_count,
+        "wikimedia_search_count": wikimedia_search_count,
         "story_count": len(timing_stories),
         "planned_story_count": len(ordered),
         "archive_window_count": sum(

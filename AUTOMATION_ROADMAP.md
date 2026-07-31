@@ -471,8 +471,8 @@ verification and receives no warning or ranking penalty.
 6. Save every decision, confidence, and alternative in `media_plan.json`.
 7. Copy selected assets into the project or record immutable source paths and hashes.
 
-If no local candidate clears the relevance threshold, query Openverse and Wikimedia
-Commons by exact named entity plus scene intent. Google/Yandex Images may be used only
+If the AI explicitly returns `images_are_irrelevant` for every local candidate, query
+Wikimedia Commons by exact named entity plus scene intent. Google/Yandex Images may be used only
 to discover an original source page, never as an automatic download source. Reject
 the fallback unless the title/description/category matches the named entity and the
 image itself passes visual relevance review. Save accepted downloads under
@@ -502,6 +502,13 @@ and relevance evidence.
   emergency offline production. Paid final selection requires explicit confirmation.
 - Production enforcement avoids adjacent duplicates, same-story reuse, and crop-risk
   choices whenever a safe shortlist alternative exists.
+- An explicit structured `images_are_irrelevant` decision triggers the optional,
+  capped Wikimedia provider. Exact entity/title evidence, supported dimensions and
+  commercial-reuse license metadata are required; failed searches safely return to
+  the local shortlist instead of inserting a wrong-entity web image.
+- Online images and attribution sidecars live separately under `Assets/Media/Online
+  Retrieved/Wikimedia Commons`. Search manifests are stored per video, and the whole
+  provider can be disabled with `WIKIMEDIA_FALLBACK_ENABLED=false`.
 - `media_plan.json` records exact local/global time ranges, immutable source path,
   SHA-256, dimensions, repository classification, confidence, reason, override,
   alternatives, and full shortlist.
@@ -705,7 +712,10 @@ Starting mix targets should be treated as test values, not laws:
   together at each story start.
 - Titles stay visible for their complete narration range. Captions are burned in at a
   raised lower-third position, and non-transparent TV-frame pixels are forced opaque.
-- Four exact three-second waits expand Video 5 to 481.042 seconds.
+- Attribution-required assets receive a compact source label at the bottom-right
+  inside the TV frame for only their visible interval; CC0/public-domain assets do
+  not receive a label.
+- Four exact three-second waits expand the current Video 5 render to 481.066 seconds.
 - Finite video and audio tracks are rendered independently before muxing, making
   retries recoverable and avoiding Windows FFmpeg shutdown deadlocks.
 - QA validates actual video and audio stream durations, 1920x1080/30 fps H.264

@@ -71,6 +71,7 @@ class OnlineMediaSettings:
         "(personal low-volume Wikimedia Commons media research)"
     )
     timeout_seconds: float = 30.0
+    request_interval_seconds: float = 1.0
     search_limit: int = 12
     request_result_limit: int = 36
     download_width: int = 1920
@@ -104,6 +105,9 @@ class OnlineMediaSettings:
                 cls.user_agent,
             ).strip(),
             timeout_seconds=float(os.getenv("ONLINE_MEDIA_TIMEOUT", "30")),
+            request_interval_seconds=float(
+                os.getenv("ONLINE_MEDIA_REQUEST_INTERVAL", "1")
+            ),
             search_limit=int(os.getenv("ONLINE_MEDIA_SEARCH_LIMIT", "12")),
             request_result_limit=int(
                 os.getenv("ONLINE_MEDIA_REQUEST_RESULT_LIMIT", "36")
@@ -125,6 +129,8 @@ class OnlineMediaSettings:
             raise ValueError("WIKIMEDIA_USER_AGENT must be descriptive.")
         if self.timeout_seconds <= 0:
             raise ValueError("ONLINE_MEDIA_TIMEOUT must be positive.")
+        if not 0 <= self.request_interval_seconds <= 10:
+            raise ValueError("ONLINE_MEDIA_REQUEST_INTERVAL must be between 0 and 10.")
         if not 1 <= self.search_limit <= 30:
             raise ValueError("ONLINE_MEDIA_SEARCH_LIMIT must be between 1 and 30.")
         if not self.search_limit <= self.request_result_limit <= 50:
@@ -172,6 +178,7 @@ def _fetch_json(url: str, settings: OnlineMediaSettings) -> dict:
     )
     last_error: Exception | None = None
     for attempt in range(1, 4):
+        retry_delay = 0.5 * (2 ** (attempt - 1))
         try:
             with urlopen(request, timeout=settings.timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
@@ -180,13 +187,17 @@ def _fetch_json(url: str, settings: OnlineMediaSettings) -> dict:
             return payload
         except HTTPError as exc:
             last_error = exc
+            if exc.code == 429:
+                raw_retry = str(exc.headers.get("Retry-After", "")).strip()
+                if raw_retry.isdigit():
+                    retry_delay = min(30.0, max(retry_delay, float(raw_retry)))
             if exc.code not in {429, 500, 502, 503, 504} or attempt == 3:
                 break
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_error = exc
             if attempt == 3:
                 break
-        time.sleep(0.5 * (2 ** (attempt - 1)))
+        time.sleep(retry_delay)
     raise RuntimeError(f"Wikimedia search failed: {last_error}") from last_error
 
 
