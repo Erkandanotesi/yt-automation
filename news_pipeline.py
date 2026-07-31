@@ -28,7 +28,12 @@ from article_validation import (
     title_source_relevance,
     validate_unique_source_content,
 )
-from content_validation import ContentValidationError, validate_narration, word_count
+from content_validation import (
+    ContentValidationError,
+    trim_narration_to_word_limit,
+    validate_narration,
+    word_count,
+)
 from file_utils import (
     atomic_write_json,
     atomic_write_text,
@@ -901,7 +906,8 @@ def summarize_article(
 ) -> NewsSummary:
     if IS_GAMING:
         writing_brief = """
-Write an English 150-200 word YouTube gaming-news script from the source.
+Write an English YouTube gaming-news script from the source. Aim for 175-185
+words and never exceed 195 words.
 Preserve every material fact that fits; add nothing unsupported. Attribute
 allegations and retain uncertainty. Be skeptical of large publishers, platform
 holders, aggressive monetization, lock-in, and anti-consumer decisions. Support
@@ -914,7 +920,8 @@ light sarcasm only when context supports it; otherwise sound normal.
         )
     else:
         writing_brief = """
-Write an English 150-200 word YouTube tech-news script from the source.
+Write an English YouTube tech-news script from the source. Aim for 175-185
+words and never exceed 195 words.
 Preserve every material fact that fits; add nothing unsupported. Attribute
 allegations and retain uncertainty. Be skeptical of big tech and supportive of
 free speech and privacy; use light sarcasm only when context supports it.
@@ -929,13 +936,15 @@ Otherwise sound normal.
 Use simple, warm, intimate but formal and kind language. Make it engaging,
 legally cautious, and ready for ElevenLabs. No greeting,
 farewell, heading, bullets, labels, or stage directions. Return title_en as
-metadata and the narration as summary_en.
+metadata and the narration as summary_en. Do not use direct quotations or
+quotation marks; paraphrase supported statements and preserve attribution.
 
 Before returning, compare every name/entity, number/date, direct quote, and
 attribution in the narration against SOURCE TEXT. In factual_review, list the
 exact source phrases you checked. List any tempting unsupported claims you
 removed. Do not put source facts in factual_review unless their exact wording
-appears in SOURCE TEXT.
+appears in SOURCE TEXT. Copy checked phrases verbatim, including any internal
+punctuation. Omit a review item rather than paraphrasing its source wording.
 
 ORIGINAL TITLE:
 {candidate["title"]}
@@ -951,6 +960,14 @@ SOURCE TEXT:
 """
 
     result = structured_ai_call(prompt, NewsSummary)
+    original_word_count = word_count(result.summary_en)
+    result.summary_en = trim_narration_to_word_limit(result.summary_en)
+    if word_count(result.summary_en) != original_word_count:
+        LOGGER.info(
+            "Trimmed narration locally from %s to %s words.",
+            original_word_count,
+            word_count(result.summary_en),
+        )
 
     for revision_number in range(1, 4):
         try:
@@ -971,11 +988,14 @@ SOURCE TEXT:
         )
 
         revision_prompt = f"""
-Fix the validation error below. Rewrite summary_en to 150-200 English words.
+Fix the validation error below. Rewrite summary_en to 175-185 English words
+and never exceed 195 words.
 Preserve supported facts and uncertainty; add nothing. Keep the requested
 skeptical, privacy-conscious, warm, legally cautious, ElevenLabs-ready style.
 {revision_style} No greeting, farewell, heading, bullets, labels, or stage
-directions. Rebuild factual_review using only exact phrases found in SOURCE.
+directions. Do not use direct quotations or quotation marks. Rebuild
+factual_review using only verbatim phrases found in SOURCE;
+omit any review item that would require paraphrasing.
 
 VALIDATION ERROR:
 {validation_error}
@@ -988,6 +1008,14 @@ SOURCE FOR FACT CHECKING:
 {article_text}
 """
         result = structured_ai_call(revision_prompt, NewsSummary)
+        original_word_count = word_count(result.summary_en)
+        result.summary_en = trim_narration_to_word_limit(result.summary_en)
+        if word_count(result.summary_en) != original_word_count:
+            LOGGER.info(
+                "Trimmed revised narration locally from %s to %s words.",
+                original_word_count,
+                word_count(result.summary_en),
+            )
 
     validate_narration(
         title=result.title_en,

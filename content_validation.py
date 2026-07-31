@@ -17,8 +17,41 @@ def word_count(text: str) -> int:
     return len(re.findall(r"\b[\wÀ-ž'-]+\b", text, flags=re.UNICODE))
 
 
+def trim_narration_to_word_limit(
+    text: str,
+    max_words: int = MAX_NARRATION_WORDS,
+) -> str:
+    """Trim overlong model output locally, preferring complete sentences."""
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    if word_count(cleaned) <= max_words:
+        return cleaned
+
+    sentences = re.split(r"(?<=[.!?])\s+", cleaned)
+    kept: list[str] = []
+    for sentence in sentences:
+        candidate = " ".join([*kept, sentence]).strip()
+        if word_count(candidate) > max_words:
+            break
+        kept.append(sentence)
+
+    complete = " ".join(kept).strip()
+    if word_count(complete) >= MIN_NARRATION_WORDS:
+        return complete
+
+    # Rare fallback for an unusually long single sentence. The result still
+    # goes through the normal source-grounding checks afterward.
+    matches = list(re.finditer(r"\b[\wÀ-ž'-]+\b", cleaned, flags=re.UNICODE))
+    cutoff = matches[max_words - 1].end()
+    return cleaned[:cutoff].rstrip(" ,;:-") + "."
+
+
 def _searchable(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _evidence_searchable(text: str) -> str:
+    """Normalize harmless quote/punctuation differences in audit metadata."""
+    return re.sub(r"[^\w]+", " ", text, flags=re.UNICODE).strip().casefold()
 
 
 def _numeric_tokens(text: str) -> set[str]:
@@ -41,9 +74,11 @@ def _validate_evidence_list(
     values: list[str],
     source_searchable: str,
 ) -> None:
+    normalized_source = _evidence_searchable(source_searchable)
     for value in values:
         cleaned = re.sub(r"\s+", " ", value).strip()
-        if cleaned and cleaned.casefold() not in source_searchable:
+        normalized_value = _evidence_searchable(cleaned)
+        if normalized_value and normalized_value not in normalized_source:
             raise ContentValidationError(
                 f"Factual evidence item is not present in the source "
                 f"({label}): {cleaned}"
@@ -100,10 +135,11 @@ def validate_narration(
             + ", ".join(unsupported_numbers)
         )
 
+    source_for_quotes = _evidence_searchable(source_text)
     unsupported_quotes = [
         quote
         for quote in _direct_quotes(narration)
-        if _searchable(quote) not in source_searchable
+        if _evidence_searchable(quote) not in source_for_quotes
     ]
     if unsupported_quotes:
         raise ContentValidationError(
@@ -129,29 +165,12 @@ def validate_narration(
             "Factual review must record at least one checked name or entity."
         )
 
+    # Numbers and direct quotations are already checked directly against the
+    # source above. The model's factual_review is useful audit metadata, but an
+    # incomplete audit list must not trigger another paid rewrite of otherwise
+    # valid, source-grounded narration.
     narration_numbers = _numeric_tokens(narration)
-    numbers_checked = " ".join(review.get("numbers_dates_checked", [])).casefold()
-    missing_number_evidence = sorted(
-        token for token in narration_numbers if token.casefold() not in numbers_checked
-    )
-    if missing_number_evidence:
-        raise ContentValidationError(
-            "Factual review did not record narration numbers/dates: "
-            + ", ".join(missing_number_evidence)
-        )
-
     narration_quotes = _direct_quotes(narration)
-    checked_quotes = {
-        _searchable(value) for value in review.get("quotes_checked", [])
-    }
-    missing_quote_evidence = [
-        quote for quote in narration_quotes if _searchable(quote) not in checked_quotes
-    ]
-    if missing_quote_evidence:
-        raise ContentValidationError(
-            "Factual review did not record a narration quotation: "
-            + missing_quote_evidence[0]
-        )
 
     return {
         "status": "passed",
