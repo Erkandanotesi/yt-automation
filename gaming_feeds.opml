@@ -8,7 +8,6 @@
       <outline type="rss" text="IGN Articles" title="IGN Articles" xmlUrl="https://feeds.ign.com/ign/all" htmlUrl="https://feeds.ign.com/ign/all"/>
       <outline type="rss" text="Kotaku" title="Kotaku" xmlUrl="https://kotaku.com/rss" htmlUrl="https://kotaku.com/rss"/>
       <outline type="rss" text="Rock, Paper, Shotgun" title="Rock, Paper, Shotgun" xmlUrl="https://feeds.feedburner.com/RockPaperShotgun" htmlUrl="https://feeds.feedburner.com/RockPaperShotgun"/>
-      <outline type="rss" text="The Escapist" title="The Escapist" xmlUrl="https://www.escapistmagazine.com/v2/feed/" htmlUrl="https://www.escapistmagazine.com/v2/feed/"/>
       <outline type="rss" text="Gaming | The Verge" title="Gaming | The Verge" xmlUrl="https://www.theverge.com/rss/games/index.xml" htmlUrl="https://www.theverge.com/rss/games/index.xml"/>
     </outline>
     <outline text="Tech and Gaming" title="Tech and Gaming">
