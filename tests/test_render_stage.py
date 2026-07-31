@@ -108,6 +108,8 @@ class RenderStageTests(unittest.TestCase):
             )
             self.assertTrue(plan["quality"]["first_caption_starts_at_program_start"])
             self.assertTrue(plan["quality"]["no_directional_pans"])
+            self.assertTrue(plan["quality"]["persistent_titles_cover_all_stories"])
+            self.assertEqual(len(plan["story_titles"]), 1)
 
 
 if __name__ == "__main__":

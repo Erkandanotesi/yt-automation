@@ -65,11 +65,11 @@ class EffectsSettings:
     width: int = 1920
     height: int = 1080
     fps: int = 30
-    motion_scale: float = 1.012
-    hero_motion_scale: float = 1.008
+    motion_scale: float = 1.0
+    hero_motion_scale: float = 1.0
     tv_frame_enabled: bool = True
     tv_frame_file: Path = PROJECTS_ROOT / "Assets" / "Overlays" / "tv_frame.png"
-    tv_frame_opacity: float = 0.82
+    tv_frame_opacity: float = 1.0
     glitch_enabled: bool = True
     glitch_duration_seconds: float = 0.16
     glitch_max_per_minute: int = 4
@@ -103,16 +103,16 @@ class EffectsSettings:
             width=int(os.getenv("EFFECTS_WIDTH", "1920")),
             height=int(os.getenv("EFFECTS_HEIGHT", "1080")),
             fps=int(os.getenv("EFFECTS_FPS", "30")),
-            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.012")),
+            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.0")),
             hero_motion_scale=float(
-                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.008")
+                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.0")
             ),
             tv_frame_enabled=_bool_env("TV_FRAME_ENABLED", True),
             tv_frame_file=_path_env(
                 "TV_FRAME_FILE",
                 PROJECTS_ROOT / "Assets" / "Overlays" / "tv_frame.png",
             ),
-            tv_frame_opacity=float(os.getenv("TV_FRAME_OPACITY", "0.82")),
+            tv_frame_opacity=float(os.getenv("TV_FRAME_OPACITY", "1.0")),
             glitch_enabled=_bool_env("GLITCH_ENABLED", True),
             glitch_duration_seconds=float(
                 os.getenv("GLITCH_DURATION_SECONDS", "0.16")
@@ -438,20 +438,45 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                     "crop_risk": "crop_risk" in selected.get("quality_flags", []),
                 }
             )
+    timed_stories = timing.get("stories", [])
+    for previous, current in zip(timed_stories, timed_stories[1:]):
+        hold_start = float(previous["narration"]["end"])
+        hold_end = float(current["narration"]["start"])
+        if hold_end <= hold_start + 0.001:
+            continue
+        story_events = [
+            event
+            for event in raw_events
+            if event["story_id"] == previous["story_id"]
+        ]
+        if not story_events:
+            raise RuntimeError(
+                f"Cannot fill inter-story gap after {previous['story_id']}: "
+                "no visual event exists."
+            )
+        source = max(story_events, key=lambda item: item["timeline_end"])
+        raw_events.append(
+            {
+                "story_id": previous["story_id"],
+                "story_order": int(previous["order"]),
+                "source_type": "inter_story_hold",
+                "source_id": f"gap_after_story_{int(previous['order']):02d}",
+                "local_start": float(previous["narration"]["duration"]),
+                "local_end": float(previous["narration"]["duration"])
+                + (hold_end - hold_start),
+                "timeline_start": hold_start,
+                "timeline_end": hold_end,
+                "asset": dict(source["asset"]),
+                "crop_risk": bool(source["crop_risk"]),
+            }
+        )
     raw_events.sort(key=lambda item: (item["timeline_start"], item["timeline_end"]))
     for index, event in enumerate(raw_events):
-        base_scale = (
-            settings.hero_motion_scale
-            if event["source_type"] == "generated_hero"
-            else settings.motion_scale
-        )
-        if event["crop_risk"]:
-            base_scale = min(base_scale, 1.025)
         event["event_id"] = f"visual_{index + 1:04d}"
         event["duration"] = round(event["timeline_end"] - event["timeline_start"], 6)
         event["motion"] = {
-            "type": "static" if event["crop_risk"] else "slow_push_in",
-            "maximum_scale": round(base_scale, 4),
+            "type": "static",
+            "maximum_scale": 1.0,
             "focus": "center_safe",
             "vertical_pan": False,
             "caption_safe_bottom_percent": 22,
@@ -466,6 +491,8 @@ def validate_visual_coverage(events: list[dict], timing: dict) -> dict:
     errors: list[str] = []
     by_story: dict[str, list[dict]] = {}
     for event in events:
+        if event.get("source_type") == "inter_story_hold":
+            continue
         by_story.setdefault(event["story_id"], []).append(event)
     story_results = []
     tolerance = 0.03
@@ -682,10 +709,11 @@ def _filter_templates(settings: EffectsSettings) -> dict:
     return {
         "layer_order": [
             "base_visual",
-            "deterministic_motion_crop",
+            "static_center_crop",
             "tape_dropout_glitch_accents",
             "manual_separator",
             "tv_frame",
+            "persistent_story_title",
             "captions",
         ],
         "motion": {

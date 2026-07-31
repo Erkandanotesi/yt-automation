@@ -166,7 +166,7 @@ class EffectsStageTests(unittest.TestCase):
             self.assertEqual(len(plan["visual_events"]), 4)
             self.assertEqual(
                 [item["motion"]["type"] for item in plan["visual_events"]],
-                ["slow_push_in"] * 4,
+                ["static"] * 4,
             )
             self.assertTrue(plan["quality"]["no_directional_pans"])
             self.assertTrue(plan["quality"]["glitch_under_three_percent"])
@@ -179,10 +179,11 @@ class EffectsStageTests(unittest.TestCase):
                 plan["ffmpeg_templates"]["layer_order"],
                 [
                     "base_visual",
-                    "deterministic_motion_crop",
+                    "static_center_crop",
                     "tape_dropout_glitch_accents",
                     "manual_separator",
                     "tv_frame",
+                    "persistent_story_title",
                     "captions",
                 ],
             )

@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,6 +68,10 @@ class RenderSettings:
     separator_audio_gain_db: float = -9.0
     final_target_lufs: float = -14.0
     final_true_peak_db: float = -1.5
+    caption_margin_vertical: int = 40
+    title_font_size: int = 30
+    title_margin_left: int = 110
+    title_margin_top: int = 70
 
     @classmethod
     def from_environment(cls) -> "RenderSettings":
@@ -85,6 +90,12 @@ class RenderSettings:
             ),
             final_target_lufs=float(os.getenv("FINAL_TARGET_LUFS", "-14")),
             final_true_peak_db=float(os.getenv("FINAL_TRUE_PEAK_DB", "-1.5")),
+            caption_margin_vertical=int(
+                os.getenv("CAPTION_MARGIN_VERTICAL", "40")
+            ),
+            title_font_size=int(os.getenv("TITLE_FONT_SIZE", "30")),
+            title_margin_left=int(os.getenv("TITLE_MARGIN_LEFT", "110")),
+            title_margin_top=int(os.getenv("TITLE_MARGIN_TOP", "70")),
         )
 
     def validate(self) -> None:
@@ -100,6 +111,12 @@ class RenderSettings:
             raise ValueError("Render CRF values must be between 0 and 35.")
         if not self.preset:
             raise ValueError("RENDER_PRESET cannot be empty.")
+        if self.caption_margin_vertical < 0:
+            raise ValueError("CAPTION_MARGIN_VERTICAL cannot be negative.")
+        if not 12 <= self.title_font_size <= 96:
+            raise ValueError("TITLE_FONT_SIZE must be between 12 and 96.")
+        if self.title_margin_left < 0 or self.title_margin_top < 0:
+            raise ValueError("Title margins cannot be negative.")
 
 
 def _run(command: list[str], label: str) -> subprocess.CompletedProcess[str]:
@@ -148,6 +165,26 @@ def _filter_path(path: Path) -> str:
     if len(value) >= 2 and value[1] == ":":
         value = value[0] + r"\:" + value[2:]
     return value
+
+
+def _compact_story_title(title: str, order: int) -> str:
+    normalized = re.sub(r"\s+", " ", title).strip()
+    if not normalized:
+        normalized = f"Tech News {order}"
+    lines = textwrap.wrap(
+        normalized,
+        width=54,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    if len(lines) <= 2:
+        return "\n".join(lines)
+    second = textwrap.shorten(
+        " ".join(lines[1:]),
+        width=54,
+        placeholder="...",
+    )
+    return f"{lines[0]}\n{second}"
 
 
 def _db_factor(value: float) -> float:
@@ -225,6 +262,25 @@ def build_render_plan(
             }
         )
     caption_file = Path(captions["combined_srt_file"])
+    output_dir = video_dir / "08_render"
+    title_dir = output_dir / "titles"
+    title_dir.mkdir(parents=True, exist_ok=True)
+    titles = []
+    for story in timing.get("stories", []):
+        order = int(story["order"])
+        title_file = title_dir / f"{order:02d}_story_title.txt"
+        display_title = _compact_story_title(str(story.get("title", "")), order)
+        atomic_write_text(title_file, display_title)
+        titles.append(
+            {
+                "story_id": story["story_id"],
+                "order": order,
+                "start": story["narration"]["start"],
+                "end": story["narration"]["end"],
+                "text": display_title,
+                "text_file": str(title_file),
+            }
+        )
     frame = effects.get("tv_frame") or {}
     frame_file = Path(frame["file"]) if frame.get("file") else None
     music = effects.get("audio", {}).get("background_music")
@@ -242,6 +298,7 @@ def build_render_plan(
         "narration": narration,
         "glitch_events": effects.get("glitch_events", []),
         "tv_frame": frame,
+        "story_titles": titles,
         "captions": {
             "file": str(caption_file),
             "sha256": sha256_file(caption_file),
@@ -264,10 +321,16 @@ def build_render_plan(
             "no_directional_pans": effects.get("quality", {}).get(
                 "no_directional_pans", False
             ),
+            "persistent_titles_cover_all_stories": len(titles) == len(narration),
             "visual_count": len(visuals),
+            "persistent_title_count": len(titles),
         },
     }
-    if not all(value for key, value in payload["quality"].items() if key != "visual_count"):
+    if not all(
+        value
+        for key, value in payload["quality"].items()
+        if key not in {"visual_count", "persistent_title_count"}
+    ):
         raise RuntimeError(f"Milestone 8 plan quality failed: {payload['quality']}")
     fingerprint_payload = {
         "timing": sha256_file(video_dir / "story_timing.json"),
@@ -276,7 +339,6 @@ def build_render_plan(
         "settings": asdict(settings),
     }
     payload["input_fingerprint"] = json_fingerprint(fingerprint_payload)
-    output_dir = video_dir / "08_render"
     output_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_json(output_dir / "render_plan.json", payload)
     state.setdefault("stages", {})[STAGE_NAME] = {
@@ -576,9 +638,10 @@ def _compose_final(
         )
         current = "vglitch"
     if frame_index >= 0:
-        opacity = float(frame.get("opacity", 0.82))
+        opacity = float(frame.get("opacity", 1.0))
         filters.append(
             f"[{frame_index}:v]scale={settings.width}:{settings.height},format=rgba,"
+            r"lut=a='if(gt(val\,0)\,255\,0)',"
             f"colorchannelmixer=aa={opacity}[frame]"
         )
         filters.append(f"[{current}][frame]overlay=0:0:shortest=1[vframed]")
@@ -763,17 +826,32 @@ def _compose_video_track(
         )
         current = "vglitch"
     if frame_index >= 0:
-        opacity = float(frame.get("opacity", 0.82))
+        opacity = float(frame.get("opacity", 1.0))
         filters.append(
             f"[{frame_index}:v]scale={settings.width}:{settings.height},format=rgba,"
+            r"lut=a='if(gt(val\,0)\,255\,0)',"
             f"colorchannelmixer=aa={opacity}[frame]"
         )
         filters.append(
             f"[{current}][frame]overlay=0:0:eof_action=repeat:repeatlast=1:shortest=0[vframed]"
         )
         current = "vframed"
+    for index, title in enumerate(plan.get("story_titles", []), start=1):
+        start = float(title["start"])
+        end = float(title["end"])
+        next_label = f"vtitle{index}"
+        filters.append(
+            f"[{current}]drawtext=textfile='{_filter_path(Path(title['text_file']))}':"
+            f"reload=0:fontcolor=white:fontsize={settings.title_font_size}:"
+            "line_spacing=7:box=1:boxcolor=black@0.72:boxborderw=13:"
+            f"x={settings.title_margin_left}:y={settings.title_margin_top}:"
+            f"enable='between(t\\,{start:.6f}\\,{end:.6f})'[{next_label}]"
+        )
+        current = next_label
     filters.append(
-        f"[{current}]subtitles=filename='{_filter_path(Path(plan['captions']['file']))}'[vout]"
+        f"[{current}]subtitles=filename='{_filter_path(Path(plan['captions']['file']))}':"
+        "force_style='Alignment=2,"
+        f"MarginV={settings.caption_margin_vertical},Outline=2,Shadow=0'[vout]"
     )
     command.extend(
         [

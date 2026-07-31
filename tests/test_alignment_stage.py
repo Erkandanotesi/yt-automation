@@ -52,9 +52,13 @@ class AlignmentStageTests(unittest.TestCase):
         self.assertEqual(timing["required_separator_count"], 2)
         self.assertEqual(timing["stories"][0]["separator"]["start"], 0.0)
         self.assertEqual(timing["stories"][0]["narration"]["start"], 0.0)
-        self.assertEqual(timing["stories"][1]["separator"]["start"], 3.0)
-        self.assertEqual(timing["stories"][1]["narration"]["start"], 3.0)
+        self.assertEqual(timing["stories"][1]["separator"]["start"], 6.0)
+        self.assertEqual(timing["stories"][1]["narration"]["start"], 6.0)
+        self.assertEqual(timing["inter_story_gap_seconds"], 3.0)
+        self.assertEqual(timing["stories"][0]["gap_after_seconds"], 3.0)
+        self.assertEqual(timing["stories"][1]["gap_after_seconds"], 0.0)
         self.assertTrue(timing["quality"]["separator_overlays_narration"])
+        self.assertTrue(timing["quality"]["inter_story_gaps_are_exact"])
         self.assertTrue(
             timing["quality"]["no_story_or_separator_overlaps"]
         )

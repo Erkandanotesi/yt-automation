@@ -45,6 +45,9 @@ from tooling import find_executable  # noqa: E402
 SEPARATOR_DURATION_SECONDS = float(
     os.getenv("SEPARATOR_DURATION_SECONDS", "3.0")
 )
+INTER_STORY_GAP_SECONDS = float(
+    os.getenv("INTER_STORY_GAP_SECONDS", "3.0")
+)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -295,9 +298,12 @@ def build_story_timing_manifest(
     video_number: int,
     records: list[dict],
     separator_duration_seconds: float,
+    inter_story_gap_seconds: float = 3.0,
 ) -> dict:
     if separator_duration_seconds < 0:
         raise ValueError("SEPARATOR_DURATION_SECONDS cannot be negative.")
+    if inter_story_gap_seconds < 0:
+        raise ValueError("INTER_STORY_GAP_SECONDS cannot be negative.")
 
     cursor = 0.0
     timeline_stories: list[dict] = []
@@ -330,6 +336,10 @@ def build_story_timing_manifest(
                     "end": round(narration_end, 6),
                     "duration": round(narration_duration, 6),
                 },
+                "gap_after_seconds": round(
+                    inter_story_gap_seconds if index < len(records) else 0.0,
+                    6,
+                ),
                 "sentences": _offset_records(
                     artifact.get("sentences", []),
                     narration_start,
@@ -360,6 +370,8 @@ def build_story_timing_manifest(
             }
         )
         cursor = max(narration_end, separator_end)
+        if index < len(records):
+            cursor += inter_story_gap_seconds
 
     for previous, current in zip(timeline_stories, timeline_stories[1:]):
         if (
@@ -378,6 +390,7 @@ def build_story_timing_manifest(
         "video_name": project_name(video_number),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "separator_duration_seconds": round(separator_duration_seconds, 6),
+        "inter_story_gap_seconds": round(inter_story_gap_seconds, 6),
         "separator_timing_mode": "overlay_at_narration_start",
         "required_separator_count": len(timeline_stories),
         "duration_seconds": round(cursor, 6),
@@ -386,6 +399,7 @@ def build_story_timing_manifest(
             "story_count": len(timeline_stories),
             "no_story_or_separator_overlaps": True,
             "separator_overlays_narration": True,
+            "inter_story_gaps_are_exact": True,
         },
         "stories": timeline_stories,
     }
@@ -601,6 +615,7 @@ def run_alignment_stage(
         video_number=video_number,
         records=timing_records,
         separator_duration_seconds=SEPARATOR_DURATION_SECONDS,
+        inter_story_gap_seconds=INTER_STORY_GAP_SECONDS,
     )
     timing_path = video_dir / "story_timing.json"
     atomic_write_json(timing_path, timing)

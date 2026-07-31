@@ -502,8 +502,14 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         raise ValueError("Separator validation count does not match story count.")
 
     cursor = 0.0
+    inter_story_gap = float(timing.get("inter_story_gap_seconds", 3.0))
+    if inter_story_gap < 0:
+        raise ValueError("INTER_STORY_GAP_SECONDS cannot be negative.")
     updated_stories: list[dict] = []
-    for story, media in zip(stories, files, strict=True):
+    for index, (story, media) in enumerate(
+        zip(stories, files, strict=True),
+        start=1,
+    ):
         item = dict(story)
         separator_duration = float(media["duration_seconds"])
         narration_duration = float(story["narration"]["duration"])
@@ -531,6 +537,10 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
             "start": round(narration_start, 6),
             "end": round(narration_end, 6),
         }
+        item["gap_after_seconds"] = round(
+            inter_story_gap if index < len(stories) else 0.0,
+            6,
+        )
         item["sentences"] = _offset_records(
             story.get("sentences", []),
             narration_start,
@@ -549,6 +559,8 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         )
         updated_stories.append(item)
         cursor = max(narration_end, separator_end)
+        if index < len(stories):
+            cursor += inter_story_gap
 
     updated = dict(timing)
     updated["stories"] = updated_stories
@@ -557,6 +569,7 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         "validated_at_utc"
     ]
     updated["separator_duration_seconds"] = None
+    updated["inter_story_gap_seconds"] = round(inter_story_gap, 6)
     updated["separator_timing_mode"] = "overlay_at_narration_start"
     audio_states = {bool(item["has_audio"]) for item in files}
     audio_presence = (
@@ -573,6 +586,7 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         "separator_audio_presence": audio_presence,
         "no_story_or_separator_overlaps": True,
         "separator_overlays_narration": True,
+        "inter_story_gaps_are_exact": True,
     }
     return updated
 

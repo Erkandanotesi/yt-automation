@@ -471,6 +471,15 @@ verification and receives no warning or ranking penalty.
 6. Save every decision, confidence, and alternative in `media_plan.json`.
 7. Copy selected assets into the project or record immutable source paths and hashes.
 
+If no local candidate clears the relevance threshold, query Openverse and Wikimedia
+Commons by exact named entity plus scene intent. Google/Yandex Images may be used only
+to discover an original source page, never as an automatic download source. Reject
+the fallback unless the title/description/category matches the named entity and the
+image itself passes visual relevance review. Save accepted downloads under
+`Assets/Media/Online Retrieved` with a descriptive filename and a JSON sidecar that
+records source page, creator, license, license URL, retrieval date, query, checksum,
+and relevance evidence.
+
 ### Test
 
 - Evaluate at least 20 manually labeled narration windows.
@@ -513,13 +522,9 @@ verification and receives no warning or ranking penalty.
 
 ### Image motion
 
-Use subtle deterministic movement:
-
-- a very slow centered push-in only;
-- no random aggressive zooms;
-- no directional pan or reverse zoom;
-- faces and key products stay inside a safe crop;
-- generated hero images may receive slightly longer screen time.
+Use static center-cropped images until the renderer has a true subpixel transform.
+FFmpeg `zoompan` integer positioning is not acceptable because it creates visible
+pixel-by-pixel stepping. No directional pan, reverse zoom, or random movement is used.
 
 ### TV frame and glitch
 
@@ -570,8 +575,10 @@ Starting mix targets should be treated as test values, not laws:
 
 - `effects_stage.py` validates finalized separators, complete Milestone 5 coverage,
   and basic captions before writing `07_effects/effects_plan.json`.
-- Every hero/archive interval receives a centered 0.8–1.2% slow push with conservative
-  crop caps and a caption-safe lower area; directional pans are prohibited.
+- Every hero/archive interval is static and center-cropped; directional pans and the
+  quantized `zoompan` path are prohibited.
+- Each boundary between stories has an exact three-second silent hold. The prior
+  image and repeated music continue, while narration, captions, and story title stop.
 - `capcut_screenshot.png` is hashed into the plan as the canonical track-order
   reference: captions, TV/shutter frame, separators, tape-dropout glitch, visuals,
   voice/SFX, then repeated music from top to bottom.
@@ -657,6 +664,7 @@ Starting mix targets should be treated as test values, not laws:
    - separator or supporting graphics;
    - glitch accents;
    - TV frame;
+   - persistent story title;
    - captions;
    - voiceover, separator audio, SFX, and looped/ducked music.
 4. Use a consistent production format, initially:
@@ -693,7 +701,11 @@ Starting mix targets should be treated as test values, not laws:
 - `render_stage.py` and `render_video.bat` create cached 1080p visual intermediates,
   normalized separators, a final master, a 540p preview, and an FFprobe-backed report
   under `08_render/`.
-- Separator video/audio, narration, and captions begin together at each story start.
+- Separator video/audio, narration, captions, and persistent story title begin
+  together at each story start.
+- Titles stay visible for their complete narration range. Captions are burned in at a
+  raised lower-third position, and non-transparent TV-frame pixels are forced opaque.
+- Four exact three-second waits expand Video 5 to 481.042 seconds.
 - Finite video and audio tracks are rendered independently before muxing, making
   retries recoverable and avoiding Windows FFmpeg shutdown deadlocks.
 - QA validates actual video and audio stream durations, 1920x1080/30 fps H.264

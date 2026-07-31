@@ -144,14 +144,18 @@ stage writes combined and per-story `.srt` files and makes no
 transcription or provider request. Styled `.ass` captions and word highlighting
 remain deferred.
 
-Milestone 6 reads the completed visual and caption manifests, applies only a centered
-0.8–1.2% slow push with no directional pans, follows the CapCut reference track
-order, and keeps short glitch
-accents below a 3% timeline cap, overlays the TV frame, creates an original reusable
-glitch SFX, and loops/crossfades the selected music with narration ducking. The
-60-second reference render is a review artifact.
+Milestone 6 reads the completed visual and caption manifests and uses static
+center-cropped images. FFmpeg `zoompan` was removed because its integer coordinate
+rounding produced visible pixel stepping. Exact three-second inter-story gaps hold
+the previous image while voiceover, captions, and story title are absent; music
+continues. Short glitch accents remain below a 3% timeline cap. The TV frame is
+rendered with opaque non-transparent pixels, and music is looped/crossfaded with
+narration ducking.
 
 Milestone 8 normalizes separators, renders and caches uniform visual intermediates,
 composes finite video and audio tracks independently, then muxes a complete 1920x1080
 H.264/AAC master and 540p preview. QA checks both stream durations—not only container
 duration—plus codecs, pixel format, sample rate, channels, and measured audio peak.
+Following the CapCut reference, each story title remains visible above the TV frame
+for the complete narration range, and burned-in captions use a raised lower-third
+margin.

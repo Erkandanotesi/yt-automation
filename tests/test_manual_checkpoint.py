@@ -242,7 +242,7 @@ class ManualCheckpointTests(unittest.TestCase):
                 first["narration"]["start"],
             )
             self.assertEqual(
-                first["narration"]["end"],
+                first["narration"]["end"] + 3.0,
                 second["separator"]["start"],
             )
             self.assertEqual(
@@ -250,6 +250,7 @@ class ManualCheckpointTests(unittest.TestCase):
                 second["narration"]["start"],
             )
             self.assertTrue(timing["quality"]["separator_overlays_narration"])
+            self.assertTrue(timing["quality"]["inter_story_gaps_are_exact"])
 
     def test_changed_ready_file_returns_checkpoint_to_waiting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
