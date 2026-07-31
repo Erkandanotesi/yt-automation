@@ -26,7 +26,8 @@ Tech News/
 │   ├── Outro/
 │   │   └── outro_sound/
 │   ├── Overlays/
-│   │   └── tv_frame.png
+│   │   ├── tv_frame.png
+│   │   └── green-screen-tv-effect.mov # native-alpha animated image treatment
 │   └── example_seperator/
 │       └── Tech News Template(1)-1.mp4
 ├── Automation/
@@ -161,11 +162,14 @@ remain deferred.
 
 Milestone 6 reads the completed visual and caption manifests and uses static
 center-cropped images. FFmpeg `zoompan` was removed because its integer coordinate
-rounding produced visible pixel stepping. Exact three-second inter-story gaps hold
+rounding produced visible pixel stepping. Exact one-second inter-story gaps hold
 the previous image while voiceover, captions, and story title are absent; music
 continues. Short glitch accents remain below a 3% timeline cap. The TV frame is
 rendered with opaque non-transparent pixels, and music is looped/crossfaded with
-narration ducking.
+narration ducking. The native-alpha `green-screen-tv-effect.mov` is looped above
+image/glitch layers and below manual separators, then explicitly disabled throughout
+each separator interval. Its audio stream is ignored. The opaque TV frame, persistent
+title, attribution, and captions remain above it in CapCut reference order.
 
 Milestone 8 normalizes separators, renders and caches uniform visual intermediates,
 composes finite video and audio tracks independently, then muxes a complete 1920x1080

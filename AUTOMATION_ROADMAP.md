@@ -584,8 +584,12 @@ Starting mix targets should be treated as test values, not laws:
   and basic captions before writing `07_effects/effects_plan.json`.
 - Every hero/archive interval is static and center-cropped; directional pans and the
   quantized `zoompan` path are prohibited.
-- Each boundary between stories has an exact three-second silent hold. The prior
+- Each boundary between stories has an exact one-second silent hold. The prior
   image and repeated music continue, while narration, captions, and story title stop.
+- The native-alpha `green-screen-tv-effect.mov` loops over story images and gap holds.
+  It sits above tape/glitch treatment but below manual separators and is explicitly
+  disabled during every separator range. Its audio stream is ignored. The opaque
+  TV frame, title, attribution, and captions remain above it.
 - `capcut_screenshot.png` is hashed into the plan as the canonical track-order
   reference: captions, TV/shutter frame, separators, tape-dropout glitch, visuals,
   voice/SFX, then repeated music from top to bottom.
@@ -668,8 +672,9 @@ Starting mix targets should be treated as test values, not laws:
 3. Compose layers in this order:
    - base visual;
    - image motion/crop;
-   - separator or supporting graphics;
    - glitch accents;
+   - native-alpha animated TV effect, excluding separator intervals;
+   - separator or supporting graphics;
    - TV frame;
    - persistent story title;
    - captions;
@@ -715,7 +720,7 @@ Starting mix targets should be treated as test values, not laws:
 - Attribution-required assets receive a compact source label at the bottom-right
   inside the TV frame for only their visible interval; CC0/public-domain assets do
   not receive a label.
-- Four exact three-second waits expand the current Video 5 render to 481.066 seconds.
+- Four exact one-second waits produce the current 473.066-second Video 5 render.
 - Finite video and audio tracks are rendered independently before muxing, making
   retries recoverable and avoiding Windows FFmpeg shutdown deadlocks.
 - QA validates actual video and audio stream durations, 1920x1080/30 fps H.264

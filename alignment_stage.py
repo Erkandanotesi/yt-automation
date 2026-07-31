@@ -46,7 +46,7 @@ SEPARATOR_DURATION_SECONDS = float(
     os.getenv("SEPARATOR_DURATION_SECONDS", "3.0")
 )
 INTER_STORY_GAP_SECONDS = float(
-    os.getenv("INTER_STORY_GAP_SECONDS", "3.0")
+    os.getenv("INTER_STORY_GAP_SECONDS", "1.0")
 )
 
 
@@ -298,7 +298,7 @@ def build_story_timing_manifest(
     video_number: int,
     records: list[dict],
     separator_duration_seconds: float,
-    inter_story_gap_seconds: float = 3.0,
+    inter_story_gap_seconds: float = 1.0,
 ) -> dict:
     if separator_duration_seconds < 0:
         raise ValueError("SEPARATOR_DURATION_SECONDS cannot be negative.")

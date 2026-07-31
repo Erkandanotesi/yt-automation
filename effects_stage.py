@@ -70,6 +70,11 @@ class EffectsSettings:
     tv_frame_enabled: bool = True
     tv_frame_file: Path = PROJECTS_ROOT / "Assets" / "Overlays" / "tv_frame.png"
     tv_frame_opacity: float = 1.0
+    image_tv_effect_enabled: bool = True
+    image_tv_effect_file: Path = (
+        PROJECTS_ROOT / "Assets" / "Overlays" / "green-screen-tv-effect.mov"
+    )
+    image_tv_effect_opacity: float = 1.0
     glitch_enabled: bool = True
     glitch_duration_seconds: float = 0.16
     glitch_max_per_minute: int = 4
@@ -113,6 +118,17 @@ class EffectsSettings:
                 PROJECTS_ROOT / "Assets" / "Overlays" / "tv_frame.png",
             ),
             tv_frame_opacity=float(os.getenv("TV_FRAME_OPACITY", "1.0")),
+            image_tv_effect_enabled=_bool_env("IMAGE_TV_EFFECT_ENABLED", True),
+            image_tv_effect_file=_path_env(
+                "IMAGE_TV_EFFECT_FILE",
+                PROJECTS_ROOT
+                / "Assets"
+                / "Overlays"
+                / "green-screen-tv-effect.mov",
+            ),
+            image_tv_effect_opacity=float(
+                os.getenv("IMAGE_TV_EFFECT_OPACITY", "1.0")
+            ),
             glitch_enabled=_bool_env("GLITCH_ENABLED", True),
             glitch_duration_seconds=float(
                 os.getenv("GLITCH_DURATION_SECONDS", "0.16")
@@ -171,6 +187,8 @@ class EffectsSettings:
             )
         if not 0 <= self.tv_frame_opacity <= 1:
             raise ValueError("TV_FRAME_OPACITY must be between 0 and 1.")
+        if not 0 <= self.image_tv_effect_opacity <= 1:
+            raise ValueError("IMAGE_TV_EFFECT_OPACITY must be between 0 and 1.")
         if not 0.05 <= self.glitch_duration_seconds <= 0.35:
             raise ValueError("Glitch duration must be between 0.05 and 0.35 seconds.")
         if not 0 <= self.glitch_max_per_minute <= 12:
@@ -450,12 +468,11 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                     "source_id": str(window["window_id"]),
                     "local_start": start,
                     "local_end": end,
-                    "timeline_start": float(
-                        window.get("timeline_start", narration_start + start)
-                    ),
-                    "timeline_end": float(
-                        window.get("timeline_end", narration_start + end)
-                    ),
+                    # Local media ranges are canonical. Always derive global time
+                    # from the current story manifest so changing inter-story gaps
+                    # never requires another paid media-selection pass.
+                    "timeline_start": narration_start + start,
+                    "timeline_end": narration_start + end,
                     "asset": asset,
                     "crop_risk": "crop_risk" in selected.get("quality_flags", []),
                     "attribution": _attribution_record(selected),
@@ -702,6 +719,7 @@ def _input_fingerprint(
     captions_path: Path,
     settings: EffectsSettings,
     overlay: dict | None,
+    image_tv_effect: dict | None,
     editing_reference: dict | None,
     music: dict | None,
     sfx: dict,
@@ -709,6 +727,7 @@ def _input_fingerprint(
     settings_payload = asdict(settings)
     for key in (
         "tv_frame_file",
+        "image_tv_effect_file",
         "music_directory",
         "music_file",
         "editing_reference_file",
@@ -722,6 +741,7 @@ def _input_fingerprint(
             "captions_sha256": sha256_file(captions_path),
             "settings": settings_payload,
             "overlay": overlay,
+            "image_tv_effect": image_tv_effect,
             "editing_reference": editing_reference,
             "music": music,
             "sfx": sfx,
@@ -735,6 +755,7 @@ def _filter_templates(settings: EffectsSettings) -> dict:
             "base_visual",
             "static_center_crop",
             "tape_dropout_glitch_accents",
+            "animated_tv_effect_images_only",
             "manual_separator",
             "tv_frame",
             "persistent_story_title",
@@ -752,6 +773,11 @@ def _filter_templates(settings: EffectsSettings) -> dict:
         "tv_frame": (
             f"scale={settings.width}:{settings.height},format=rgba,"
             f"colorchannelmixer=aa={settings.tv_frame_opacity}"
+        ),
+        "animated_tv_effect": (
+            f"scale={settings.width}:{settings.height},format=rgba,"
+            f"colorchannelmixer=aa={settings.image_tv_effect_opacity}; "
+            "loop across program; disable during every manual separator interval"
         ),
         "music": (
             f"loudnorm=I={settings.music_target_lufs}:TP=-2:LRA=7,"
@@ -1084,6 +1110,58 @@ def _editing_reference(settings: EffectsSettings) -> dict | None:
     }
 
 
+def _image_tv_effect_plan(settings: EffectsSettings) -> dict | None:
+    if not settings.image_tv_effect_enabled:
+        return None
+    path = settings.image_tv_effect_file
+    if not path.is_file():
+        raise FileNotFoundError(f"Animated TV effect not found: {path}")
+    probe = probe_media(path)
+    video = next(
+        (
+            stream
+            for stream in probe.get("streams", [])
+            if stream.get("codec_type") == "video"
+        ),
+        None,
+    )
+    if video is None:
+        raise RuntimeError(f"Animated TV effect has no video stream: {path}")
+    pixel_format = str(video.get("pix_fmt", "")).casefold()
+    alpha_formats = {
+        "argb",
+        "abgr",
+        "rgba",
+        "bgra",
+        "gbrap",
+        "gbrap10le",
+        "gbrap12le",
+        "gbrap16le",
+    }
+    if pixel_format not in alpha_formats and not pixel_format.startswith("yuva"):
+        raise RuntimeError(
+            "Animated TV effect must contain a native alpha channel; "
+            f"found pixel format {pixel_format or 'unknown'}."
+        )
+    duration = float(probe.get("duration_seconds", 0))
+    if duration <= 0:
+        raise RuntimeError("Animated TV effect duration must be positive.")
+    return {
+        "enabled": True,
+        "file": str(path),
+        "sha256": sha256_file(path),
+        "codec": str(video.get("codec_name", "")),
+        "pixel_format": pixel_format,
+        "native_alpha": True,
+        "opacity": settings.image_tv_effect_opacity,
+        "source_duration_seconds": round(duration, 6),
+        "loop_to_program_duration": True,
+        "audio_ignored": True,
+        "coverage": "story_images_except_manual_separator_intervals",
+        "layer_position": "above_glitch_below_manual_separator",
+    }
+
+
 def render_project_reference_proof(
     *,
     video_number: int,
@@ -1158,6 +1236,7 @@ def build_effects_plan(
             "coverage": "complete_program",
             "caption_layer_above_overlay": True,
         }
+    image_tv_effect = _image_tv_effect_plan(settings)
     music = None
     if settings.music_enabled:
         track, metadata = select_music_track(settings)
@@ -1178,6 +1257,7 @@ def build_effects_plan(
         captions_path,
         settings,
         overlay,
+        image_tv_effect,
         editing_reference,
         music,
         sfx,
@@ -1221,6 +1301,7 @@ def build_effects_plan(
         "configuration": {
             **asdict(settings),
             "tv_frame_file": str(settings.tv_frame_file),
+            "image_tv_effect_file": str(settings.image_tv_effect_file),
             "music_directory": str(settings.music_directory),
             "music_file": str(settings.music_file) if settings.music_file else None,
             "editing_reference_file": str(settings.editing_reference_file),
@@ -1229,6 +1310,7 @@ def build_effects_plan(
         "visual_events": visuals,
         "separator_events": separators,
         "glitch_events": glitches,
+        "image_tv_effect": image_tv_effect or {"enabled": False},
         "tv_frame": overlay or {"enabled": False},
         "captions": {
             "file": str(captions_file),
@@ -1277,6 +1359,15 @@ def build_effects_plan(
             "glitch_timeline_coverage_ratio": round(glitch_coverage, 6),
             "glitch_under_three_percent": glitch_coverage <= 0.03,
             "captions_remain_top_layer": True,
+            "image_tv_effect_uses_native_alpha": (
+                not settings.image_tv_effect_enabled
+                or bool(image_tv_effect and image_tv_effect["native_alpha"])
+            ),
+            "image_tv_effect_excludes_separators": (
+                not settings.image_tv_effect_enabled
+                or image_tv_effect.get("coverage")
+                == "story_images_except_manual_separator_intervals"
+            ),
             "attribution_event_count": sum(
                 item.get("attribution") is not None for item in visuals
             ),
@@ -1318,6 +1409,7 @@ def effects_status(video_number: int, settings: EffectsSettings | None = None) -
                 "coverage": "complete_program",
                 "caption_layer_above_overlay": True,
             }
+        image_tv_effect = _image_tv_effect_plan(settings)
         music = None
         if settings.music_enabled:
             track, metadata = select_music_track(settings)
@@ -1335,6 +1427,7 @@ def effects_status(video_number: int, settings: EffectsSettings | None = None) -
             video_dir / "06_captions" / "captions.json",
             settings,
             overlay,
+            image_tv_effect,
             editing_reference,
             music,
             sfx,

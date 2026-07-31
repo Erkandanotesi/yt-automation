@@ -347,6 +347,15 @@ def build_render_plan(
         )
     frame = effects.get("tv_frame") or {}
     frame_file = Path(frame["file"]) if frame.get("file") else None
+    image_tv_effect = effects.get("image_tv_effect") or {"enabled": False}
+    if image_tv_effect.get("enabled"):
+        effect_file = Path(image_tv_effect.get("file", ""))
+        if not effect_file.is_file():
+            raise FileNotFoundError(f"Animated TV effect is missing: {effect_file}")
+        if sha256_file(effect_file) != image_tv_effect.get("sha256"):
+            raise RuntimeError("Animated TV effect changed after effects planning.")
+        if image_tv_effect.get("native_alpha") is not True:
+            raise RuntimeError("Animated TV effect must preserve native alpha.")
     music = effects.get("audio", {}).get("background_music")
     sfx = effects.get("audio", {}).get("glitch_sfx", {})
     payload = {
@@ -361,6 +370,7 @@ def build_render_plan(
         "separators": separators,
         "narration": narration,
         "glitch_events": effects.get("glitch_events", []),
+        "image_tv_effect": image_tv_effect,
         "tv_frame": frame,
         "story_titles": titles,
         "source_attributions": attributions,
@@ -387,6 +397,11 @@ def build_render_plan(
                 "no_directional_pans", False
             ),
             "persistent_titles_cover_all_stories": len(titles) == len(narration),
+            "image_tv_effect_excludes_separators": (
+                not image_tv_effect.get("enabled")
+                or image_tv_effect.get("coverage")
+                == "story_images_except_manual_separator_intervals"
+            ),
             "visual_count": len(visuals),
             "persistent_title_count": len(titles),
             "source_attribution_count": len(attributions),
@@ -836,6 +851,8 @@ def _render_preview(final: Path, video_dir: Path, settings: RenderSettings) -> P
             str(settings.preview_crf),
             "-pix_fmt",
             "yuv420p",
+            "-af",
+            "volume=-1dB,alimiter=limit=0.794:level=false",
             "-c:a",
             "aac",
             "-b:a",
@@ -864,7 +881,16 @@ def _compose_video_track(
     ]
     for path in separators:
         command.extend(["-i", str(path)])
-    frame_index = 1 + len(separators)
+    next_input_index = 1 + len(separators)
+    effect_index = -1
+    image_tv_effect = plan.get("image_tv_effect") or {}
+    if image_tv_effect.get("enabled") and image_tv_effect.get("file"):
+        effect_index = next_input_index
+        command.extend(
+            ["-stream_loop", "-1", "-i", str(image_tv_effect["file"])]
+        )
+        next_input_index += 1
+    frame_index = next_input_index
     frame = plan.get("tv_frame") or {}
     if frame.get("file"):
         command.extend(["-i", frame["file"]])
@@ -872,6 +898,34 @@ def _compose_video_track(
         frame_index = -1
     filters = ["[0:v]setpts=PTS-STARTPTS[vbase]"]
     current = "vbase"
+    glitches = plan.get("glitch_events", [])
+    if glitches:
+        enable = "+".join(
+            f"between(t\\,{float(item['start']):.6f}\\,{float(item['end']):.6f})"
+            for item in glitches
+        )
+        filters.append(
+            f"[{current}]noise=alls=6:allf=t+u:enable='{enable}',"
+            f"drawbox=y=ih*0.43:w=iw:h=6:color=white@0.12:t=fill:enable='{enable}'[vglitch]"
+        )
+        current = "vglitch"
+    if effect_index >= 0:
+        separator_ranges = "+".join(
+            f"between(t\\,{float(item['start']):.6f}\\,{float(item['end']):.6f})"
+            for item in plan["separators"]
+        )
+        enable = f"not({separator_ranges})" if separator_ranges else "1"
+        opacity = float(image_tv_effect.get("opacity", 1.0))
+        filters.append(
+            f"[{effect_index}:v]scale={settings.width}:{settings.height}:flags=lanczos,"
+            f"format=rgba,colorchannelmixer=aa={opacity},"
+            "setpts=PTS-STARTPTS[imageeffect]"
+        )
+        filters.append(
+            f"[{current}][imageeffect]overlay=0:0:eof_action=repeat:repeatlast=1:"
+            f"shortest=0:format=auto:enable='{enable}'[veffect]"
+        )
+        current = "veffect"
     for index, item in enumerate(plan["separators"], start=1):
         start = float(item["start"])
         duration = float(item["duration"])
@@ -884,17 +938,6 @@ def _compose_video_track(
             f"enable='between(t,{start:.6f},{start + duration:.6f})'[{next_label}]"
         )
         current = next_label
-    glitches = plan.get("glitch_events", [])
-    if glitches:
-        enable = "+".join(
-            f"between(t\\,{float(item['start']):.6f}\\,{float(item['end']):.6f})"
-            for item in glitches
-        )
-        filters.append(
-            f"[{current}]noise=alls=6:allf=t+u:enable='{enable}',"
-            f"drawbox=y=ih*0.43:w=iw:h=6:color=white@0.12:t=fill:enable='{enable}'[vglitch]"
-        )
-        current = "vglitch"
     if frame_index >= 0:
         opacity = float(frame.get("opacity", 1.0))
         filters.append(
@@ -1199,6 +1242,65 @@ def render_project(
     return report
 
 
+def render_preview_only(
+    video_number: int,
+    settings: RenderSettings | None = None,
+) -> dict:
+    """Rebuild and re-QA the preview while preserving a passing current master."""
+    settings = settings or RenderSettings.from_environment()
+    settings.validate()
+    video_dir = project_dir(video_number)
+    plan = build_render_plan(video_number, settings)
+    final = video_dir / "08_render" / f"{project_name(video_number)}_final.mp4"
+    if not final.is_file():
+        raise FileNotFoundError(f"Current final master is missing: {final}")
+    final_qa = _qa_output(
+        final,
+        settings.width,
+        settings.height,
+        float(plan["duration_seconds"]),
+        settings,
+    )
+    if final_qa["status"] != "passed":
+        raise RuntimeError("Preview-only recovery requires a passing current master.")
+    preview = _render_preview(final, video_dir, settings)
+    preview_qa = _qa_output(
+        preview,
+        settings.preview_width,
+        settings.preview_height,
+        float(plan["duration_seconds"]),
+        settings,
+    )
+    report_path = video_dir / "08_render" / "render_report.json"
+    existing = load_json(report_path, "Render report") if report_path.is_file() else {}
+    report = {
+        **existing,
+        "schema_version": SCHEMA_VERSION,
+        "video_number": video_number,
+        "created_at_utc": utc_now(),
+        "duration_seconds": plan["duration_seconds"],
+        "final": {"file": str(final), "qa": final_qa},
+        "preview": {"file": str(preview), "qa": preview_qa},
+        "quality": {"status": preview_qa["status"]},
+    }
+    atomic_write_json(report_path, report)
+    state = load_json(video_dir / "state.json", "Stage state")
+    state.setdefault("stages", {})[STAGE_NAME] = {
+        "status": "RENDER_READY" if preview_qa["status"] == "passed" else "FAILED",
+        "render_plan": str(video_dir / "08_render" / "render_plan.json"),
+        "render_report": str(report_path),
+        "final_file": str(final),
+        "preview_file": str(preview),
+        "input_fingerprint": plan["input_fingerprint"],
+        "updated_at_utc": utc_now(),
+    }
+    state["updated_at_utc"] = state["stages"][STAGE_NAME]["updated_at_utc"]
+    atomic_write_json(video_dir / "state.json", state)
+    if preview_qa["status"] != "passed":
+        raise RuntimeError(f"Preview QA failed: {preview_qa}")
+    return report
+
+
 def render_status(video_number: int) -> dict:
     video_dir = project_dir(video_number)
     state = load_json(video_dir / "state.json", "Stage state")
@@ -1216,7 +1318,11 @@ def parse_arguments() -> argparse.Namespace:
         description="Build Milestone 8 preview and final FFmpeg renders."
     )
     parser.add_argument("--video", type=int, required=True)
-    parser.add_argument("--action", choices=("plan", "render", "status"), default="render")
+    parser.add_argument(
+        "--action",
+        choices=("plan", "render", "preview", "status"),
+        default="render",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
 
@@ -1230,6 +1336,10 @@ def main() -> int:
             print(f"Duration: {result['duration_seconds']:.3f}s")
         elif args.action == "status":
             result = render_status(args.video)
+        elif args.action == "preview":
+            result = render_preview_only(args.video)
+            print(f"Preview: {result['preview']['file']}")
+            print("Milestone 8: RENDER_READY")
         else:
             result = render_project(args.video)
             print(f"Final: {result['final']['file']}")

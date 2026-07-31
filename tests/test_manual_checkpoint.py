@@ -242,7 +242,7 @@ class ManualCheckpointTests(unittest.TestCase):
                 first["narration"]["start"],
             )
             self.assertEqual(
-                first["narration"]["end"] + 3.0,
+                first["narration"]["end"] + 1.0,
                 second["separator"]["start"],
             )
             self.assertEqual(

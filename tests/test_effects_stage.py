@@ -11,6 +11,7 @@ from unittest.mock import patch
 from effects_stage import (
     EffectsSettings,
     build_effects_plan,
+    build_visual_events,
     render_reference_proof,
     validate_visual_coverage,
 )
@@ -26,6 +27,7 @@ def fixture_settings(root: Path) -> EffectsSettings:
         motion_scale=1.012,
         hero_motion_scale=1.008,
         tv_frame_file=root / "tv_frame.png",
+        image_tv_effect_file=root / "green-screen-tv-effect.mov",
         music_directory=root / "music",
         proof_width=320,
         proof_height=180,
@@ -45,12 +47,21 @@ def write_plan_fixture(root: Path) -> dict[str, Path]:
     separator = root / "separator.mp4"
     narration = root / "voice.mp3"
     overlay = root / "tv_frame.png"
+    image_tv_effect = root / "green-screen-tv-effect.mov"
     reference = root / "capcut.png"
     music_directory = root / "music"
     music_directory.mkdir()
     music = music_directory / "bed.wav"
     sfx = root / "glitch.wav"
-    for path in (separator, narration, overlay, reference, music, sfx):
+    for path in (
+        separator,
+        narration,
+        overlay,
+        image_tv_effect,
+        reference,
+        music,
+        sfx,
+    ):
         path.write_bytes(path.name.encode("utf-8"))
     captions = root / "06_captions" / "captions.srt"
     captions.write_text(
@@ -139,6 +150,49 @@ def write_plan_fixture(root: Path) -> dict[str, Path]:
 
 
 class EffectsStageTests(unittest.TestCase):
+    def test_visual_global_times_follow_current_story_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "archive.png"
+            image.write_bytes(b"archive")
+            timing = {
+                "stories": [
+                    {
+                        "story_id": "story_1",
+                        "order": 1,
+                        "narration": {"start": 11, "end": 16, "duration": 5},
+                    }
+                ]
+            }
+            media = {
+                "stories": [
+                    {
+                        "story_id": "story_1",
+                        "order": 1,
+                        "hero_ranges": [],
+                        "windows": [
+                            {
+                                "window_id": "window_1",
+                                "start": 0,
+                                "end": 5,
+                                "timeline_start": 99,
+                                "timeline_end": 104,
+                                "selected_asset": {
+                                    "absolute_path": str(image),
+                                    "sha256": sha256_file(image),
+                                    "quality_flags": [],
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+
+            events = build_visual_events(timing, media, fixture_settings(root))
+
+            self.assertEqual(events[0]["timeline_start"], 11)
+            self.assertEqual(events[0]["timeline_end"], 16)
+
     def test_plan_covers_motion_frame_glitch_sfx_and_ducked_music(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 5"
@@ -163,7 +217,16 @@ class EffectsStageTests(unittest.TestCase):
                 ),
                 patch(
                     "effects_stage.probe_media",
-                    return_value={"duration_seconds": 7, "streams": []},
+                    return_value={
+                        "duration_seconds": 7,
+                        "streams": [
+                            {
+                                "codec_type": "video",
+                                "codec_name": "qtrle",
+                                "pix_fmt": "argb",
+                            }
+                        ],
+                    },
                 ),
             ):
                 plan = build_effects_plan(video_number=5, settings=settings)
@@ -188,6 +251,7 @@ class EffectsStageTests(unittest.TestCase):
                     "base_visual",
                     "static_center_crop",
                     "tape_dropout_glitch_accents",
+                    "animated_tv_effect_images_only",
                     "manual_separator",
                     "tv_frame",
                     "persistent_story_title",
@@ -195,6 +259,12 @@ class EffectsStageTests(unittest.TestCase):
                     "captions",
                 ],
             )
+            self.assertTrue(plan["image_tv_effect"]["native_alpha"])
+            self.assertEqual(
+                plan["image_tv_effect"]["layer_position"],
+                "above_glitch_below_manual_separator",
+            )
+            self.assertTrue(plan["quality"]["image_tv_effect_excludes_separators"])
             self.assertEqual(plan["quality"]["attribution_event_count"], 1)
             self.assertEqual(
                 sum(item.get("attribution") is not None for item in plan["visual_events"]),

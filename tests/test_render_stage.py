@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from render_stage import RenderSettings, _compose_video_track, build_render_plan
+from render_stage import (
+    RenderSettings,
+    _compose_video_track,
+    _render_preview,
+    build_render_plan,
+)
 
 
 def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
@@ -92,6 +97,62 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
 
 
 class RenderStageTests(unittest.TestCase):
+    def test_preview_encode_limits_aac_peak_overshoot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("render_stage._ffmpeg", return_value=Path("ffmpeg")),
+                patch("render_stage._run") as run,
+            ):
+                _render_preview(root / "final.mp4", root, RenderSettings())
+
+            command = run.call_args.args[0]
+            self.assertEqual(
+                command[command.index("-af") + 1],
+                "volume=-1dB,alimiter=limit=0.794:level=false",
+            )
+
+    def test_animated_tv_effect_preserves_alpha_and_skips_separator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = {
+                "duration_seconds": 4,
+                "separators": [
+                    {"start": 1, "end": 2, "duration": 1}
+                ],
+                "glitch_events": [],
+                "image_tv_effect": {
+                    "enabled": True,
+                    "file": str(root / "effect.mov"),
+                    "opacity": 1.0,
+                },
+                "tv_frame": {"file": str(root / "frame.png"), "opacity": 1.0},
+                "story_titles": [],
+                "source_attributions": [],
+                "captions": {"file": str(root / "captions.srt")},
+            }
+            with (
+                patch("render_stage._ffmpeg", return_value=Path("ffmpeg")),
+                patch("render_stage._run") as run,
+            ):
+                _compose_video_track(
+                    root,
+                    plan,
+                    root / "base.mp4",
+                    [root / "separator.mp4"],
+                    RenderSettings(width=320, height=180),
+                )
+
+            command = run.call_args.args[0]
+            filters = command[command.index("-filter_complex") + 1]
+            self.assertIn("format=rgba,colorchannelmixer=aa=1.0", filters)
+            self.assertIn(
+                "enable='not(between(t\\,1.000000\\,2.000000))'",
+                filters,
+            )
+            self.assertLess(filters.index("[imageeffect]"), filters.index("[sep1]"))
+            self.assertLess(filters.index("[sep1]"), filters.index("[frame]"))
+
     def test_attribution_filter_is_anchored_bottom_right(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
