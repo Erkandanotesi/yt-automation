@@ -131,7 +131,7 @@ class MediaIndexSettings:
                 MediaRoot(
                     label="primary",
                     path=(PROJECTS_ROOT / "Assets" / "Media").resolve(),
-                    repository_license_hint="unknown",
+                    repository_license_hint="user_confirmed_no_copyright",
                 ),
                 MediaRoot(
                     label="no_copyright_repository",
@@ -325,7 +325,8 @@ def _build_asset(
                 "sidecar_metadata"
                 if sidecar.get("license_status")
                 else "user_repository_classification"
-                if root.label == "no_copyright_repository"
+                if root.repository_license_hint
+                == "user_confirmed_no_copyright"
                 else "unspecified"
             ),
             "review_required": license_status in {"", "unknown"},
@@ -451,6 +452,18 @@ def scan_media_index(
             and sidecar_mtime == previous_sidecar_mtime
         ):
             reused = dict(previous)
+            reused["media_root"] = root.label
+            if (
+                root.repository_license_hint == "user_confirmed_no_copyright"
+                and reused.get("license", {}).get("basis")
+                != "sidecar_metadata"
+            ):
+                reused["license"] = {
+                    **reused.get("license", {}),
+                    "status": "user_confirmed_no_copyright",
+                    "basis": "user_repository_classification",
+                    "review_required": False,
+                }
             reused["last_seen_at_utc"] = utc_now()
             assets.append(reused)
             reused_count += 1

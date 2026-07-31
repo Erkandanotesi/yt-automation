@@ -33,6 +33,7 @@ from storyboard_stage import StoryboardSettings  # noqa: E402
 from media_index import MediaIndexSettings  # noqa: E402
 from media_selection_stage import MediaSelectionSettings  # noqa: E402
 from caption_stage import CaptionSettings  # noqa: E402
+from effects_stage import EffectsSettings, SUPPORTED_AUDIO  # noqa: E402
 
 
 PLACEHOLDER_MARKERS = (
@@ -242,12 +243,7 @@ def collect_checks() -> list[Check]:
         )
         for media_root in media_index_settings.roots:
             add(
-                (
-                    "User-confirmed no-copyright repository"
-                    if media_root.repository_license_hint
-                    == "user_confirmed_no_copyright"
-                    else "Media repository"
-                ),
+                "User-confirmed no-copyright repository",
                 media_root.path.is_dir(),
                 str(media_root.path),
             )
@@ -283,6 +279,38 @@ def collect_checks() -> list[Check]:
                 f"characters/line={caption_settings.max_characters_per_line}; "
                 f"words/cue={caption_settings.max_words_per_caption}; "
                 f"minimum={caption_settings.minimum_duration_seconds:g}s"
+            ),
+        )
+
+    try:
+        effects_settings = EffectsSettings.from_environment()
+        effects_settings.validate()
+    except (RuntimeError, ValueError) as exc:
+        add("Milestone 6 configuration", False, str(exc))
+    else:
+        music_files = (
+            [effects_settings.music_file]
+            if effects_settings.music_file is not None
+            else [
+                path
+                for path in effects_settings.music_directory.iterdir()
+                if path.is_file() and path.suffix.lower() in SUPPORTED_AUDIO
+            ]
+            if effects_settings.music_directory.is_dir()
+            else []
+        )
+        add(
+            "Milestone 6 configuration",
+            (
+                (not effects_settings.tv_frame_enabled or effects_settings.tv_frame_file.is_file())
+                and (not effects_settings.music_enabled or any(path and path.is_file() for path in music_files))
+                and effects_settings.editing_reference_file.is_file()
+            ),
+            (
+                f"motion={effects_settings.motion_scale:.3f}; "
+                f"TV frame={effects_settings.tv_frame_file}; "
+                f"music tracks={len(music_files)}; "
+                f"reference={effects_settings.editing_reference_file.name}"
             ),
         )
 

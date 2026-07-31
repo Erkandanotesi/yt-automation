@@ -34,6 +34,16 @@ def make_image(path: Path, color: str) -> None:
 
 
 class MediaIndexTests(unittest.TestCase):
+    def test_default_repositories_are_user_confirmed_no_copyright(self) -> None:
+        settings = MediaIndexSettings.from_environment()
+        self.assertTrue(settings.roots)
+        self.assertTrue(
+            all(
+                root.repository_license_hint == "user_confirmed_no_copyright"
+                for root in settings.roots
+            )
+        )
+
     def test_incremental_rescan_and_user_confirmed_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

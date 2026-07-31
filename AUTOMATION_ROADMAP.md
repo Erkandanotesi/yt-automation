@@ -507,6 +507,8 @@ verification and receives no warning or ranking penalty.
 
 ## Milestone 6 — Motion, TV treatment, effects, sound, and music
 
+**Status: complete (2026-07-31).**
+
 ### Image motion
 
 Use subtle deterministic movement:
@@ -561,6 +563,26 @@ Starting mix targets should be treated as test values, not laws:
 
 - Voice remains intelligible, music loops are not distracting, and effects look
   intentional rather than constant.
+
+### Implemented
+
+- `effects_stage.py` validates finalized separators, complete Milestone 5 coverage,
+  and basic captions before writing `07_effects/effects_plan.json`.
+- Every hero/archive interval receives deterministic alternating push, pull, or pan
+  motion with conservative crop caps and a caption-safe lower area.
+- `capcut_screenshot.png` is hashed into the plan as the canonical track-order
+  reference: captions, TV/shutter frame, separators, tape-dropout glitch, visuals,
+  voice/SFX, then repeated music from top to bottom.
+- Glitch accents occur only at separator exits and selected cuts, are spaced apart,
+  and cover less than 3% of the program. The paired glitch SFX is generated locally.
+- User-supplied background music is normalized, crossfaded across loop boundaries,
+  faded at program edges, ducked to -22 dB under narration, and allowed up to -16 dB
+  during separators. Track checksum, license metadata, duration, and loop count are
+  recorded.
+- `effects_video.bat` produces the plan and a real 60-second H.264/AAC reference
+  render with motion, TV frame, glitch/SFX, captions, voice, and repeated music.
+- Three Milestone 6 tests include a real FFmpeg audio/video render; the full suite is
+  provider-free.
 
 ## Milestone 7 — Captions
 

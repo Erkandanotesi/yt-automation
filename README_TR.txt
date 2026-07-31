@@ -425,9 +425,9 @@ Bu dosya preflight kontrolünü, bütün yerel testleri ve mevcut medya indeksi 
 Assets\Media\
 Assets\Media (No-Copyright)\
 
-İkinci arşiv kullanıcı tarafından telifsiz olarak onaylanmıştır. İndekste
-"user_confirmed_no_copyright" olarak tutulur; doğrulama uyarısı veya seçim cezası
-almaz.
+Her iki arşiv de kullanıcı tarafından telifsiz olarak onaylanmıştır. İndekste
+"user_confirmed_no_copyright" olarak tutulurlar; doğrulama uyarısı veya seçim cezası
+almazlar.
 
 Dosya adlarını etiketledikten veya yeniden adlandırdıktan sonra yeniden tarama:
 
@@ -472,7 +472,36 @@ Mevcut etiketlenmiş dosyalarla ücretsiz 20 örnek testi:
 Etiketleme ilerledikçe aynı komutu yeniden çalıştırabilirsin.
 
 
-15. ESKİ OTOMASYON ÇIKTILARI
+15. HAREKET, TV ÇERÇEVESİ, GLITCH, SFX VE TEKRARLAYAN MÜZİK
+------------------------------------------------------------
+
+Milestone 4, 5 ve temel altyazılar tamamlandıktan sonra:
+
+effects_video.bat 5
+
+veya:
+
+.\.venv\Scripts\python.exe effects_stage.py --video 5 --action generate
+.\.venv\Scripts\python.exe effects_stage.py --video 5 --action reference-proof --proof-seconds 60
+.\.venv\Scripts\python.exe effects_stage.py --video 5 --action status
+
+Çıktılar `Video 5\07_effects\` içine yazılır. Plan, bütün görsellere dönüşümlü ve
+sınırlı push/pull/pan hareketi verir; `capcut_screenshot.png` dosyasındaki katman
+sırasını kaydeder; TV çerçevesini tüm programa uygular; separator çıkışları ve seçili
+kesimlerde kısa tape-dropout/glitch ve SFX kullanır. Glitch toplam süresi videonun
+%3'ünü geçemez ve altyazılar en üst okunabilir katmanda kalır.
+
+`Assets\Audio\background_music\` içindeki kullanıcı müziği tüm program boyunca
+tekrarlanır. Kesintili döngüleri gizlemek için 0,35 saniyelik crossfade, başlangıç ve
+bitiş fade'i, loudness normalizasyonu ve konuşma sırasında -22 dB ducking planlanır.
+Separator sırasında müzik en fazla -16 dB seviyesine çıkar. Kaynak dosya, SHA-256,
+lisans yan dosyası, loop sayısı ve bütün mix ayarları manifestte tutulur.
+
+`milestone6_reference_60s.mp4` gerçek FFmpeg filtreleriyle üretilmiş kontrol
+videosudur. Tam video preview/final render Milestone 8'e aittir.
+
+
+16. ESKİ OTOMASYON ÇIKTILARI
 -----------------------------
 
 Automation içindeki eski Old ve Video1 klasörleri silinmeden şuraya taşındı:
@@ -482,7 +511,7 @@ D:\Dosyalar\İş\YouTube\Tech News\Legacy Automation Outputs
 Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkilemez.
 
 
-16. ÖNEMLİ SINIRLAMALAR
+17. ÖNEMLİ SINIRLAMALAR
 -----------------------
 
 - Ödeme duvarı veya giriş ekranı aşılmaz.

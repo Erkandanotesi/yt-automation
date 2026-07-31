@@ -8,7 +8,12 @@ Reusable production assets and numbered video projects live beside it.
 Tech News/
 ├── Assets/
 │   ├── Audio/
-│   │   └── background_music/
+│   │   ├── background_music/
+│   │   │   ├── background_music.mp3
+│   │   │   └── background_music.license.json
+│   │   └── sfx/
+│   │       ├── glitch_transition.wav
+│   │       └── glitch_transition.license.json
 │   ├── Media/
 │   │   ├── <company-or-topic>/
 │   │   └── _combined/
@@ -17,7 +22,10 @@ Tech News/
 │   │   └── _Combined/
 │   ├── Outro/
 │   │   └── outro_sound/
-│   └── Overlays/
+│   ├── Overlays/
+│   │   └── tv_frame.png
+│   └── example_seperator/
+│       └── Tech News Template(1)-1.mp4
 ├── Automation/
 │   ├── .env                  # local secrets; ignored by Git
 │   ├── .env.example
@@ -40,6 +48,9 @@ Tech News/
 │   ├── media_retrieval_benchmark.json
 │   ├── caption_stage.py
 │   ├── captions_video.bat
+│   ├── effects_stage.py
+│   ├── effects_video.bat
+│   ├── capcut_screenshot.png       # canonical editing-order reference
 │   ├── test_program.bat
 │   ├── content_validation.py
 │   ├── file_utils.py
@@ -60,7 +71,7 @@ Tech News/
 ```
 
 Only folders named exactly `Video N` participate in automatic project numbering.
-The next project is currently `Video 5`. New project artifacts must never be written
+The next project is currently `Video 6`. New project artifacts must never be written
 inside `Automation`.
 
 Milestone 2 keeps the current compatibility folders inside a generated project:
@@ -94,12 +105,19 @@ Video N/
 │   ├── captions.srt
 │   ├── story_01.srt
 │   └── ...
+├── 07_effects/
+│   ├── effects_plan.json
+│   ├── ffmpeg_filter_templates.txt
+│   ├── milestone6_reference.srt
+│   ├── milestone6_reference_60s.mp4
+│   ├── milestone6_reference_60s.json
+│   └── milestone6_reference_contact_sheet.jpg
 └── timing_diagnostic.mp4      # optional local QA render
 ```
 
 `Assets/Media` and `Assets/Media (No-Copyright)` are both indexed reusable visual
-repositories. The second repository is explicitly classified as
-`user_confirmed_no_copyright`; it receives no verification warning or selection
+repositories. The user has explicitly classified both repositories as
+`user_confirmed_no_copyright`; neither receives a verification warning or selection
 penalty.
 
 Milestone 4 uses `gpt-5.6-luna` only for selecting two supported, visually
@@ -112,3 +130,10 @@ canonical narration and ElevenLabs alignment. It applies the finalized manual
 separator offsets, writes combined and per-story `.srt` files, and makes no
 transcription or provider request. Styled `.ass` captions and word highlighting
 remain deferred.
+
+Milestone 6 reads the completed visual and caption manifests, alternates restrained
+push/pull/pan motion, applies the CapCut reference track order, keeps short glitch
+accents below a 3% timeline cap, overlays the TV frame, creates an original reusable
+glitch SFX, and loops/crossfades the selected music with narration ducking. The
+60-second reference render is a review artifact; Milestone 8 remains responsible for
+the complete preview and final master.
