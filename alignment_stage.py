@@ -307,7 +307,7 @@ def build_story_timing_manifest(
         narration_duration = float(artifact["audio_duration_seconds"])
         separator_start = cursor
         separator_end = separator_start + separator_duration_seconds
-        narration_start = separator_end
+        narration_start = cursor
         narration_end = narration_start + narration_duration
 
         beats = artifact.get("visual_beats", [])
@@ -359,12 +359,16 @@ def build_story_timing_manifest(
                 ],
             }
         )
-        cursor = narration_end
+        cursor = max(narration_end, separator_end)
 
     for previous, current in zip(timeline_stories, timeline_stories[1:]):
         if (
             current["separator"]["start"]
-            < previous["narration"]["end"] - 0.001
+            < max(
+                previous["narration"]["end"],
+                previous["separator"]["end"],
+            )
+            - 0.001
         ):
             raise AlignmentValidationError("Story timing ranges overlap.")
 
@@ -374,12 +378,14 @@ def build_story_timing_manifest(
         "video_name": project_name(video_number),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "separator_duration_seconds": round(separator_duration_seconds, 6),
+        "separator_timing_mode": "overlay_at_narration_start",
         "required_separator_count": len(timeline_stories),
         "duration_seconds": round(cursor, 6),
         "quality": {
             "status": "passed",
             "story_count": len(timeline_stories),
             "no_story_or_separator_overlaps": True,
+            "separator_overlays_narration": True,
         },
         "stories": timeline_stories,
     }

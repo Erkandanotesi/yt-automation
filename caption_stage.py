@@ -404,6 +404,9 @@ def validate_cues(
         )
         for story in timing.get("stories", [])
     ]
+    separator_overlay_mode = (
+        timing.get("separator_timing_mode") == "overlay_at_narration_start"
+    )
     errors = []
     previous_end = -1.0
     short_count = 0
@@ -414,7 +417,7 @@ def validate_cues(
             errors.append(f"Cue {index} has non-positive duration.")
         if start < previous_end - 0.002:
             errors.append(f"Cue {index} overlaps the previous cue.")
-        if any(
+        if not separator_overlay_mode and any(
             start < separator_end - 0.002
             and end > separator_start + 0.002
             for separator_start, separator_end in separators
@@ -443,6 +446,8 @@ def validate_cues(
         "no_separator_overlap": not any(
             "separator" in error for error in errors
         ),
+        "separator_overlay_mode": separator_overlay_mode,
+        "separator_overlap_allowed": separator_overlay_mode,
     }
 
 

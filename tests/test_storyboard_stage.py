@@ -4,6 +4,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from storyboard_stage import (
     SelectedBeat,
     StoryBeatSelection,
     StoryboardSettings,
+    archive_approved_images,
     build_storyboard,
     generate_storyboard_images,
     render_storyboard_proof,
@@ -32,6 +34,7 @@ def settings() -> StoryboardSettings:
         maximum_source_characters=4000,
         maximum_image_requests_per_run=10,
         duplicate_hamming_threshold=6,
+        archive_directory=None,
     )
 
 
@@ -267,6 +270,35 @@ def planner(context: dict, _: StoryboardSettings) -> StoryBeatSelection:
 
 
 class StoryboardStageTests(unittest.TestCase):
+    def test_approved_image_is_archived_with_descriptive_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "01_hero_01.png"
+            source.write_bytes(b"approved-image")
+            storyboard = {
+                "stories": [
+                    {
+                        "order": 1,
+                        "images": [
+                            {
+                                "image_index": 1,
+                                "visual_concept": "Person opening a malicious email in a secure mailbox",
+                                "output_file": str(source),
+                                "validation": {"status": "passed"},
+                            }
+                        ],
+                    }
+                ]
+            }
+            archived = archive_approved_images(
+                storyboard,
+                replace(settings(), archive_directory=root / "archive"),
+            )
+            destination = Path(archived[0]["file"])
+            self.assertTrue(destination.is_file())
+            self.assertIn("person-opening-a-malicious-email", destination.name)
+            self.assertEqual(destination.read_bytes(), source.read_bytes())
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.red = make_png_bytes("red")

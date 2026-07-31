@@ -509,7 +509,7 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         narration_duration = float(story["narration"]["duration"])
         separator_start = cursor
         separator_end = separator_start + separator_duration
-        narration_start = separator_end
+        narration_start = cursor
         narration_end = narration_start + narration_duration
         item["separator"] = {
             "start": round(separator_start, 6),
@@ -548,7 +548,7 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
             narration_start,
         )
         updated_stories.append(item)
-        cursor = narration_end
+        cursor = max(narration_end, separator_end)
 
     updated = dict(timing)
     updated["stories"] = updated_stories
@@ -557,6 +557,7 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         "validated_at_utc"
     ]
     updated["separator_duration_seconds"] = None
+    updated["separator_timing_mode"] = "overlay_at_narration_start"
     audio_states = {bool(item["has_audio"]) for item in files}
     audio_presence = (
         "mixed"
@@ -571,6 +572,7 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         "manual_separators_validated": True,
         "separator_audio_presence": audio_presence,
         "no_story_or_separator_overlaps": True,
+        "separator_overlays_narration": True,
     }
     return updated
 

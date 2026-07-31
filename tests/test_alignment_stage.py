@@ -20,7 +20,7 @@ from tests.test_alignment_utils import proportional_alignment
 
 
 class AlignmentStageTests(unittest.TestCase):
-    def test_story_timeline_reserves_separators_without_overlap(self) -> None:
+    def test_story_timeline_overlays_separators_at_narration_start(self) -> None:
         records = []
         for index, duration in enumerate((2.0, 3.0), start=1):
             text = f"Story {index} has one clear sentence."
@@ -51,9 +51,10 @@ class AlignmentStageTests(unittest.TestCase):
 
         self.assertEqual(timing["required_separator_count"], 2)
         self.assertEqual(timing["stories"][0]["separator"]["start"], 0.0)
-        self.assertEqual(timing["stories"][0]["narration"]["start"], 3.0)
-        self.assertEqual(timing["stories"][1]["separator"]["start"], 5.0)
-        self.assertEqual(timing["stories"][1]["narration"]["start"], 8.0)
+        self.assertEqual(timing["stories"][0]["narration"]["start"], 0.0)
+        self.assertEqual(timing["stories"][1]["separator"]["start"], 3.0)
+        self.assertEqual(timing["stories"][1]["narration"]["start"], 3.0)
+        self.assertTrue(timing["quality"]["separator_overlays_narration"])
         self.assertTrue(
             timing["quality"]["no_story_or_separator_overlaps"]
         )

@@ -34,6 +34,7 @@ from media_index import MediaIndexSettings  # noqa: E402
 from media_selection_stage import MediaSelectionSettings  # noqa: E402
 from caption_stage import CaptionSettings  # noqa: E402
 from effects_stage import EffectsSettings, SUPPORTED_AUDIO  # noqa: E402
+from render_stage import RenderSettings  # noqa: E402
 
 
 PLACEHOLDER_MARKERS = (
@@ -311,6 +312,22 @@ def collect_checks() -> list[Check]:
                 f"TV frame={effects_settings.tv_frame_file}; "
                 f"music tracks={len(music_files)}; "
                 f"reference={effects_settings.editing_reference_file.name}"
+            ),
+        )
+
+    try:
+        render_settings = RenderSettings.from_environment()
+        render_settings.validate()
+    except (RuntimeError, ValueError) as exc:
+        add("Milestone 8 configuration", False, str(exc))
+    else:
+        add(
+            "Milestone 8 configuration",
+            True,
+            (
+                f"final={render_settings.width}x{render_settings.height}; "
+                f"preview={render_settings.preview_width}x{render_settings.preview_height}; "
+                f"fps={render_settings.fps}; preset={render_settings.preset}"
             ),
         )
 

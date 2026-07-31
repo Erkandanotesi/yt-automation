@@ -15,6 +15,7 @@ Tech News/
 │   │       ├── glitch_transition.wav
 │   │       └── glitch_transition.license.json
 │   ├── Media/
+│   │   ├── AI Generated/       # approved AI images with descriptive filenames
 │   │   ├── <company-or-topic>/
 │   │   └── _combined/
 │   ├── Media (No-Copyright)/
@@ -50,6 +51,8 @@ Tech News/
 │   ├── captions_video.bat
 │   ├── effects_stage.py
 │   ├── effects_video.bat
+│   ├── render_stage.py
+│   ├── render_video.bat
 │   ├── capcut_screenshot.png       # canonical editing-order reference
 │   ├── test_program.bat
 │   ├── content_validation.py
@@ -112,6 +115,13 @@ Video N/
 │   ├── milestone6_reference_60s.mp4
 │   ├── milestone6_reference_60s.json
 │   └── milestone6_reference_contact_sheet.jpg
+├── 08_render/
+│   ├── render_plan.json
+│   ├── render_report.json
+│   ├── Video N_final.mp4
+│   ├── Video N_preview_540p.mp4
+│   ├── milestone8_contact_sheet.jpg
+│   └── intermediates/
 └── timing_diagnostic.mp4      # optional local QA render
 ```
 
@@ -124,16 +134,24 @@ Milestone 4 uses `gpt-5.6-luna` only for selecting two supported, visually
 distinct timed beats and writing the scene-specific prompt. Pixel generation uses
 the separate `gpt-image-2` model at native 1280x720. The default production quality
 is `medium`; the one-request provider smoke test always overrides this to `low`.
+Every approved image is also copied to `Assets/Media/AI Generated` with a descriptive
+scene filename and checksum suffix so it can be indexed and reused later.
 
 Milestone 7 basic generates plain UTF-8 SubRip captions directly from the approved
-canonical narration and ElevenLabs alignment. It applies the finalized manual
-separator offsets, writes combined and per-story `.srt` files, and makes no
+canonical narration and ElevenLabs alignment. A separator overlays the start of its
+narration, so the first caption starts with the separator rather than after it. The
+stage writes combined and per-story `.srt` files and makes no
 transcription or provider request. Styled `.ass` captions and word highlighting
 remain deferred.
 
-Milestone 6 reads the completed visual and caption manifests, alternates restrained
-push/pull/pan motion, applies the CapCut reference track order, keeps short glitch
+Milestone 6 reads the completed visual and caption manifests, applies only a centered
+0.8–1.2% slow push with no directional pans, follows the CapCut reference track
+order, and keeps short glitch
 accents below a 3% timeline cap, overlays the TV frame, creates an original reusable
 glitch SFX, and loops/crossfades the selected music with narration ducking. The
-60-second reference render is a review artifact; Milestone 8 remains responsible for
-the complete preview and final master.
+60-second reference render is a review artifact.
+
+Milestone 8 normalizes separators, renders and caches uniform visual intermediates,
+composes finite video and audio tracks independently, then muxes a complete 1920x1080
+H.264/AAC master and 540p preview. QA checks both stream durations—not only container
+duration—plus codecs, pixel format, sample rate, channels, and measured audio peak.

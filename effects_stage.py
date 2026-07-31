@@ -65,8 +65,8 @@ class EffectsSettings:
     width: int = 1920
     height: int = 1080
     fps: int = 30
-    motion_scale: float = 1.06
-    hero_motion_scale: float = 1.045
+    motion_scale: float = 1.012
+    hero_motion_scale: float = 1.008
     tv_frame_enabled: bool = True
     tv_frame_file: Path = PROJECTS_ROOT / "Assets" / "Overlays" / "tv_frame.png"
     tv_frame_opacity: float = 0.82
@@ -103,9 +103,9 @@ class EffectsSettings:
             width=int(os.getenv("EFFECTS_WIDTH", "1920")),
             height=int(os.getenv("EFFECTS_HEIGHT", "1080")),
             fps=int(os.getenv("EFFECTS_FPS", "30")),
-            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.06")),
+            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.012")),
             hero_motion_scale=float(
-                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.045")
+                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.008")
             ),
             tv_frame_enabled=_bool_env("TV_FRAME_ENABLED", True),
             tv_frame_file=_path_env(
@@ -439,7 +439,6 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                 }
             )
     raw_events.sort(key=lambda item: (item["timeline_start"], item["timeline_end"]))
-    motions = ("push_in", "pan_left", "pull_out", "pan_right")
     for index, event in enumerate(raw_events):
         base_scale = (
             settings.hero_motion_scale
@@ -451,7 +450,7 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
         event["event_id"] = f"visual_{index + 1:04d}"
         event["duration"] = round(event["timeline_end"] - event["timeline_start"], 6)
         event["motion"] = {
-            "type": motions[index % len(motions)],
+            "type": "static" if event["crop_risk"] else "slow_push_in",
             "maximum_scale": round(base_scale, 4),
             "focus": "center_safe",
             "vertical_pan": False,
@@ -690,10 +689,8 @@ def _filter_templates(settings: EffectsSettings) -> dict:
             "captions",
         ],
         "motion": {
-            "push_in": "zoompan=z='1+(MAX_SCALE-1)*on/(FRAMES-1)':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2'",
-            "pull_out": "zoompan=z='MAX_SCALE-(MAX_SCALE-1)*on/(FRAMES-1)':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2'",
-            "pan_left": "zoompan=z='MAX_SCALE':x='(iw-iw/zoom)*(1-on/(FRAMES-1))':y='ih/2-ih/zoom/2'",
-            "pan_right": "zoompan=z='MAX_SCALE':x='(iw-iw/zoom)*on/(FRAMES-1)':y='ih/2-ih/zoom/2'",
+            "slow_push_in": "zoompan=z='1+(MAX_SCALE-1)*on/(FRAMES-1)':x='floor((iw-iw/zoom)/2)':y='floor((ih-ih/zoom)/2)'",
+            "static": "scale=OUTPUT_WIDTH:OUTPUT_HEIGHT:force_original_aspect_ratio=increase,crop=OUTPUT_WIDTH:OUTPUT_HEIGHT",
         },
         "glitch": (
             f"noise=alls={settings.glitch_noise_strength}:allf=t+u,"
@@ -823,7 +820,7 @@ def render_reference_proof(
         max(0.1, float(requested_separator_duration)),
         duration_seconds - 3.0,
     )
-    image_duration = (duration_seconds - separator_duration) / 3
+    image_duration = duration_seconds / 3
     width = settings.proof_width
     height = settings.proof_height
     fps = settings.fps
@@ -867,36 +864,31 @@ def render_reference_proof(
             f"trim=duration={separator_duration},setpts=PTS-STARTPTS[v0]"
         )
     ]
-    motion_types = ("push_in", "pan_left", "pull_out")
-    for offset, motion in enumerate(motion_types, start=1):
+    for offset in range(1, 4):
         scale = settings.motion_scale
-        if motion == "push_in":
-            zoom = f"1+({scale}-1)*on/{frames - 1}"
-            x = "iw/2-iw/zoom/2"
-        elif motion == "pull_out":
-            zoom = f"{scale}-({scale}-1)*on/{frames - 1}"
-            x = "iw/2-iw/zoom/2"
-        else:
-            zoom = str(scale)
-            x = f"(iw-iw/zoom)*(1-on/{frames - 1})"
+        zoom = f"1+({scale}-1)*on/{frames - 1}"
+        x = "floor((iw-iw/zoom)/2)"
         filters.append(
             f"[{offset}:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},zoompan=z='{zoom}':x='{x}':"
-            f"y='ih/2-ih/zoom/2':d={frames}:s={width}x{height}:fps={fps},"
+            f"y='floor((ih-ih/zoom)/2)':d={frames}:s={width}x{height}:fps={fps},"
             f"trim=duration={image_duration},setpts=PTS-STARTPTS[v{offset}]"
         )
-    filters.append("[v0][v1][v2][v3]concat=n=4:v=1:a=0[vbase]")
+    filters.append("[v1][v2][v3]concat=n=3:v=1:a=0[vbase]")
+    filters.append(
+        f"[vbase][v0]overlay=0:0:eof_action=pass:enable='between(t,0,{separator_duration:.3f})'[vstory]"
+    )
     glitch_starts = [
         separator_duration,
-        separator_duration + image_duration,
-        separator_duration + 2 * image_duration,
+        image_duration,
+        2 * image_duration,
     ]
     enable = "+".join(
         f"between(t\\,{start:.3f}\\,{min(duration_seconds, start + settings.glitch_duration_seconds):.3f})"
         for start in glitch_starts
     )
     filters.append(
-        f"[vbase]noise=alls={settings.glitch_noise_strength}:allf=t+u:enable='{enable}',"
+        f"[vstory]noise=alls={settings.glitch_noise_strength}:allf=t+u:enable='{enable}',"
         f"drawbox=y=ih*0.43:w=iw:h=8:color=white@0.16:t=fill:enable='{enable}'[vfx]"
     )
     current_video = "vfx"
@@ -911,18 +903,14 @@ def render_reference_proof(
         f"[{current_video}]subtitles=filename='{_ffmpeg_filter_path(caption_path)}'[vout]"
     )
 
-    voice_duration = max(0.1, duration_seconds - separator_duration)
-    delay_ms = round(separator_duration * 1000)
+    voice_duration = duration_seconds
+    delay_ms = 0
     filters.append(
         f"[{narration_index}:a]atrim=start=0:end={voice_duration},asetpts=PTS-STARTPTS,"
         f"aresample=48000,aformat=channel_layouts=stereo,adelay={delay_ms}|{delay_ms}[voice]"
     )
     speech_factor = _db_factor(settings.music_speech_gain_db)
-    separator_factor = _db_factor(settings.music_separator_gain_db)
-    volume_expression = (
-        f"if(between(t\\,{separator_duration:.3f}\\,{duration_seconds:.3f})\\,"
-        f"{speech_factor:.6f}\\,{separator_factor:.6f})"
-    )
+    volume_expression = f"{speech_factor:.6f}"
     fade_out_start = max(0.0, duration_seconds - settings.music_fade_seconds)
     filters.append(
         f"[{music_index}:a]atrim=duration={duration_seconds},asetpts=PTS-STARTPTS,"
@@ -1221,9 +1209,13 @@ def build_effects_plan(
             "status": "passed",
             "visual_coverage": coverage,
             "motion_is_deterministic": True,
-            "motion_alternates": all(
-                first["motion"]["type"] != second["motion"]["type"]
-                for first, second in zip(visuals, visuals[1:])
+            "motion_is_consistent": all(
+                item["motion"]["type"] in {"slow_push_in", "static"}
+                for item in visuals
+            ),
+            "no_directional_pans": all(
+                item["motion"]["type"] not in {"pan_left", "pan_right"}
+                for item in visuals
             ),
             "maximum_motion_scale": max(
                 (item["motion"]["maximum_scale"] for item in visuals),

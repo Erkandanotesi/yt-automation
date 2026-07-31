@@ -262,7 +262,7 @@ Sesler\alignments\<ses-adi>.alignment.json
   değerleri; final kelime sapması; önemli iddialar, entity adayları ve görsel sorguları.
 
 story_timing.json
-- Her haberden önce ayrılmış separator aralığı, global narration başlangıç/bitişi,
+- Her haberin narration başlangıcıyla aynı anda başlayan separator katmanı, global narration başlangıç/bitişi,
   global cümle/phrase/görsel-beat zamanları ve overlap kalite kapısı.
 
 timing_diagnostic_story_01.mp4
@@ -306,7 +306,7 @@ Animasyonları klasöre koyduktan sonra 1:
 - varsayılan olarak 1920×1080, 30 fps, H.264/HEVC ve yuv420p/yuv420p10le kabul eder;
 - süreyi, video stream'ini ve ses stream'inin varlığını kaydeder;
 - bütün separator dosyalarında ses varlığının tutarlı olmasını ister;
-- gerçek separator süreleriyle story_timing.json global zamanlarını yeniden hesaplar.
+- gerçek separator sürelerini kaydeder; separator narration'ı geciktirmez ve aynı anda başlar.
 
 0 işlemi durdurur fakat haberleri, sesleri, alignment dosyalarını ve separator
 animasyonlarını silmez. state.json durumu CANCELLED olarak kaydeder.
@@ -367,10 +367,13 @@ Video 5\04_storyboard\storyboard.json
 Video 5\04_storyboard\story_01_30s_proof.mp4
 Video 5\05_visuals\generated\01_hero_01.png
 Video 5\05_visuals\generated\01_hero_02.png
+Assets\Media\AI Generated\ai_01_01_<sahne-aciklamasi>_<hash>.png
 
 storyboard.json görsel API çağrısından önce kaydedilir. Aynı prompt/model/ayar ve
 geçerli SHA-256 sonucu varsa tekrar API çağrısı yapılmaz. Yanlış boyut veya benzer
 görsel reddedilir; kota harcayarak otomatik replacement üretilmez.
+Onaylanan her görsel, daha sonra yeniden kullanılabilmesi için içerik açıklamalı dosya
+adı ve kısa hash ile `Assets\Media\AI Generated\` klasörüne de otomatik kopyalanır.
 
 
 13. TEMEL SRT ALTYAZILARI
@@ -401,8 +404,8 @@ Video 5\06_captions\captions.srt
 Video 5\06_captions\story_01.srt
 Video 5\06_captions\captions.json
 
-captions.srt bütün videonun global zamanlarını kullanır. Her haberin separator süresi
-altyazı başlangıcına otomatik eklenir. captions.json giriş parmak izini, SHA-256
+captions.srt bütün videonun global zamanlarını kullanır. Her haberin ilk altyazısı
+separator ile aynı anda başlar; separator süresi narration'ı ileri itmez. captions.json giriş parmak izini, SHA-256
 değerlerini, ilk/son altyazı zamanını ve kalite sonuçlarını kaydeder.
 
 Aynı narration, alignment, separator zamanları ve ayarlarla tekrar çalıştırılırsa
@@ -485,8 +488,8 @@ veya:
 .\.venv\Scripts\python.exe effects_stage.py --video 5 --action reference-proof --proof-seconds 60
 .\.venv\Scripts\python.exe effects_stage.py --video 5 --action status
 
-Çıktılar `Video 5\07_effects\` içine yazılır. Plan, bütün görsellere dönüşümlü ve
-sınırlı push/pull/pan hareketi verir; `capcut_screenshot.png` dosyasındaki katman
+Çıktılar `Video 5\07_effects\` içine yazılır. Plan, bütün görsellere merkezde kalan
+çok yavaş %0,8-%1,2 push-in verir ve yönlü pan kullanmaz; `capcut_screenshot.png` dosyasındaki katman
 sırasını kaydeder; TV çerçevesini tüm programa uygular; separator çıkışları ve seçili
 kesimlerde kısa tape-dropout/glitch ve SFX kullanır. Glitch toplam süresi videonun
 %3'ünü geçemez ve altyazılar en üst okunabilir katmanda kalır.
@@ -494,14 +497,29 @@ kesimlerde kısa tape-dropout/glitch ve SFX kullanır. Glitch toplam süresi vid
 `Assets\Audio\background_music\` içindeki kullanıcı müziği tüm program boyunca
 tekrarlanır. Kesintili döngüleri gizlemek için 0,35 saniyelik crossfade, başlangıç ve
 bitiş fade'i, loudness normalizasyonu ve konuşma sırasında -22 dB ducking planlanır.
-Separator sırasında müzik en fazla -16 dB seviyesine çıkar. Kaynak dosya, SHA-256,
+Separator sırasında voiceover da aktif olduğu için müzik konuşma ducking seviyesinde kalır. Kaynak dosya, SHA-256,
 lisans yan dosyası, loop sayısı ve bütün mix ayarları manifestte tutulur.
 
-`milestone6_reference_60s.mp4` gerçek FFmpeg filtreleriyle üretilmiş kontrol
-videosudur. Tam video preview/final render Milestone 8'e aittir.
+`milestone6_reference_60s.mp4` gerçek FFmpeg filtreleriyle üretilmiş kontrol videosudur.
 
 
-16. ESKİ OTOMASYON ÇIKTILARI
+16. TAM PREVIEW VE FINAL RENDER
+-------------------------------
+
+render_video.bat 5
+
+veya:
+
+.\.venv\Scripts\python.exe render_stage.py --video 5 --action render
+
+`Video 5\08_render\` altında 1920x1080 final master, 540p preview, render planı,
+FFprobe QA raporu ve kurtarılabilir ara dosyalar üretilir. Separator, voiceover ve
+altyazı aynı anda başlar. Video ve ses ayrı sonlu track olarak hazırlanır, sonra mux
+edilir. QA gerçek video/audio stream sürelerini, codec, yuv420p, 48 kHz stereo ve ses
+peak seviyesini kontrol eder.
+
+
+17. ESKİ OTOMASYON ÇIKTILARI
 -----------------------------
 
 Automation içindeki eski Old ve Video1 klasörleri silinmeden şuraya taşındı:
@@ -511,7 +529,7 @@ D:\Dosyalar\İş\YouTube\Tech News\Legacy Automation Outputs
 Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkilemez.
 
 
-17. ÖNEMLİ SINIRLAMALAR
+18. ÖNEMLİ SINIRLAMALAR
 -----------------------
 
 - Ödeme duvarı veya giriş ekranı aşılmaz.

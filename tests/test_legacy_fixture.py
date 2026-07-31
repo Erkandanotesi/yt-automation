@@ -206,8 +206,8 @@ class FiveStoryLegacyFixtureTests(unittest.TestCase):
         for story in timing["stories"]:
             self.assertGreater(len(story["sentences"]), 0)
             self.assertGreater(len(story["visual_beats"]), 0)
-            self.assertLessEqual(
-                story["separator"]["end"],
+            self.assertEqual(
+                story["separator"]["start"],
                 story["narration"]["start"],
             )
 

@@ -270,7 +270,7 @@ script plus ElevenLabs alignment, avoiding text substitutions and an extra local
    - named people, companies, products, and places;
    - suggested visual queries;
    - “must show” versus “supporting” importance.
-5. Reserve separator slots before each news story.
+5. Start each separator as a visual overlay at the same instant as its narration.
 
 ### Test
 
@@ -280,7 +280,7 @@ script plus ElevenLabs alignment, avoiding text substitutions and an extra local
 ### Done when
 
 - The final narration word ends within 100 ms of the alignment end.
-- No story timing overlaps another story or its separator.
+- No story overlaps the next story; a separator intentionally overlaps its own narration.
 
 ### Implemented verification
 
@@ -294,8 +294,8 @@ script plus ElevenLabs alignment, avoiding text substitutions and an extra local
 - Character timing is deterministically aggregated into words, phrases, sentences,
   named-entity candidates, important claims, visual queries, and two initial
   `must_show` beats per story.
-- `story_timing.json` reserves one configured separator slot before each narration and
-  validates that all global ranges are non-overlapping.
+- `story_timing.json` starts each separator and narration together and validates that
+  distinct story ranges do not overlap.
 - Twenty-eight offline tests pass, including a copied five-story timeline and an
   FFmpeg timer/transcript diagnostic render.
 - A live 12-character timestamp smoke test succeeded with a 0 ms final-word delta and
@@ -362,7 +362,7 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
 - Audio presence follows a configurable policy and defaults to consistent across all
   separators.
 - Validated real separator durations replace placeholder durations in
-  `story_timing.json`; every downstream narration and beat offset is recalculated.
+  `story_timing.json`; separators remain opening overlays and do not delay narration.
 - File hashes invalidate `READY` if an approved separator is later changed or removed.
 - Thirty-seven offline tests pass, including five expected filenames, missing, corrupt,
   wrong-resolution, mixed-audio, valid, cancel, close-window, and resume cases.
@@ -415,6 +415,8 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
   defaults to balanced `medium` quality; the isolated live smoke uses `low`.
 - Paid generation requires `--confirm-cost`, respects a hard request limit, caches
   unchanged valid images, and never auto-buys a retry for a visual duplicate.
+- Approved images are copied into `Assets/Media/AI Generated` with descriptive scene
+  filenames and checksum suffixes for later indexing and reuse.
 - FFprobe/FFmpeg verify dimensions and decodability. A perceptual dHash rejects
   near-duplicates, while a local lower-third luma/edge proxy records caption-safe
   readability warnings without another paid vision request.
@@ -513,9 +515,9 @@ verification and receives no warning or ranking penalty.
 
 Use subtle deterministic movement:
 
-- slow push-in, pull-out, or pan;
+- a very slow centered push-in only;
 - no random aggressive zooms;
-- motion direction alternates to avoid repetition;
+- no directional pan or reverse zoom;
 - faces and key products stay inside a safe crop;
 - generated hero images may receive slightly longer screen time.
 
@@ -568,8 +570,8 @@ Starting mix targets should be treated as test values, not laws:
 
 - `effects_stage.py` validates finalized separators, complete Milestone 5 coverage,
   and basic captions before writing `07_effects/effects_plan.json`.
-- Every hero/archive interval receives deterministic alternating push, pull, or pan
-  motion with conservative crop caps and a caption-safe lower area.
+- Every hero/archive interval receives a centered 0.8–1.2% slow push with conservative
+  crop caps and a caption-safe lower area; directional pans are prohibited.
 - `capcut_screenshot.png` is hashed into the plan as the canonical track-order
   reference: captions, TV/shutter frame, separators, tape-dropout glitch, visuals,
   voice/SFX, then repeated music from top to bottom.
@@ -602,7 +604,8 @@ Starting mix targets should be treated as test values, not laws:
    - minimum display duration;
    - caption-safe lower-third area;
    - optional active-word highlighting only after the basic version is stable.
-4. Offset each story’s local alignment by its separator and timeline start.
+4. Offset each story’s local alignment by its story start; the separator begins at
+   that same timestamp.
 5. Validate monotonic timestamps, overlaps, missing text, final duration, and safe-area
    placement.
 
@@ -623,7 +626,8 @@ Starting mix targets should be treated as test values, not laws:
   auditable `captions.json` containing checksums, input fingerprint, cue counts, and
   first/last-caption timing.
 - Validation rejects stale alignment text, non-positive or overlapping cues,
-  separator overlap, line-limit failures, and captions beyond the project duration.
+  unexpected separator overlap in legacy timing mode, line-limit failures, and
+  captions beyond the project duration. Overlay timing intentionally permits it.
 - A valid unchanged package is reused by checksum without rewriting its SRT files.
   Changed alignment, narration, settings, or finalized separator timing invalidates
   the cache.
@@ -640,6 +644,8 @@ Starting mix targets should be treated as test values, not laws:
   the final word.
 
 ## Milestone 8 — Build the FFmpeg timeline and final render
+
+**Status: complete (2026-07-31).**
 
 ### Work
 
@@ -681,6 +687,17 @@ Starting mix targets should be treated as test values, not laws:
 
 - A complete `Video N` project renders from artifacts with one command and passes automated plus
   human review.
+
+### Implemented
+
+- `render_stage.py` and `render_video.bat` create cached 1080p visual intermediates,
+  normalized separators, a final master, a 540p preview, and an FFprobe-backed report
+  under `08_render/`.
+- Separator video/audio, narration, and captions begin together at each story start.
+- Finite video and audio tracks are rendered independently before muxing, making
+  retries recoverable and avoiding Windows FFmpeg shutdown deadlocks.
+- QA validates actual video and audio stream durations, 1920x1080/30 fps H.264
+  `yuv420p`, AAC 48 kHz stereo, preview format, hashes, and measured sample peak.
 
 ## Milestone 9 — Thumbnail and YouTube title package
 

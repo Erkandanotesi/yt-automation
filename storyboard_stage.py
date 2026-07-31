@@ -87,9 +87,20 @@ class StoryboardSettings:
     maximum_source_characters: int = 12000
     maximum_image_requests_per_run: int = 10
     duplicate_hamming_threshold: int = 6
+    archive_directory: Path | None = (
+        PROJECTS_ROOT / "Assets" / "Media" / "AI Generated"
+    )
 
     @classmethod
     def from_environment(cls) -> "StoryboardSettings":
+        configured_archive = os.getenv("AI_IMAGE_ARCHIVE_DIRECTORY", "").strip()
+        archive_directory = (
+            Path(configured_archive).expanduser()
+            if configured_archive
+            else PROJECTS_ROOT / "Assets" / "Media" / "AI Generated"
+        )
+        if not archive_directory.is_absolute():
+            archive_directory = SCRIPT_DIR / archive_directory
         return cls(
             planner_model=os.getenv(
                 "STORYBOARD_MODEL",
@@ -129,6 +140,7 @@ class StoryboardSettings:
                 "IMAGE_DUPLICATE_HAMMING_THRESHOLD",
                 6,
             ),
+            archive_directory=archive_directory.resolve(),
         )
 
     @property
@@ -177,6 +189,58 @@ class StoryboardSettings:
             raise ValueError("MAX_IMAGE_REQUESTS_PER_RUN must be positive.")
         if not 0 <= self.duplicate_hamming_threshold <= 64:
             raise ValueError("Duplicate hash threshold must be between 0 and 64.")
+
+
+def _descriptive_archive_name(story: dict, image: dict, source: Path) -> str:
+    description = str(
+        image.get("visual_concept")
+        or image.get("beat_text")
+        or story.get("title")
+        or "technology-news-image"
+    )
+    words = re.findall(r"[a-z0-9]+", description.lower())[:16]
+    slug = "-".join(words) or "technology-news-image"
+    checksum = sha256_file(source)[:8]
+    return (
+        f"ai_{int(story.get('order', 0)):02d}_{int(image.get('image_index', 0)):02d}_"
+        f"{slug[:110]}_{checksum}{source.suffix.lower()}"
+    )
+
+
+def archive_approved_images(
+    storyboard: dict,
+    settings: StoryboardSettings,
+) -> list[dict]:
+    if settings.archive_directory is None:
+        return []
+    settings.archive_directory.mkdir(parents=True, exist_ok=True)
+    archived = []
+    for story in storyboard.get("stories", []):
+        for image in story.get("images", []):
+            if image.get("validation", {}).get("status") != "passed":
+                continue
+            source = Path(image.get("output_file", ""))
+            if not source.is_file():
+                continue
+            destination = settings.archive_directory / _descriptive_archive_name(
+                story,
+                image,
+                source,
+            )
+            source_sha = sha256_file(source)
+            if not destination.is_file() or sha256_file(destination) != source_sha:
+                atomic_write_bytes(destination, source.read_bytes())
+            record = {
+                "file": str(destination.resolve()),
+                "sha256": source_sha,
+                "description": str(
+                    image.get("visual_concept") or image.get("beat_text") or ""
+                ),
+                "archived_at_utc": utc_now(),
+            }
+            image["asset_archive"] = record
+            archived.append(record)
+    return archived
 
 
 class SelectedBeat(BaseModel):
@@ -1092,6 +1156,7 @@ def generate_storyboard_images(
         "all_images_generated_and_validated": all_ready,
         "status": "passed" if all_ready else "partial",
     }
+    storyboard["archived_assets"] = archive_approved_images(storyboard, settings)
     atomic_write_json(storyboard_path, storyboard)
     _write_stage(
         video_dir,
@@ -1597,7 +1662,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--video", type=int)
     parser.add_argument(
         "--action",
-        choices=("plan", "generate", "proof", "all", "status", "smoke-image"),
+        choices=("plan", "generate", "archive", "proof", "all", "status", "smoke-image"),
         default="plan",
     )
     parser.add_argument("--story", type=int)
@@ -1637,6 +1702,16 @@ def main() -> int:
                 "proof": payload.get("proof", {}),
             }
             print(json.dumps(summary, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "archive":
+            path = project_dir(args.video) / "04_storyboard" / "storyboard.json"
+            payload = load_json(path, "Storyboard")
+            archived = archive_approved_images(payload, settings)
+            payload["archived_assets"] = archived
+            payload["updated_at_utc"] = utc_now()
+            atomic_write_json(path, payload)
+            print(f"Archived approved images: {len(archived)}")
+            print(f"Asset directory: {settings.archive_directory}")
             return 0
         if args.action in {"plan", "all"}:
             result = build_storyboard(

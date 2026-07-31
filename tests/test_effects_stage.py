@@ -23,8 +23,8 @@ def fixture_settings(root: Path) -> EffectsSettings:
         width=320,
         height=180,
         fps=30,
-        motion_scale=1.06,
-        hero_motion_scale=1.04,
+        motion_scale=1.012,
+        hero_motion_scale=1.008,
         tv_frame_file=root / "tv_frame.png",
         music_directory=root / "music",
         proof_width=320,
@@ -166,8 +166,9 @@ class EffectsStageTests(unittest.TestCase):
             self.assertEqual(len(plan["visual_events"]), 4)
             self.assertEqual(
                 [item["motion"]["type"] for item in plan["visual_events"]],
-                ["push_in", "pan_left", "pull_out", "pan_right"],
+                ["slow_push_in"] * 4,
             )
+            self.assertTrue(plan["quality"]["no_directional_pans"])
             self.assertTrue(plan["quality"]["glitch_under_three_percent"])
             self.assertTrue(plan["quality"]["music_covers_complete_timeline"])
             self.assertEqual(
