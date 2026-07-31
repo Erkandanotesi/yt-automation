@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import time
 import unicodedata
@@ -22,11 +23,17 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 from trafilatura import extract
 
+from article_validation import (
+    source_matches_title,
+    title_source_relevance,
+    validate_unique_source_content,
+)
 from content_validation import ContentValidationError, validate_narration, word_count
 from file_utils import (
     atomic_write_json,
     atomic_write_text,
     sha256_file,
+    sha256_text,
     stable_story_id,
 )
 
@@ -211,6 +218,19 @@ def parse_arguments() -> argparse.Namespace:
         "--reset",
         action="store_true",
         help="Allow stories used in previous videos to be considered again.",
+    )
+    parser.add_argument(
+        "--repair-existing",
+        action="store_true",
+        help=(
+            "Repair source/title mismatches in an existing completed project "
+            "without reranking valid stories."
+        ),
+    )
+    parser.add_argument(
+        "--confirm-ai-cost",
+        action="store_true",
+        help="Confirm paid summary calls required by --repair-existing.",
     )
     return parser.parse_args()
 
@@ -797,7 +817,7 @@ CANDIDATES:
 # =========================================================
 
 def extract_article_text(candidate: dict) -> str:
-    def operation() -> str:
+    def operation() -> tuple[str, str]:
         response = HTTP.get(candidate["url"], timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
 
@@ -810,24 +830,65 @@ def extract_article_text(candidate: dict) -> str:
             output_format="txt",
         )
 
-        cleaned = re.sub(r"\s+", " ", extracted or "").strip()
-        if cleaned:
-            return cleaned[:35000]
-        return ""
+        cleaned = re.sub(r"\s+", " ", extracted or "").strip()[:35000]
+        return cleaned, str(response.url)
 
     try:
-        article_text = retry_call(
+        article_text, final_url = retry_call(
             operation,
             attempts=RSS_RETRIES,
             description=f"Haber metni çıkarma: {candidate['url']}",
         )
-        if len(article_text) >= MIN_ARTICLE_CHARS:
+        relevance = title_source_relevance(candidate["title"], article_text)
+        if (
+            len(article_text) >= MIN_ARTICLE_CHARS
+            and relevance["status"] == "passed"
+        ):
+            candidate["extraction"] = {
+                "method": "article_page",
+                "requested_url": candidate["url"],
+                "final_url": final_url,
+                "title_relevance": relevance,
+            }
             return article_text
+        candidate["extraction"] = {
+            "method": "article_page_rejected",
+            "requested_url": candidate["url"],
+            "final_url": final_url,
+            "title_relevance": relevance,
+        }
+        LOGGER.warning(
+            "Fetched page does not match the RSS title; trying RSS text: "
+            "%s | match_ratio=%.2f | final_url=%s",
+            candidate["title"],
+            relevance["match_ratio"],
+            final_url,
+        )
     except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Tam haber sayfası okunamadı: %s", exc)
+        LOGGER.warning("Full article page could not be used: %s", exc)
 
-    LOGGER.warning("RSS açıklaması yedek kaynak olarak kullanılacak.")
-    return candidate["rss_text"]
+    rss_text = re.sub(
+        r"\s+",
+        " ",
+        str(candidate.get("rss_text", "")),
+    ).strip()
+    relevance = title_source_relevance(candidate["title"], rss_text)
+    if (
+        len(rss_text) < MIN_ARTICLE_CHARS
+        or relevance["status"] != "passed"
+    ):
+        raise RuntimeError(
+            "Neither the article page nor RSS text matches the candidate title: "
+            f"{candidate['title']}"
+        )
+    LOGGER.warning("Using matching RSS text as the source fallback.")
+    candidate["extraction"] = {
+        "method": "rss_fallback",
+        "requested_url": candidate["url"],
+        "final_url": candidate.get("extraction", {}).get("final_url", ""),
+        "title_relevance": relevance,
+    }
+    return rss_text[:35000]
 
 
 # =========================================================
@@ -998,11 +1059,29 @@ def validate_created_items(created_items: list[dict]) -> None:
     if len(urls) != len(set(urls)):
         raise RuntimeError("Duplicate source URLs were created.")
 
+    validate_unique_source_content(
+        [
+            {
+                "story_id": item["story_id"],
+                "source_text": item["article_text"],
+            }
+            for item in created_items
+        ]
+    )
+
     scores = [item["ranking"].score for item in created_items]
     if scores != sorted(scores, reverse=True):
         raise RuntimeError("Created stories are not in descending ranking order.")
 
     for item in created_items:
+        if not source_matches_title(
+            item["candidate"]["title"],
+            item["article_text"],
+        ):
+            raise RuntimeError(
+                "Source text does not match its RSS title: "
+                f"{item['candidate']['title']}"
+            )
         for key in ("text_path", "original_path"):
             path = item[key]
             if not path.is_file() or path.stat().st_size == 0:
@@ -1022,6 +1101,7 @@ def save_project_info(
     *,
     status: str,
     error: str = "",
+    repair_metadata: dict | None = None,
 ) -> None:
     payload = {
         "video_number": ARGS.video,
@@ -1038,6 +1118,7 @@ def save_project_info(
         "expected_count": TOP_N,
         "status": status,
         "error": error,
+        "repair": repair_metadata or {},
         "stories": [
             {
                 "story_id": item["story_id"],
@@ -1054,6 +1135,7 @@ def save_project_info(
                 "word_count": word_count(item["summary"].summary_en),
                 "narration_sha256": sha256_file(item["text_path"]),
                 "source_sha256": sha256_file(item["original_path"]),
+                "source_extraction": item["candidate"].get("extraction", {}),
                 "validation": item["validation"],
             }
             for item in created_items
@@ -1061,6 +1143,252 @@ def save_project_info(
     }
 
     atomic_write_json(PROJECT_INFO_PATH, payload)
+
+
+def _repair_candidate(record: dict) -> dict:
+    published_raw = str(record.get("published_utc", ""))
+    try:
+        published = datetime.fromisoformat(published_raw)
+    except ValueError:
+        published = datetime.now(timezone.utc)
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    return {
+        "url": canonical_url(str(record["url"])),
+        "title": str(record["title"]),
+        "source": str(record.get("source", "")),
+        "feed_url": str(record.get("feed_url", "")),
+        "published": published.astimezone(timezone.utc),
+        "rss_text": str(record.get("rss_summary", "")),
+        "rough_score": float(record.get("rough_score", 0)),
+    }
+
+
+def _existing_summary(story: dict, text_path: Path) -> NewsSummary:
+    factual_review = (
+        story.get("validation", {}).get("factual_review", {})
+    )
+    return NewsSummary(
+        title_en=str(story["title"]),
+        summary_en=text_path.read_text(encoding="utf-8").strip(),
+        factual_review=FactualReview.model_validate(factual_review),
+    )
+
+
+def _repair_backup_path() -> Path:
+    backup_parent = PROJECTS_ROOT / "Legacy Automation Outputs"
+    backup_parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate = backup_parent / f"{VIDEO_NAME} invalid-news backup {timestamp}"
+    suffix = 1
+    while candidate.exists():
+        suffix += 1
+        candidate = backup_parent / (
+            f"{VIDEO_NAME} invalid-news backup {timestamp}-{suffix}"
+        )
+    return candidate
+
+
+def repair_existing_project() -> dict:
+    if not ARGS.confirm_ai_cost:
+        raise RuntimeError(
+            "Repair may make paid summary calls. Re-run with --confirm-ai-cost."
+        )
+    if not PROJECT_INFO_PATH.is_file() or not CANDIDATES_PATH.is_file():
+        raise FileNotFoundError(
+            "Repair requires project_info.json and aday_haberler.json."
+        )
+    project_info = json.loads(PROJECT_INFO_PATH.read_text(encoding="utf-8"))
+    candidate_records = json.loads(CANDIDATES_PATH.read_text(encoding="utf-8"))
+    if project_info.get("status") != "complete":
+        raise RuntimeError("Only a completed news project can be repaired in place.")
+    candidates_by_url = {
+        canonical_url(str(record["url"])): _repair_candidate(record)
+        for record in candidate_records
+    }
+
+    inspected: list[dict] = []
+    seen_source_hashes: dict[str, int] = {}
+    affected_orders: list[int] = []
+    for story in project_info.get("stories", []):
+        order = int(story["order"])
+        text_path = Path(story["text"])
+        original_path = Path(story["original"])
+        if not text_path.is_file() or not original_path.is_file():
+            raise FileNotFoundError(
+                f"Existing story files are missing for story order {order}."
+            )
+        source_text = original_path.read_text(encoding="utf-8").strip()
+        source_hash = sha256_text(re.sub(r"\s+", " ", source_text).casefold())
+        matches = source_matches_title(story["source_title"], source_text)
+        duplicate_of = seen_source_hashes.get(source_hash)
+        if not matches or duplicate_of is not None:
+            affected_orders.append(order)
+        else:
+            seen_source_hashes[source_hash] = order
+        inspected.append(
+            {
+                "story": story,
+                "text_path": text_path,
+                "original_path": original_path,
+                "source_text": source_text,
+                "matches": matches,
+                "duplicate_of": duplicate_of,
+            }
+        )
+    if not affected_orders:
+        LOGGER.info("No source/title mismatch or duplicate source content was found.")
+        return {
+            "status": "unchanged",
+            "affected_orders": [],
+            "backup_directory": "",
+        }
+
+    LOGGER.warning(
+        "Repairing story orders %s; valid stories will be preserved.",
+        affected_orders,
+    )
+    prepared: list[dict] = []
+    for inspected_item in inspected:
+        story = inspected_item["story"]
+        order = int(story["order"])
+        url = canonical_url(str(story["source_url"]))
+        candidate = candidates_by_url.get(url)
+        if candidate is None:
+            raise RuntimeError(
+                f"Saved RSS candidate is missing for story order {order}: {url}"
+            )
+        ranking = RankedNews(
+            index=0,
+            score=int(story["score"]),
+            reason=str(story.get("ranking_reason", "")),
+        )
+        if order in affected_orders:
+            article_text = extract_article_text(candidate)
+            summary = summarize_article(candidate, article_text)
+        else:
+            article_text = inspected_item["source_text"]
+            summary = _existing_summary(story, inspected_item["text_path"])
+            candidate["extraction"] = story.get("source_extraction", {})
+        prepared.append(
+            {
+                "order": order,
+                "story_id": story["story_id"],
+                "candidate": candidate,
+                "ranking": ranking,
+                "summary": summary,
+                "article_text": article_text,
+                "old_text_path": inspected_item["text_path"],
+                "old_original_path": inspected_item["original_path"],
+                "old_validation": story.get("validation", {}),
+            }
+        )
+
+    validate_unique_source_content(
+        [
+            {
+                "story_id": item["story_id"],
+                "source_text": item["article_text"],
+            }
+            for item in prepared
+        ]
+    )
+    for item in prepared:
+        if not source_matches_title(
+            item["candidate"]["title"],
+            item["article_text"],
+        ):
+            raise RuntimeError(
+                "Repair source still does not match its title: "
+                f"{item['candidate']['title']}"
+            )
+
+    backup_path = _repair_backup_path()
+    shutil.copytree(PROJECT_DIR, backup_path)
+    LOGGER.info("Recoverable pre-repair backup created: %s", backup_path)
+
+    created_items: list[dict] = []
+    for item in prepared:
+        if item["order"] in affected_orders:
+            text_path, original_path, validation = save_news_file(
+                item["summary"],
+                item["article_text"],
+                item["order"],
+                item["story_id"],
+            )
+        else:
+            text_path = item["old_text_path"]
+            original_path = item["old_original_path"]
+            validation = item["old_validation"]
+        created_items.append(
+            {
+                **item,
+                "text_path": text_path,
+                "original_path": original_path,
+                "validation": validation,
+            }
+        )
+
+    validate_created_items(created_items)
+    save_combined_script(created_items)
+    repair_metadata = {
+        "status": "news_repaired_tts_pending",
+        "repaired_at_utc": datetime.now(timezone.utc).isoformat(),
+        "affected_story_orders": affected_orders,
+        "preserved_story_orders": [
+            item["order"]
+            for item in prepared
+            if item["order"] not in affected_orders
+        ],
+        "backup_directory": str(backup_path),
+    }
+    save_project_info(
+        len(candidate_records),
+        [item["ranking"] for item in created_items],
+        created_items,
+        status="complete",
+        repair_metadata=repair_metadata,
+    )
+
+    for item in created_items:
+        for old_key, new_key in (
+            ("old_text_path", "text_path"),
+            ("old_original_path", "original_path"),
+        ):
+            old_path = Path(item[old_key])
+            new_path = Path(item[new_key])
+            if (
+                old_path.resolve() != new_path.resolve()
+                and old_path.parent.resolve() == OUTPUT_DIR.resolve()
+            ):
+                old_path.unlink(missing_ok=True)
+
+    state_path = PROJECT_DIR / "state.json"
+    state = {}
+    if state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            state = {}
+    stages = state.setdefault("stages", {})
+    for downstream in ("captions", "storyboard", "archive_visuals"):
+        stages.pop(downstream, None)
+    stages["manual_separators"] = {
+        **stages.get("manual_separators", {}),
+        "status": "WAITING",
+        "reason": "News repaired; TTS and alignment must be refreshed.",
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    state["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+    atomic_write_json(state_path, state)
+    LOGGER.info(
+        "News repair completed. Run TTS without --overwrite, then alignment."
+    )
+    return {
+        "status": "news_repaired_tts_pending",
+        "affected_orders": affected_orders,
+        "backup_directory": str(backup_path),
+    }
 
 
 # =========================================================
@@ -1124,6 +1452,16 @@ def main() -> int:
         LOGGER.info("Seçilecek azami haber: %s", TOP_N)
         LOGGER.info("=" * 68)
 
+        if ARGS.repair_existing:
+            result = repair_existing_project()
+            LOGGER.info(
+                "Repair result: %s | affected=%s | backup=%s",
+                result["status"],
+                result["affected_orders"],
+                result["backup_directory"],
+            )
+            return 0
+
         channel_profile = load_channel_profile()
         feed_urls = load_feed_urls()
         used_urls = load_state()
@@ -1186,6 +1524,29 @@ def main() -> int:
                     LOGGER.warning(
                         "Kaynak metin çok kısa olduğu için atlandı: %s",
                         candidate["title"],
+                    )
+                    continue
+
+                try:
+                    validate_unique_source_content(
+                        [
+                            *[
+                                {
+                                    "story_id": item["story_id"],
+                                    "source_text": item["article_text"],
+                                }
+                                for item in created_items
+                            ],
+                            {
+                                "story_id": story_id_for(candidate),
+                                "source_text": article_text,
+                            },
+                        ]
+                    )
+                except ValueError as exc:
+                    LOGGER.warning(
+                        "Duplicate source content rejected before summarization: %s",
+                        exc,
                     )
                     continue
 
