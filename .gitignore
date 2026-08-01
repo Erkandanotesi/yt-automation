@@ -2,6 +2,9 @@
 .env
 .env.*
 !.env.example
+.youtube_credentials/
+client_secret*.json
+youtube_token*.json
 
 # Python environment and caches
 .venv/

@@ -79,6 +79,30 @@ Tech News/
 └── tech news thumbnail prompt.txt
 ```
 
+Milestone 9 and upload additions to the tree:
+
+```text
+Tech News/
+|-- Assets/Media/Thumbnails/          # reusable final thumbnails + metadata
+|-- Automation/
+|   |-- publish_stage.py
+|   |-- publish_video.bat
+|   |-- youtube_upload.py
+|   `-- youtube_upload.bat
+`-- Video N/09_publish/
+    |-- editorial_copy.json
+    |-- title.txt
+    |-- description.txt               # includes the YouTube chapter block
+    |-- chapters.txt
+    |-- tags.txt
+    |-- thumbnail_background_prompt.txt
+    |-- thumbnail_final.png
+    |-- thumbnail_phone_preview_320x180.png
+    |-- publish_package.json
+    |-- youtube_upload_manifest.json
+    `-- youtube_upload_result.json    # only after a real upload
+```
+
 Only folders named exactly `Video N` participate in automatic project numbering.
 The next project is currently `Video 6`. New project artifacts must never be written
 inside `Automation`.
@@ -181,3 +205,20 @@ margin. When a selected asset's sidecar says attribution is required, a compact
 `Source: creator · provider · license` label appears at the bottom-right inside the
 TV frame for exactly that asset's visible interval. Public-domain and CC0 assets do
 not receive an unnecessary label.
+
+Milestone 9 uses story 01, which must also be the highest-rated story, to create
+grounded title candidates, a striking recommended title, description, tags, sources,
+and correctly ordered chapter timestamps. The exact chapter block is embedded inside
+`description.txt`, beginning at `0:00`. The established thumbnail template is
+`tech_reports_ai_headline_v1`: a high-contrast headline in the left 46%, one strong
+story subject in the right 54%, white condensed text, and one red or yellow emphasis.
+The AI may render the exact short headline directly into the image; FFmpeg then only
+normalizes it to 1280x720 and creates review variants. The final thumbnail and a
+descriptive metadata sidecar are archived under `Assets/Media/Thumbnails`.
+
+`youtube_upload.py` consumes the checksum-locked `youtube_upload_manifest.json`.
+Validation is offline and quota-free. A real upload uses OAuth user authorization,
+resumable 8 MiB chunks, private visibility, disabled subscriber notifications, and a
+separate thumbnail request. `--confirm-upload` is mandatory, and the saved result
+prevents accidental duplicate uploads of the same final video. OAuth client and token
+files live in the Git-ignored `.youtube_credentials/` directory.

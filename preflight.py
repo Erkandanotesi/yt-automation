@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -36,6 +37,8 @@ from online_media_stage import OnlineMediaSettings  # noqa: E402
 from caption_stage import CaptionSettings  # noqa: E402
 from effects_stage import EffectsSettings, SUPPORTED_AUDIO  # noqa: E402
 from render_stage import RenderSettings  # noqa: E402
+from publish_stage import PublishSettings  # noqa: E402
+from youtube_upload import YouTubeUploadSettings  # noqa: E402
 
 
 PLACEHOLDER_MARKERS = (
@@ -362,6 +365,65 @@ def collect_checks() -> list[Check]:
                 f"fps={render_settings.fps}; preset={render_settings.preset}; "
                 "attribution=bottom-right inside TV frame"
             ),
+        )
+
+    try:
+        publish_settings = PublishSettings.from_environment()
+        publish_settings.validate()
+    except (OSError, RuntimeError, ValueError) as exc:
+        add("Milestone 9 configuration", False, str(exc))
+    else:
+        add(
+            "Milestone 9 configuration",
+            True,
+            (
+                f"copy model={publish_settings.model}; "
+                "thumbnail=1280x720; fixed series alignment; "
+                "AI-rendered or deterministic local headline"
+            ),
+        )
+
+    try:
+        upload_settings = YouTubeUploadSettings.from_environment()
+        upload_settings.validate(require_credentials=False)
+    except (OSError, RuntimeError, ValueError) as exc:
+        add("YouTube upload configuration", False, str(exc), warning=True)
+    else:
+        add(
+            "YouTube upload configuration",
+            True,
+            (
+                f"privacy={upload_settings.privacy_status}; "
+                f"category={upload_settings.category_id}; "
+                f"chunk={upload_settings.chunk_size_bytes} bytes; resumable"
+            ),
+        )
+        google_upload_modules = all(
+            importlib.util.find_spec(name) is not None
+            for name in ("googleapiclient", "google_auth_oauthlib")
+        )
+        add(
+            "YouTube upload libraries",
+            google_upload_modules,
+            (
+                "Google YouTube upload libraries are installed."
+                if google_upload_modules
+                else "Install requirements.txt before the first real upload."
+            ),
+            warning=True,
+        )
+        add(
+            "YouTube OAuth client",
+            upload_settings.client_secrets_file.is_file(),
+            (
+                str(upload_settings.client_secrets_file)
+                if upload_settings.client_secrets_file.is_file()
+                else (
+                    "One-time setup remains: place the OAuth Desktop client JSON at "
+                    f"{upload_settings.client_secrets_file}"
+                )
+            ),
+            warning=True,
         )
 
     elevenlabs_keys = numbered_elevenlabs_keys()

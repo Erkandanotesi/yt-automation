@@ -759,6 +759,23 @@ The first story is the highest-rated story and drives the publishing package.
 
 - One approved title and thumbnail pair plus a complete metadata package exist.
 
+### Video 5 implementation report (complete, 2026-08-01)
+
+- Story 01 is verified as the highest-rated lead before any publishing output is made.
+- One cached low-reasoning editorial request produced seven scored title candidates,
+  concepts, description copy, tags, and hashtags; reruns are free while inputs match.
+- The selected striking title remains source-grounded and under 100 characters.
+- Five valid chapters start at `0:00`, remain at least ten seconds apart, and are
+  embedded verbatim in the final YouTube description with all five source URLs.
+- The final 1280x720 thumbnail follows `tech_reports_ai_headline_v1`: headline left
+  46%, story depiction right 54%, black/high-contrast layout, and a single red/yellow
+  emphasis. Its exact headline is AI-rendered into the image.
+- Final thumbnail, generation prompt, checksum, alignment contract, descriptive
+  filename, and metadata sidecar are archived in `Assets/Media/Thumbnails`.
+- `youtube_upload_manifest.json` locks the final video and thumbnail by SHA-256.
+  Offline validation uses no quota. The compatible uploader uses OAuth, resumable
+  chunks, private-by-default status, explicit confirmation, and duplicate protection.
+
 ## Milestone 10 — One-button orchestration and recovery
 
 ### Commands

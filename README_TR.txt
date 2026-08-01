@@ -537,3 +537,32 @@ Bu klasör "Video N" biçiminde olmadığı için yeni proje numarasını etkile
 - İsim, sayı, tarih ve önemli iddialar yayın öncesinde kaynağa karşı kontrol edilmelidir.
 - .env veya API anahtarları Git'e zorla eklenmemelidir.
 - Video klasörleri yalnızca "Video N" adıyla Tech News ana klasöründe oluşturulmalıdır.
+
+
+19. MILESTONE 9 VE GÜVENLİ YOUTUBE YÜKLEME
+------------------------------------------
+
+Video 5 için mevcut AI-yazılı thumbnail ile yayın paketini üretmek:
+
+.\.venv\Scripts\python.exe publish_stage.py --video 5 --background "..\Video 5\09_publish\thumbnail_ai_rendered_outlook_email_trap.png" --thumbnail-text-rendering ai_rendered --rendered-headline "OUTLOOK EMAIL TRAP"
+
+Bu komut güncel `editorial_copy.json` önbelleğini kullanır ve yeni API isteği yapmaz.
+Thumbnail metni zaten AI görselinin içindedir; FFmpeg ikinci bir metin katmanı eklemez.
+`description.txt` YouTube bölümlerini doğru biçimde doğrudan içerir.
+
+Kota kullanmadan yükleme paketini doğrulamak:
+
+.\.venv\Scripts\python.exe youtube_upload.py --video 5 --action validate
+
+İlk gerçek yüklemeden önce Google Cloud'da YouTube Data API v3 etkinleştirilir ve OAuth
+Desktop client JSON dosyası `.youtube_credentials\client_secret.json` konumuna konur.
+Klasör Git tarafından yok sayılır. İlk yetkilendirme tarayıcıyı bir kez açar; sonraki
+yüklemeler kayıtlı refresh token ile otomatik devam edebilir.
+
+Gerçek yükleme (varsayılan olarak private):
+
+.\.venv\Scripts\python.exe youtube_upload.py --video 5 --action upload --confirm-upload
+
+`youtube_upload.bat` önce ücretsiz doğrulama yapar ve UPLOAD kelimesi yazılmadan ağ
+isteği başlatmaz. Aynı video hash'i daha önce başarıyla yüklendiyse tekrar yüklemeyi
+engeller.
