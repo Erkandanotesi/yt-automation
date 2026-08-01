@@ -124,9 +124,9 @@ class EffectsSettings:
             width=int(os.getenv("EFFECTS_WIDTH", "1920")),
             height=int(os.getenv("EFFECTS_HEIGHT", "1080")),
             fps=int(os.getenv("EFFECTS_FPS", "30")),
-            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.020")),
+            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.025")),
             hero_motion_scale=float(
-                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.015")
+                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.01875")
             ),
             tv_frame_enabled=_bool_env("TV_FRAME_ENABLED", True),
             tv_frame_file=_path_env(

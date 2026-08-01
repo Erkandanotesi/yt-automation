@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from render_stage import (
     RenderSettings,
+    _cleanup_paths,
     _compose_video_track,
     _mix_audio_track,
     _render_preview,
@@ -107,6 +108,34 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
 
 
 class RenderStageTests(unittest.TestCase):
+    def test_cleanup_removes_only_render_intermediates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 5"
+            segments = root / "08_render" / "intermediates" / "visuals_1080p"
+            segments.mkdir(parents=True)
+            (segments / "segment.mp4").write_bytes(b"temporary-video")
+            final = root / "08_render" / "Video 5_final.mp4"
+            final.write_bytes(b"final-video")
+
+            result = _cleanup_paths(root, [segments], label="test")
+
+            self.assertFalse(segments.exists())
+            self.assertTrue(final.is_file())
+            self.assertEqual(result["removed_files"], 1)
+            self.assertEqual(result["removed_bytes"], len(b"temporary-video"))
+
+    def test_cleanup_rejects_paths_outside_intermediate_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 5"
+            protected = root / "08_render" / "Video 5_final.mp4"
+            protected.parent.mkdir(parents=True)
+            protected.write_bytes(b"final-video")
+
+            with self.assertRaisesRegex(RuntimeError, "outside intermediate root"):
+                _cleanup_paths(root, [protected], label="test")
+
+            self.assertTrue(protected.is_file())
+
     def test_smooth_push_in_uses_floating_point_cubic_motion(self) -> None:
         value = smooth_push_in_filter(
             width=1920,

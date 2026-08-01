@@ -210,6 +210,9 @@ inspected; press any key only when ready to close it.
 6. The review preview must be approved. Approval is tied to its SHA-256; replacing the
    preview invalidates approval automatically.
 7. The final render runs only after approval.
+   Per-image animation clips are deleted as soon as the base visual is built. Once
+   the final master and preview pass QA, the remaining `08_render/intermediates/`
+   directory is deleted. Final videos, previews, reports, and source assets remain.
 8. Publishing copy and one series-aligned AI thumbnail are generated or reused from
    cache, then the complete `09_publish/` package is saved.
 9. The launcher waits two minutes at the final upload decision and uploads by default.
@@ -220,6 +223,9 @@ The image-only animated TV overlay keeps its native alpha but defaults to 18% ov
 opacity; the additional procedural noise/dropout glitch is disabled by default. The
 static TV frame remains fully opaque and the animated overlay remains disabled during
 manual separators. `paper_sound.MP3` plays at every news-section start at `-10.0 dB`.
+Smooth archive-image zoom now uses `EFFECTS_MOTION_SCALE=1.025` and hero-image zoom
+uses `EFFECTS_HERO_MOTION_SCALE=1.01875`, a 25% increase in zoom distance while
+retaining cubic subpixel motion.
 `shutter_sound.MP3` plays at `-10.0 dB` on every third actual image event; separators and repeated
 inter-story hold frames are not counted, and a shutter cue hidden by a separator moves
 to that image's first visible frame.

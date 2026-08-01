@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -98,6 +99,7 @@ class RenderSettings:
     attribution_margin_bottom: int = 135
     page_flip_enabled: bool = True
     page_flip_duration_seconds: float = 0.7
+    cleanup_intermediates: bool = True
 
     @classmethod
     def from_environment(cls) -> "RenderSettings":
@@ -135,6 +137,7 @@ class RenderSettings:
             page_flip_duration_seconds=float(
                 os.getenv("PAGE_FLIP_DURATION_SECONDS", "0.7")
             ),
+            cleanup_intermediates=_env_bool("RENDER_CLEANUP_INTERMEDIATES", True),
         )
 
     def validate(self) -> None:
@@ -674,6 +677,43 @@ def _concat_visuals(
         "Normalize and concatenate visual intermediates",
     )
     return output
+
+
+def _cleanup_paths(
+    video_dir: Path,
+    targets: list[Path],
+    *,
+    label: str,
+) -> dict:
+    """Delete only explicitly named paths below this project's intermediate root."""
+    intermediate_root = (video_dir / "08_render" / "intermediates").resolve()
+    removed_files = 0
+    removed_bytes = 0
+    for target in targets:
+        resolved = target.resolve()
+        if not resolved.is_relative_to(intermediate_root):
+            raise RuntimeError(
+                f"Refusing render cleanup outside intermediate root: {resolved}"
+            )
+        if resolved.is_dir():
+            files = [item for item in resolved.rglob("*") if item.is_file()]
+            removed_files += len(files)
+            removed_bytes += sum(item.stat().st_size for item in files)
+            shutil.rmtree(resolved)
+        elif resolved.is_file():
+            removed_files += 1
+            removed_bytes += resolved.stat().st_size
+            resolved.unlink()
+    print(
+        f"Render cleanup ({label}): removed {removed_files} file(s), "
+        f"{removed_bytes / (1024 * 1024):.1f} MB",
+        flush=True,
+    )
+    return {
+        "label": label,
+        "removed_files": removed_files,
+        "removed_bytes": removed_bytes,
+    }
 
 
 def _normalize_separators(
@@ -1426,6 +1466,20 @@ def render_project(
     plan = build_render_plan(video_number, settings)
     segments = _render_visual_segments(video_dir, plan, settings)
     base = _concat_visuals(video_dir, segments, settings)
+    segment_cleanup = {
+        "label": "visual_segments",
+        "removed_files": 0,
+        "removed_bytes": 0,
+    }
+    if settings.cleanup_intermediates:
+        segment_cleanup = _cleanup_paths(
+            video_dir,
+            [
+                video_dir / "08_render" / "intermediates" / "visuals_1080p",
+                video_dir / "08_render" / "intermediates" / "visuals.ffconcat",
+            ],
+            label="visual segments after base animation",
+        )
     separators = _normalize_separators(video_dir, plan, settings)
     video_track = _compose_video_track(video_dir, plan, base, separators, settings)
     audio_track = _mix_audio_track(video_dir, plan, separators, settings)
@@ -1462,6 +1516,8 @@ def render_project(
             "base_visual": str(base),
             "composited_video": str(video_track),
             "final_mix": str(audio_track),
+            "cleanup_enabled": settings.cleanup_intermediates,
+            "segment_cleanup": segment_cleanup,
         },
     }
     report["quality"] = {
@@ -1489,6 +1545,15 @@ def render_project(
     if report["quality"]["status"] != "passed":
         raise RuntimeError(f"Milestone 8 QA failed: {report}")
     report["news_archive"] = NewsArchive().finalize_project(video_number)
+    if settings.cleanup_intermediates:
+        report["intermediates"]["final_cleanup"] = _cleanup_paths(
+            video_dir,
+            [video_dir / "08_render" / "intermediates"],
+            label="remaining intermediates after final QA",
+        )
+        report["intermediates"]["retained"] = False
+    else:
+        report["intermediates"]["retained"] = True
     atomic_write_json(report_path, report)
     state["stages"][STAGE_NAME]["status"] = "RENDER_READY"
     state["stages"][STAGE_NAME]["updated_at_utc"] = utc_now()
