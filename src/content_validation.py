@@ -64,6 +64,21 @@ def _numeric_tokens(text: str) -> set[str]:
     )
 
 
+def _number_is_supported(narration_token: str, source_tokens: set[str]) -> bool:
+    narration_normalized = narration_token.casefold()
+    source_normalized = {token.casefold() for token in source_tokens}
+    if narration_normalized in source_normalized:
+        return True
+    # Omitting a source currency symbol does not invent a new number. Preserve
+    # strictness in the other direction so changing €22 to $22 is still rejected.
+    if narration_normalized[:1].isdigit():
+        return any(
+            token.lstrip("$€£") == narration_normalized
+            for token in source_normalized
+        )
+    return False
+
+
 def _direct_quotes(text: str) -> list[str]:
     matches = re.findall(r'[“"]([^”"]{4,})[”"]', text)
     return [re.sub(r"\s+", " ", item).strip() for item in matches]
@@ -124,11 +139,11 @@ def validate_narration(
         raise ContentValidationError("Narration contains stage directions.")
 
     source_searchable = _searchable(source_text)
-    source_numbers = {token.casefold() for token in _numeric_tokens(source_text)}
+    source_numbers = _numeric_tokens(source_text)
     unsupported_numbers = sorted(
         token
         for token in _numeric_tokens(narration)
-        if token.casefold() not in source_numbers
+        if not _number_is_supported(token, source_numbers)
     )
     if unsupported_numbers:
         raise ContentValidationError(

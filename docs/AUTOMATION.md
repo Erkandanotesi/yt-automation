@@ -193,8 +193,19 @@ second process cannot edit the same project. Ctrl+C preserves completed outputs 
 removes its own lock. Use `--recover-stale-lock` only when the recorded process has
 stopped.
 
-Stage events are appended to `Video N/orchestration/events.jsonl`; full subprocess
-output is stored under `Video N/orchestration/logs/`.
+Stage events are appended to `Video N/orchestration/events.jsonl`. Every subprocess
+log under `Video N/orchestration/logs/` includes its command, interpreter, working
+directory, start/finish timestamps, complete child output, exit code, duration, and a
+project recovery snapshot on failure. Orchestrated child commands also emit their full
+Python traceback to this log while the main console keeps only the concise error line.
+
+Media-selector output is treated as a recommendation rather than trusted routing data.
+Missing windows, foreign asset IDs, inconsistent relevance fields, and ungrounded
+online entities are repaired deterministically from that window's own shortlist and
+the complete story context. These recoverable model mistakes do not abort production.
+Each raw per-story selector response is saved before validation under
+`05_visuals/selector_cache/`. A matching fingerprint lets a resumed run reuse that
+response without paying for the same selector request again.
 
 ## Environment-file health
 

@@ -13,6 +13,7 @@ from news_studio import (
     FLOW_STAGES,
     ProgressDisplay,
     ProjectLock,
+    _run_subprocess,
     _preview_status,
     approve_preview,
     interactive,
@@ -33,6 +34,42 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_failed_stage_log_contains_traceback_command_and_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 8"
+            root.mkdir()
+            fixture = Path(directory) / "failing_stage.py"
+            fixture.write_text(
+                "import os, traceback\n"
+                "try:\n"
+                "    raise RuntimeError('fixture failure')\n"
+                "except Exception as exc:\n"
+                "    print(f'[FIXTURE ERROR] {exc}')\n"
+                "    if os.getenv('NEWS_STUDIO_DETAILED_ERRORS') == '1':\n"
+                "        traceback.print_exc()\n"
+                "    raise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            with (
+                patch("news_studio.source_file", return_value=fixture),
+                patch(
+                    "news_studio.collect_project_status",
+                    return_value={"next_stage": "fixture", "locked": True},
+                ),
+                redirect_stdout(io.StringIO()),
+                self.assertRaisesRegex(RuntimeError, "Stage fixture failed"),
+            ):
+                _run_subprocess(root, "fixture", ["failing_stage.py"])
+
+            log = next((root / "orchestration" / "logs").glob("*_fixture.log"))
+            detail = log.read_text(encoding="utf-8")
+            self.assertIn("NEWS STUDIO DETAILED STAGE LOG", detail)
+            self.assertIn("Command", detail)
+            self.assertIn("Traceback (most recent call last)", detail)
+            self.assertIn("Exit code    : 1", detail)
+            self.assertIn("RECOVERY SNAPSHOT", detail)
+            self.assertIn('"next_stage": "fixture"', detail)
+
     def test_compact_preflight_hides_pass_detail_and_keeps_warning(self) -> None:
         payload = {
             "checks": [

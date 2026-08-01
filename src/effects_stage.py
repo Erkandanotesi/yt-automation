@@ -27,6 +27,7 @@ from file_utils import (  # noqa: E402
     atomic_write_json,
     atomic_write_text,
     json_fingerprint,
+    report_cli_error,
     sha256_file,
 )
 from file_locations import (  # noqa: E402
@@ -1505,7 +1506,7 @@ def main() -> int:
         )
         return 0
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        print(f"[ERROR] {exc}", file=sys.stderr)
+        report_cli_error("EFFECTS", exc)
         return 1
 
 

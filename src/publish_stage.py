@@ -34,6 +34,7 @@ from file_utils import (  # noqa: E402
     atomic_write_json,
     atomic_write_text,
     json_fingerprint,
+    report_cli_error,
     sha256_file,
 )
 from file_locations import PROJECTS_ROOT, project_dir, project_name  # noqa: E402
@@ -1199,7 +1200,7 @@ def main() -> int:
             print("Milestone 9: PUBLISH_READY")
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"[PUBLISH ERROR] {exc}", file=sys.stderr)
+        report_cli_error("PUBLISH", exc)
         return 1
 
 

@@ -27,7 +27,12 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 SCRIPT_DIR = SOURCE_ROOT.parent
 load_dotenv(SCRIPT_DIR / ".env")
 
-from file_utils import atomic_write_json, json_fingerprint, sha256_file  # noqa: E402
+from file_utils import (  # noqa: E402
+    atomic_write_json,
+    json_fingerprint,
+    report_cli_error,
+    sha256_file,
+)
 from media_index import (  # noqa: E402
     MediaIndexSettings,
     load_media_index,
@@ -40,6 +45,7 @@ from separator_policy import require_separator_checkpoint  # noqa: E402
 
 
 MEDIA_PLAN_SCHEMA_VERSION = 1
+SELECTOR_CACHE_SCHEMA_VERSION = 1
 STAGE_NAME = "archive_visuals"
 
 
@@ -155,18 +161,11 @@ class WindowDecision(BaseModel):
 
     @model_validator(mode="after")
     def validate_relevance_outcome(self) -> "WindowDecision":
-        if self.relevance_status == "relevant" and not self.selected_asset_id:
-            raise ValueError("A relevant decision requires selected_asset_id.")
         if self.relevance_status == "images_are_irrelevant":
-            if self.selected_asset_id is not None:
-                raise ValueError(
-                    "An irrelevant-candidates decision cannot select a local asset."
-                )
-            if not self.online_search_query.strip() or not self.required_entity.strip():
-                raise ValueError(
-                    "An irrelevant-candidates decision requires an online query "
-                    "and exact required entity."
-                )
+            # Structured model output can contain internally inconsistent fields.
+            # Normalize them here; deterministic story/window grounding below will
+            # repair missing query/entity values without another provider request.
+            self.selected_asset_id = None
         return self
 
 
@@ -192,6 +191,48 @@ def load_json(path: Path, label: str) -> dict:
     if not isinstance(value, dict):
         raise RuntimeError(f"{label} must contain a JSON object: {path}")
     return value
+
+
+def _selector_cache_path(video_dir: Path, story_id: str) -> Path:
+    safe_story_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", story_id)
+    return video_dir / "05_visuals" / "selector_cache" / f"{safe_story_id}.json"
+
+
+def _load_selector_cache(
+    path: Path,
+    fingerprint: str,
+) -> StoryMediaDecisions | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = load_json(path, "Media selector cache")
+        if (
+            payload.get("schema_version") != SELECTOR_CACHE_SCHEMA_VERSION
+            or payload.get("input_fingerprint") != fingerprint
+        ):
+            return None
+        return StoryMediaDecisions.model_validate(payload.get("decisions", {}))
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _save_selector_cache(
+    path: Path,
+    *,
+    story_id: str,
+    fingerprint: str,
+    decisions: StoryMediaDecisions,
+) -> None:
+    atomic_write_json(
+        path,
+        {
+            "schema_version": SELECTOR_CACHE_SCHEMA_VERSION,
+            "story_id": story_id,
+            "input_fingerprint": fingerprint,
+            "saved_at_utc": utc_now(),
+            "decisions": decisions.model_dump(mode="json"),
+        },
+    )
 
 
 def _require_inputs(video_dir: Path) -> tuple[dict, dict, dict]:
@@ -856,14 +897,25 @@ def _validate_decisions(
     windows: list[dict],
     story: dict,
 ) -> dict[str, WindowDecision]:
-    expected = [window["window_id"] for window in windows]
-    received = [decision.window_id for decision in decisions.decisions]
-    if received != expected:
-        raise RuntimeError(
-            "Media selector must return every window exactly once and in order."
-        )
+    supplied: dict[str, WindowDecision] = {}
+    for decision in decisions.decisions:
+        supplied.setdefault(decision.window_id, decision)
     result = {}
-    for decision, window in zip(decisions.decisions, windows, strict=True):
+    for window in windows:
+        decision = supplied.get(window["window_id"])
+        if decision is None:
+            chosen = window["shortlist"][0]
+            decision = WindowDecision(
+                window_id=window["window_id"],
+                relevance_status="relevant",
+                selected_asset_id=chosen["asset_id"],
+                confidence=0.1,
+                selection_reason=(
+                    "The AI selector omitted this window; the strongest grounded "
+                    "local candidate was selected automatically."
+                ),
+                alternative_asset_ids=[],
+            )
         allowed = {
             candidate["asset_id"]
             for candidate in window["shortlist"]
@@ -872,8 +924,10 @@ def _validate_decisions(
             decision.relevance_status == "relevant"
             and decision.selected_asset_id not in allowed
         ):
-            raise RuntimeError(
-                f"Selector returned an asset outside {window['window_id']}'s shortlist."
+            decision = _fallback_to_local_candidate(
+                decision,
+                window,
+                "The AI returned an asset from outside this window's shortlist.",
             )
         decision.alternative_asset_ids = [
             asset_id
@@ -902,8 +956,8 @@ def _fallback_to_local_candidate(
         selected_asset_id=chosen["asset_id"],
         confidence=0.15,
         selection_reason=(
-            "AI rejected the local candidates, but Wikimedia could not provide "
-            f"a safe exact-entity replacement. {reason}"
+            "Automatic recovery selected the strongest valid candidate from this "
+            f"window's local shortlist. {reason}"
         )[:700],
         alternative_asset_ids=alternatives,
     )
@@ -1365,6 +1419,8 @@ def run_media_selection(
 
     wikimedia_download_count = 0
     wikimedia_search_count = 0
+    selector_cache_hits = 0
+    selector_requests_this_run = 0
     for story in selected_timing:
         storyboard_story = storyboard_by_id.get(story["story_id"])
         if storyboard_story is None:
@@ -1396,7 +1452,24 @@ def run_media_selection(
         if not force and _cached_story_current(cached, fingerprint):
             continue
 
-        decisions = selection_function(story, windows, settings)
+        selector_cache = _selector_cache_path(video_dir, story["story_id"])
+        decisions = (
+            None
+            if force or offline
+            else _load_selector_cache(selector_cache, fingerprint)
+        )
+        if decisions is None:
+            decisions = selection_function(story, windows, settings)
+            if not offline:
+                _save_selector_cache(
+                    selector_cache,
+                    story_id=story["story_id"],
+                    fingerprint=fingerprint,
+                    decisions=decisions,
+                )
+                selector_requests_this_run += 1
+        else:
+            selector_cache_hits += 1
         decision_by_window = _validate_decisions(decisions, windows, story)
         (
             decision_by_window,
@@ -1540,6 +1613,8 @@ def run_media_selection(
                 "selection_mode": (
                     "copied" if settings.copy_selected_assets else "immutable_reference"
                 ),
+                "selector_cache_hits": selector_cache_hits,
+                "selector_requests_this_run": selector_requests_this_run,
                 "stories": ordered_partial,
                 "quality": {"status": "partial"},
             },
@@ -1568,6 +1643,8 @@ def run_media_selection(
         ),
         "wikimedia_download_count": wikimedia_download_count,
         "wikimedia_search_count": wikimedia_search_count,
+        "selector_cache_hits": selector_cache_hits,
+        "selector_requests_this_run": selector_requests_this_run,
         "story_count": len(timing_stories),
         "planned_story_count": len(ordered),
         "archive_window_count": sum(
@@ -1678,7 +1755,7 @@ def main() -> int:
         )
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"[MEDIA SELECTION ERROR] {exc}", file=sys.stderr)
+        report_cli_error("MEDIA SELECTION", exc)
         return 1
 
 

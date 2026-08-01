@@ -71,6 +71,38 @@ class ContentValidationTests(unittest.TestCase):
                 source_text=source,
             )
 
+    def test_unsigned_narration_number_matches_source_currency_amount(self) -> None:
+        narration, source = valid_material()
+        narration = narration.replace("customers.", "customers with 22 billion records.", 1)
+        source += " The filing reports a $22 billion amount."
+
+        result = validate_narration(
+            title="Supported currency amount",
+            narration=narration,
+            source_text=source,
+            factual_review={
+                "names_entities_checked": ["OpenAI"],
+                "numbers_dates_checked": [],
+                "quotes_checked": [],
+                "attributions_preserved": [],
+                "unsupported_claims_removed": [],
+            },
+        )
+
+        self.assertEqual(result["status"], "passed")
+
+    def test_wrong_currency_symbol_remains_rejected(self) -> None:
+        narration, source = valid_material()
+        narration = narration.replace("customers.", "customers with $22 billion records.", 1)
+        source += " The filing reports a €22 billion amount."
+
+        with self.assertRaisesRegex(ContentValidationError, "numbers absent"):
+            validate_narration(
+                title="Wrong currency amount",
+                narration=narration,
+                source_text=source,
+            )
+
     def test_fabricated_direct_quote_is_rejected(self) -> None:
         narration, source = valid_material()
         words = narration.split()

@@ -30,6 +30,7 @@ load_dotenv(SCRIPT_DIR / ".env")
 from file_utils import (  # noqa: E402
     atomic_write_bytes,
     atomic_write_json,
+    report_cli_error,
     sha256_bytes,
 )
 from media_index import normalize_search_text  # noqa: E402
@@ -627,7 +628,7 @@ def main() -> int:
                 print(f"Metadata: {output['download']['sidecar']}")
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"[ONLINE MEDIA ERROR] {exc}", file=sys.stderr)
+        report_cli_error("ONLINE MEDIA", exc)
         return 1
 
 

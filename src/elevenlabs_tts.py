@@ -25,6 +25,7 @@ from file_utils import (
     atomic_write_bytes,
     atomic_write_json,
     json_fingerprint,
+    report_cli_error,
     sha256_file,
     sha256_text,
     stable_story_id,
@@ -1193,7 +1194,8 @@ def main() -> int:
         return synthesize_video(args.video, args.overwrite)
     except Exception as exc:  # noqa: BLE001
         if args.compact and log_file is not None:
-            print(f"\n[TTS ERROR] {exc}", file=sys.stderr)
+            print(file=sys.stderr)
+            report_cli_error("TTS", exc)
             log_file.write(
                 f"{utc_now()} | ERROR | {type(exc).__name__}: {exc}\n"
             )

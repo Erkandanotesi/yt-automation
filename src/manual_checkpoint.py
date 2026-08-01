@@ -26,6 +26,7 @@ load_dotenv(SCRIPT_DIR / ".env")
 from file_utils import (  # noqa: E402
     atomic_write_json,
     json_fingerprint,
+    report_cli_error,
     sha256_file,
 )
 from file_locations import project_dir, project_name  # noqa: E402
@@ -904,7 +905,7 @@ def main() -> int:
         result = prompt_checkpoint(args.video)
         return 0 if result == "READY" else 2
     except Exception as exc:  # noqa: BLE001
-        print(f"[CHECKPOINT ERROR] {exc}", file=sys.stderr)
+        report_cli_error("CHECKPOINT", exc)
         return 1
 
 

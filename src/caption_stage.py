@@ -25,6 +25,7 @@ from file_utils import (  # noqa: E402
     atomic_write_json,
     atomic_write_text,
     json_fingerprint,
+    report_cli_error,
     sha256_file,
     sha256_text,
 )
@@ -752,7 +753,7 @@ def main() -> int:
         )
         return 0 if success else 1
     except Exception as exc:  # noqa: BLE001
-        print(f"[CAPTION ERROR] {exc}", file=sys.stderr)
+        report_cli_error("CAPTION", exc)
         return 1
 
 

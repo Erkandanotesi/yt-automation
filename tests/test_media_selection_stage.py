@@ -13,6 +13,8 @@ from media_selection_stage import (
     MediaSelectionSettings,
     StoryMediaDecisions,
     WindowDecision,
+    _load_selector_cache,
+    _save_selector_cache,
     _validate_decisions,
     build_archive_windows,
     coverage_quality,
@@ -135,6 +137,90 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_raw_selector_decisions_are_cached_before_downstream_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selector_cache" / "story.json"
+            decisions = StoryMediaDecisions(
+                decisions=[
+                    WindowDecision(
+                        window_id="story_01_archive_001",
+                        relevance_status="relevant",
+                        selected_asset_id="foreign-asset",
+                        confidence=0.7,
+                        selection_reason="This raw decision still needs local validation.",
+                    )
+                ]
+            )
+
+            _save_selector_cache(
+                path,
+                story_id="story_1",
+                fingerprint="fingerprint-a",
+                decisions=decisions,
+            )
+
+            cached = _load_selector_cache(path, "fingerprint-a")
+            self.assertIsNotNone(cached)
+            self.assertEqual(cached.decisions[0].selected_asset_id, "foreign-asset")
+            self.assertIsNone(_load_selector_cache(path, "fingerprint-b"))
+
+    def test_asset_outside_window_shortlist_is_repaired_locally(self) -> None:
+        window = {
+            "window_id": "story_01_archive_013",
+            "text": "The security team continued its investigation.",
+            "entities": [],
+            "scene_intent": "neutral_technology_context",
+            "shortlist": [
+                {
+                    "asset_id": "safe-local",
+                    "sha256": "c" * 64,
+                    "local_score": 1.0,
+                }
+            ],
+        }
+        decisions = StoryMediaDecisions(
+            decisions=[
+                WindowDecision(
+                    window_id=window["window_id"],
+                    relevance_status="relevant",
+                    selected_asset_id="asset-from-another-window",
+                    confidence=0.8,
+                    selection_reason="The model selected a misplaced candidate asset.",
+                )
+            ]
+        )
+
+        validated = _validate_decisions(decisions, [window], {"title": "Security"})
+
+        repaired = validated[window["window_id"]]
+        self.assertEqual(repaired.selected_asset_id, "safe-local")
+        self.assertEqual(repaired.confidence, 0.15)
+
+    def test_omitted_window_is_filled_from_its_own_shortlist(self) -> None:
+        window = {
+            "window_id": "story_01_archive_014",
+            "text": "Engineers continued working on a fix.",
+            "entities": [],
+            "scene_intent": "neutral_technology_context",
+            "shortlist": [
+                {
+                    "asset_id": "safe-local",
+                    "sha256": "d" * 64,
+                    "local_score": 1.0,
+                }
+            ],
+        }
+
+        validated = _validate_decisions(
+            StoryMediaDecisions(decisions=[]),
+            [window],
+            {"title": "Service disruption"},
+        )
+
+        self.assertEqual(
+            validated[window["window_id"]].selected_asset_id,
+            "safe-local",
+        )
     def test_story_title_entity_repairs_split_window_online_fallback(self) -> None:
         window = {
             "window_id": "story_03_archive_003",

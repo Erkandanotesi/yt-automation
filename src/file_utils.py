@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
+import traceback
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -13,6 +15,13 @@ def _json_default(value: Any) -> str:
     if isinstance(value, Path):
         return str(value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def report_cli_error(label: str, exc: BaseException) -> None:
+    """Keep the terminal concise while providing tracebacks to orchestrated logs."""
+    print(f"[{label} ERROR] {exc}", file=sys.stderr)
+    if os.getenv("NEWS_STUDIO_DETAILED_ERRORS", "").strip() == "1":
+        traceback.print_exc(file=sys.stderr)
 
 
 def sha256_bytes(data: bytes) -> str:

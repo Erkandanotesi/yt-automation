@@ -24,7 +24,7 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 SCRIPT_DIR = SOURCE_ROOT.parent
 load_dotenv(SCRIPT_DIR / ".env")
 
-from file_utils import atomic_write_json, sha256_file  # noqa: E402
+from file_utils import atomic_write_json, report_cli_error, sha256_file  # noqa: E402
 from file_locations import YOUTUBE_CREDENTIALS_ROOT, project_dir  # noqa: E402
 
 
@@ -425,7 +425,7 @@ def main() -> int:
             print(f"YouTube upload complete: {result['watch_url']}")
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"[YOUTUBE UPLOAD ERROR] {exc}", file=sys.stderr)
+        report_cli_error("YOUTUBE UPLOAD", exc)
         return 1
 
 

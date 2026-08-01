@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -688,21 +689,56 @@ def _run_subprocess(
 ) -> None:
     directory = video_dir / "orchestration" / "logs"
     directory.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     log_path = directory / f"{stamp}_{stage}.log"
     command = [sys.executable, str(source_file(arguments[0])), *arguments[1:]]
     _event(video_dir, {"type": "stage_started", "stage": stage, "command": command})
     started = time.monotonic()
+    started_utc = utc_now()
+    child_environment = os.environ.copy()
+    child_environment["NEWS_STUDIO_DETAILED_ERRORS"] = "1"
     with log_path.open("w", encoding="utf-8") as log:
-        process = subprocess.Popen(
-            command,
-            cwd=AUTOMATION_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        log.write("NEWS STUDIO DETAILED STAGE LOG\n")
+        log.write("=" * 76 + "\n")
+        log.write(f"Stage       : {stage}\n")
+        log.write(f"Video       : {video_dir.name}\n")
+        log.write(f"Project     : {video_dir}\n")
+        log.write(f"Started UTC : {started_utc}\n")
+        log.write(f"Working dir : {AUTOMATION_ROOT}\n")
+        log.write(f"Python      : {sys.executable}\n")
+        log.write(f"Command     : {subprocess.list2cmdline(command)}\n")
+        log.write("-" * 76 + "\n")
+        log.flush()
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=AUTOMATION_ROOT,
+                env=child_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.write("\nPROCESS LAUNCH TRACEBACK\n")
+            log.write(traceback.format_exc())
+            log.write(f"\nFinished UTC : {utc_now()}\n")
+            log.write("Exit code    : process did not start\n")
+            log.flush()
+            _event(
+                video_dir,
+                {
+                    "type": "stage_failed",
+                    "stage": stage,
+                    "exit_code": None,
+                    "log_file": str(log_path),
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            raise RuntimeError(
+                f"Stage {stage} could not start. Log: {log_path}"
+            ) from exc
         assert process.stdout is not None
         try:
             for line in process.stdout:
@@ -718,7 +754,22 @@ def _run_subprocess(
             process.wait(timeout=10)
             _event(video_dir, {"type": "stage_interrupted", "stage": stage})
             raise
-    elapsed = round(time.monotonic() - started, 3)
+        finally:
+            process.stdout.close()
+        elapsed = round(time.monotonic() - started, 3)
+        log.write("\n" + "-" * 76 + "\n")
+        log.write(f"Finished UTC : {utc_now()}\n")
+        log.write(f"Exit code    : {return_code}\n")
+        log.write(f"Elapsed      : {elapsed:.3f} seconds\n")
+        if return_code != 0:
+            try:
+                recovery = collect_project_status(parse_video_number(video_dir.name))
+            except Exception as exc:  # noqa: BLE001
+                recovery = {"status_error": f"{type(exc).__name__}: {exc}"}
+            log.write("\nRECOVERY SNAPSHOT\n")
+            log.write(json.dumps(recovery, ensure_ascii=False, indent=2))
+            log.write("\n")
+        log.flush()
     if return_code != 0:
         _event(
             video_dir,

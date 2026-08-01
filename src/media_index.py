@@ -24,7 +24,13 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 SCRIPT_DIR = SOURCE_ROOT.parent
 load_dotenv(SCRIPT_DIR / ".env")
 
-from file_utils import atomic_write_json, json_fingerprint, sha256_file, sha256_text  # noqa: E402
+from file_utils import (  # noqa: E402
+    atomic_write_json,
+    json_fingerprint,
+    report_cli_error,
+    sha256_file,
+    sha256_text,
+)
 from file_locations import (  # noqa: E402
     AUTOMATION_ROOT,
     MEDIA_INDEX_FILE,
@@ -692,7 +698,7 @@ def main() -> int:
                 print(f"  {key}: {value}")
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"[MEDIA INDEX ERROR] {exc}", file=sys.stderr)
+        report_cli_error("MEDIA INDEX", exc)
         return 1
 
 

@@ -36,6 +36,7 @@ from elevenlabs_tts import (  # noqa: E402
 from file_utils import (  # noqa: E402
     atomic_write_json,
     atomic_write_text,
+    report_cli_error,
     sha256_file,
     sha256_text,
 )
@@ -641,7 +642,7 @@ def main() -> int:
         )
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"[ALIGNMENT ERROR] {exc}", file=sys.stderr)
+        report_cli_error("ALIGNMENT", exc)
         return 1
 
 

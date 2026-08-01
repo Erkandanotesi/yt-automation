@@ -33,6 +33,7 @@ from file_utils import (  # noqa: E402
     atomic_write_bytes,
     atomic_write_json,
     json_fingerprint,
+    report_cli_error,
     sha256_bytes,
     sha256_file,
     sha256_text,
@@ -1776,7 +1777,7 @@ def main() -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(f"[STORYBOARD ERROR] {exc}", file=sys.stderr)
+        report_cli_error("STORYBOARD", exc)
         return 1
 
 
