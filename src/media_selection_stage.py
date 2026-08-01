@@ -658,7 +658,9 @@ Rules:
 - If every candidate is unrelated, merely shares a broad company/category, or would
   visually misrepresent the spoken claim, return relevance_status exactly as
   `images_are_irrelevant`, selected_asset_id as null, and supply a concise Wikimedia
-  search query plus one exact required_entity visible in the spoken text/entities.
+  search query plus one exact required_entity visible in the story title, spoken text,
+  or supplied entities. Reuse the story's main entity when a short window uses a
+  pronoun or splits a sentence across windows.
 - Never force a local selection after deciding the images are irrelevant.
 - For a normal choice, return relevance_status=`relevant` and choose only an asset_id
   listed in that window's candidates.
@@ -763,9 +765,96 @@ def local_story_selector(
     return StoryMediaDecisions(decisions=decisions)
 
 
+def _story_entities(story: dict) -> list[str]:
+    candidates: list[str] = []
+    for values in (story.get("named_entities") or {}).values():
+        if isinstance(values, list):
+            candidates.extend(str(value).strip() for value in values)
+    for beat in story.get("visual_beats", []):
+        for values in (beat.get("named_entities") or {}).values():
+            if isinstance(values, list):
+                candidates.extend(str(value).strip() for value in values)
+    ignored = {
+        "a",
+        "an",
+        "it",
+        "its",
+        "the",
+        "this",
+        "thursday",
+        "friday",
+        "monday",
+        "saturday",
+        "sunday",
+        "tuesday",
+        "wednesday",
+    }
+    return list(
+        dict.fromkeys(
+            value
+            for value in candidates
+            if normalize_search_text(value) not in ignored
+            and len(normalize_search_text(value)) >= 3
+        )
+    )
+
+
+def _ground_irrelevant_decision(
+    decision: WindowDecision,
+    window: dict,
+    story: dict,
+) -> WindowDecision:
+    proposed = normalize_search_text(decision.required_entity)
+    title = str(story.get("title", ""))
+    visible_scope = normalize_search_text(
+        " ".join([title, window.get("text", ""), *window.get("entities", [])])
+    )
+    if proposed and proposed in visible_scope:
+        return decision
+
+    entities = [*window.get("entities", []), *_story_entities(story)]
+    title_normalized = normalize_search_text(title)
+    proposed_tokens = set(proposed.split())
+    query_tokens = set(normalize_search_text(decision.online_search_query).split())
+    ranked = []
+    for index, entity in enumerate(dict.fromkeys(entities)):
+        normalized = normalize_search_text(entity)
+        if not normalized:
+            continue
+        tokens = set(normalized.split())
+        overlap = len(tokens & (proposed_tokens | query_tokens))
+        ranked.append(
+            (
+                normalized in title_normalized,
+                overlap,
+                len(tokens) > 1,
+                -index,
+                entity,
+            )
+        )
+    if ranked:
+        grounded = max(ranked)[-1]
+        decision.required_entity = grounded
+        decision.online_search_query = (
+            f"{grounded} {window.get('scene_intent', 'technology news')}"
+        )[:180]
+        decision.selection_reason = (
+            decision.selection_reason.rstrip()
+            + " Required entity was grounded locally to the story context."
+        )[:700]
+        return decision
+
+    return _fallback_to_local_candidate(
+        decision,
+        window,
+        "The suggested online entity was not grounded in the story context.",
+    )
+
+
 def _validate_decisions(
     decisions: StoryMediaDecisions,
     windows: list[dict],
+    story: dict,
 ) -> dict[str, WindowDecision]:
     expected = [window["window_id"] for window in windows]
     received = [decision.window_id for decision in decisions.decisions]
@@ -792,19 +881,7 @@ def _validate_decisions(
             if asset_id in allowed
         ][:3]
         if decision.relevance_status == "images_are_irrelevant":
-            allowed_entity_text = normalize_search_text(
-                " ".join(
-                    [
-                        window.get("text", ""),
-                        *window.get("entities", []),
-                    ]
-                )
-            )
-            if normalize_search_text(decision.required_entity) not in allowed_entity_text:
-                raise RuntimeError(
-                    f"Selector returned an ungrounded required entity for "
-                    f"{window['window_id']}."
-                )
+            decision = _ground_irrelevant_decision(decision, window, story)
         result[decision.window_id] = decision
     return result
 
@@ -1320,7 +1397,7 @@ def run_media_selection(
             continue
 
         decisions = selection_function(story, windows, settings)
-        decision_by_window = _validate_decisions(decisions, windows)
+        decision_by_window = _validate_decisions(decisions, windows, story)
         (
             decision_by_window,
             media_index,

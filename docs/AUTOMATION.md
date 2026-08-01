@@ -105,7 +105,12 @@ Before a pulled page reaches the archive or summary model, it must pass the sour
 quality gate. The gate rejects HTTP errors, unsupported content types, access-denied
 and CAPTCHA pages, title/source mismatches, unusually short or sentence-poor text,
 low lexical diversity, and repeated boilerplate. If the full article fails, the RSS
-body is allowed only when it independently passes the same checks.
+body is allowed only when it independently passes the same checks. Long aggregator
+headlines receive limited paraphrase tolerance when at least two significant title
+terms remain grounded in the article; short titles retain the stricter threshold.
+Ungrounded items in the model's audit metadata are discarded locally instead of
+spending another summary request when the narration itself passes its number and quote
+checks.
 Rejected sources never occupy a video slot. The news stage immediately tries the
 next ranked RSS candidate from a 15-story reserve prepared in the same ranking call.
 If the feeds still cannot supply the requested number of valid articles, the project
@@ -114,6 +119,11 @@ is marked incomplete; broken material is never used merely to fill the quota.
 Accepted source prose is normalized into short article paragraphs before it is saved
 as `Haberler/*-orijinal.txt`. Whitespace-only formatting does not change duplicate
 identity because the archive hashes normalized content.
+
+Archive-image decisions use each window plus the complete story title and entity
+context. If an AI-generated Wikimedia entity is worded as an ungrounded paraphrase, it
+is repaired locally to a story entity. If no grounded entity exists, the window uses a
+low-confidence local fallback instead of failing the complete production run.
 
 Only folders named exactly `Video N` participate in project numbering.
 

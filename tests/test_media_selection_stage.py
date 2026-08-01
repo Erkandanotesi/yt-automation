@@ -11,7 +11,9 @@ from file_utils import sha256_file
 from media_index import MediaIndexSettings, MediaRoot
 from media_selection_stage import (
     MediaSelectionSettings,
+    StoryMediaDecisions,
     WindowDecision,
+    _validate_decisions,
     build_archive_windows,
     coverage_quality,
     resolve_wikimedia_fallbacks,
@@ -133,6 +135,85 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_story_title_entity_repairs_split_window_online_fallback(self) -> None:
+        window = {
+            "window_id": "story_03_archive_003",
+            "text": "service safely. The bank detected attempted fraud on some accounts.",
+            "entities": [],
+            "scene_intent": "neutral_technology_context",
+            "shortlist": [
+                {
+                    "asset_id": "generic-tech",
+                    "sha256": "a" * 64,
+                    "local_score": 1.0,
+                }
+            ],
+        }
+        story = {
+            "title": "Charities remain locked out of CAF Bank online accounts",
+            "named_entities": {"companies_organizations": ["CAF Bank"]},
+            "visual_beats": [],
+        }
+        decisions = StoryMediaDecisions(
+            decisions=[
+                WindowDecision(
+                    window_id=window["window_id"],
+                    relevance_status="images_are_irrelevant",
+                    selected_asset_id=None,
+                    confidence=0.8,
+                    selection_reason="The local candidates do not show this bank outage.",
+                    online_search_query="CAF banking service outage",
+                    required_entity="CAF banking service",
+                )
+            ]
+        )
+
+        validated = _validate_decisions(decisions, [window], story)
+
+        repaired = validated[window["window_id"]]
+        self.assertEqual(repaired.relevance_status, "images_are_irrelevant")
+        self.assertEqual(repaired.required_entity, "CAF Bank")
+        self.assertIn("CAF Bank", repaired.online_search_query)
+
+    def test_ungrounded_online_entity_without_story_entity_uses_local_fallback(self) -> None:
+        window = {
+            "window_id": "story_01_archive_001",
+            "text": "The service remains unavailable while engineers investigate.",
+            "entities": [],
+            "scene_intent": "neutral_technology_context",
+            "shortlist": [
+                {
+                    "asset_id": "generic-tech",
+                    "sha256": "b" * 64,
+                    "local_score": 1.0,
+                }
+            ],
+        }
+        decisions = StoryMediaDecisions(
+            decisions=[
+                WindowDecision(
+                    window_id=window["window_id"],
+                    relevance_status="images_are_irrelevant",
+                    selected_asset_id=None,
+                    confidence=0.7,
+                    selection_reason="No local candidate depicts the exact outage.",
+                    online_search_query="Invented Company outage",
+                    required_entity="Invented Company",
+                )
+            ]
+        )
+
+        validated = _validate_decisions(
+            decisions,
+            [window],
+            {"title": "Service outage"},
+        )
+
+        repaired = validated[window["window_id"]]
+        self.assertEqual(repaired.relevance_status, "relevant")
+        self.assertEqual(repaired.selected_asset_id, "generic-tech")
+        self.assertEqual(repaired.confidence, 0.15)
+
     def test_existing_wikimedia_asset_is_reused_without_network(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -69,20 +69,21 @@ def _direct_quotes(text: str) -> list[str]:
     return [re.sub(r"\s+", " ", item).strip() for item in matches]
 
 
-def _validate_evidence_list(
-    label: str,
+def _ground_evidence_list(
     values: list[str],
     source_searchable: str,
-) -> None:
+) -> tuple[list[str], list[str]]:
     normalized_source = _evidence_searchable(source_searchable)
+    grounded: list[str] = []
+    rejected: list[str] = []
     for value in values:
         cleaned = re.sub(r"\s+", " ", value).strip()
         normalized_value = _evidence_searchable(cleaned)
         if normalized_value and normalized_value not in normalized_source:
-            raise ContentValidationError(
-                f"Factual evidence item is not present in the source "
-                f"({label}): {cleaned}"
-            )
+            rejected.append(cleaned)
+        elif cleaned:
+            grounded.append(cleaned)
+    return grounded, rejected
 
 
 def validate_narration(
@@ -147,7 +148,8 @@ def validate_narration(
             + unsupported_quotes[0]
         )
 
-    review = factual_review or {}
+    review = dict(factual_review or {})
+    discarded_review_items: dict[str, list[str]] = {}
     for key in (
         "names_entities_checked",
         "numbers_dates_checked",
@@ -157,7 +159,10 @@ def validate_narration(
         values = review.get(key, [])
         if not isinstance(values, list):
             raise ContentValidationError(f"Factual review field {key} must be a list.")
-        _validate_evidence_list(key, values, source_searchable)
+        grounded, rejected = _ground_evidence_list(values, source_searchable)
+        review[key] = grounded
+        if rejected:
+            discarded_review_items[key] = rejected
 
     names_checked = review.get("names_entities_checked", [])
     if not names_checked:
@@ -179,4 +184,5 @@ def validate_narration(
         "checked_numbers": sorted(narration_numbers),
         "checked_direct_quotes": narration_quotes,
         "factual_review": review,
+        "discarded_ungrounded_review_items": discarded_review_items,
     }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -574,21 +575,17 @@ class ProgressDisplay:
             self.stream.flush()
             return
         normalized = line.strip()
-        important = any(
-            marker in normalized.casefold()
-            for marker in (
-                "warning",
-                "error",
-                "failed",
-                "saved:",
-                "complete:",
-                "completed.",
-            )
+        lowered = normalized.casefold()
+        important = bool(
+            re.search(r"\|\s*(?:warning|error|critical)\s*\|", lowered)
+            or re.match(r"^\[(?:[^]]*\s)?(?:warning|error|failed)\]", lowered)
+            or "saved:" in lowered
+            or "complete:" in lowered
+            or "completed." in lowered
         )
         if not important:
             return
         self._clear_live_line()
-        lowered = normalized.casefold()
         if "error" in lowered or "failed" in lowered:
             message_color = ANSI_RED
         elif "warning" in lowered:

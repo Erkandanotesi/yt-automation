@@ -232,10 +232,14 @@ def title_source_relevance(title: str, source_text: str) -> dict:
     missing = [token for token in title_tokens if token not in source_tokens]
     ratio = len(matched) / max(1, len(title_tokens))
     required_matches = 1 if len(title_tokens) <= 2 else 2
+    # Aggregators often paraphrase a publisher's headline while linking to the
+    # correct article. Long headlines therefore get a slightly wider lexical
+    # tolerance, while short titles retain the stricter boundary.
+    minimum_ratio = 0.25 if len(title_tokens) >= 6 else 0.35
     passed = (
         len(source_text.strip()) >= 200
         and len(matched) >= required_matches
-        and ratio >= 0.35
+        and ratio >= minimum_ratio
     )
     return {
         "status": "passed" if passed else "failed",
@@ -244,6 +248,7 @@ def title_source_relevance(title: str, source_text: str) -> dict:
         "missing_tokens": missing,
         "match_ratio": round(ratio, 4),
         "required_matches": required_matches,
+        "minimum_match_ratio": minimum_ratio,
     }
 
 

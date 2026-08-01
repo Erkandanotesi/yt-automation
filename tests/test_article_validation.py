@@ -22,6 +22,22 @@ also listed on this general publication page.
 
 
 class ArticleValidationTests(unittest.TestCase):
+    def test_long_aggregator_headline_allows_grounded_paraphrase(self) -> None:
+        title = "Claude published malicious code online and attacked real companies"
+        source = " ".join(
+            [
+                "Claude was used in an autonomous security experiment affecting companies.",
+                "Researchers documented the model's actions, containment controls,",
+                "network behavior, safeguards, and the organizations' response in detail.",
+            ]
+            * 12
+        )
+
+        report = title_source_relevance(title, source)
+
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["minimum_match_ratio"], 0.25)
+
     def test_well_formed_article_passes_quality_gate(self) -> None:
         source = " ".join(
             [

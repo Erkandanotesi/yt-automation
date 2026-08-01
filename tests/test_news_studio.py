@@ -108,6 +108,16 @@ class NewsStudioTests(unittest.TestCase):
 
         self.assertNotIn("\x1b[2J", stream.getvalue())
 
+    def test_live_progress_hides_traceback_source_lines(self) -> None:
+        stream = io.StringIO()
+        display = ProgressDisplay(7, stream=stream, live=True, color=False)
+        display.start_stage("news", 0)
+
+        display.write_subprocess_line("    raise RuntimeError(message)\n")
+        display.write_subprocess_line("RuntimeError: rejected candidate\n")
+
+        self.assertNotIn("RuntimeError", stream.getvalue())
+
     def test_autonomous_defaults_skip_separators_then_upload(self) -> None:
         results = [
             {"status": "WAITING", "video_number": 6, "stage": "manual_separators"},

@@ -956,7 +956,7 @@ def extract_article_text(candidate: dict) -> str:
             "final_url": final_url,
             "quality": quality,
         }
-        LOGGER.warning(
+        LOGGER.info(
             "Fetched page failed the article quality gate; trying RSS text: "
             "%s | errors=%s | final_url=%s",
             candidate["title"],
@@ -964,7 +964,7 @@ def extract_article_text(candidate: dict) -> str:
             final_url,
         )
     except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Full article page could not be used: %s", exc)
+        LOGGER.info("Full article page could not be used; trying RSS text: %s", exc)
 
     rss_text = format_article_text(str(candidate.get("rss_text", "")))
     quality = article_quality_report(
@@ -977,7 +977,7 @@ def extract_article_text(candidate: dict) -> str:
             "Neither the article page nor RSS text passed the source quality gate: "
             f"{candidate['title']} | errors={quality['errors']}"
         )
-    LOGGER.warning("Using matching RSS text as the source fallback.")
+    LOGGER.info("Using matching RSS text as the source fallback.")
     candidate["extraction"] = {
         "method": "rss_fallback",
         "requested_url": candidate["url"],
@@ -1775,11 +1775,15 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
             except Exception as exc:  # noqa: BLE001
+                expected_source_rejection = (
+                    isinstance(exc, RuntimeError)
+                    and "source quality gate" in str(exc)
+                )
                 LOGGER.warning(
                     "Aday haber atlandı; sıradaki RSS adayı denenecek: %s | %s",
                     candidate["title"],
                     exc,
-                    exc_info=True,
+                    exc_info=not expected_source_rejection,
                 )
 
         save_combined_script(created_items)

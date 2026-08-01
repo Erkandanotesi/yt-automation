@@ -152,6 +152,28 @@ class ContentValidationTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "passed")
 
+    def test_ungrounded_audit_metadata_is_discarded_without_rewriting(self) -> None:
+        narration, source = valid_material()
+        result = validate_narration(
+            title="A supported technology update",
+            narration=narration,
+            source_text=source,
+            factual_review={
+                "names_entities_checked": ["OpenAI"],
+                "numbers_dates_checked": ["2026-07-31T21:35:56+00:00"],
+                "quotes_checked": [],
+                "attributions_preserved": ["public briefing"],
+                "unsupported_claims_removed": [],
+            },
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["factual_review"]["numbers_dates_checked"], [])
+        self.assertEqual(
+            result["discarded_ungrounded_review_items"]["numbers_dates_checked"],
+            ["2026-07-31T21:35:56+00:00"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
