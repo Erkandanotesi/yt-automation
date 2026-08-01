@@ -191,6 +191,10 @@ class NewsStudioTests(unittest.TestCase):
             {"status": "COMPLETE", "video_number": 6},
         ]
         with (
+            patch.dict(
+                "news_studio.os.environ",
+                {"AUTOMATION_UPLOAD_TIMEOUT_SECONDS": "120"},
+            ),
             patch("news_studio.run_preflight", return_value=True),
             patch("news_studio.latest_project_number", return_value=5),
             patch("news_studio.next_project_number", return_value=6),
@@ -198,7 +202,7 @@ class NewsStudioTests(unittest.TestCase):
             patch(
                 "news_studio.timed_choice",
                 side_effect=["1", "1", "2", "1", "1"],
-            ),
+            ) as choices,
             patch("news_studio.run_flow", side_effect=results) as run,
             patch(
                 "news_studio.upload_project",
@@ -217,6 +221,7 @@ class NewsStudioTests(unittest.TestCase):
             [False, False, True],
         )
         upload.assert_called_once_with(6)
+        self.assertEqual(choices.call_args_list[-1].kwargs["timeout_seconds"], 120)
 
     def test_timed_choice_uses_configured_default_at_timeout(self) -> None:
         with patch("news_studio.sys.stdin.isatty", return_value=False):

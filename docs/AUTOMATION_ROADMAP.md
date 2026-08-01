@@ -801,7 +801,7 @@ news-studio render "Video N"
 10. Mix effects/music and render preview.
 11. Offer preview approval, defaulting to approval after 15 seconds.
 12. Render final and create publishing package.
-13. Offer YouTube upload, defaulting to upload after a 30-second opt-out window.
+13. Offer YouTube upload, defaulting to upload after a two-minute opt-out window.
 
 ### Recovery
 
@@ -837,7 +837,7 @@ news-studio render "Video N"
   is tied to the proof-video SHA-256 and is invalidated when that file changes.
 - The autonomous launcher defaults to a new Tech News project, paid-stage approval,
   separator skipping, preview approval, and final YouTube upload. Manual choices wait
-  15 seconds; upload waits 30 seconds. The skipped mode keeps visual order tied to
+  15 seconds; upload waits 120 seconds. The skipped mode keeps visual order tied to
   narration and excludes manual-separator-covered beats from paid hero generation.
 - The one-button terminal keeps a stage-level progress bar underneath live output;
   completed blocks are green and a failed stage segment is red, while

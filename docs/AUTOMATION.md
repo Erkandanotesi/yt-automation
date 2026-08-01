@@ -151,7 +151,7 @@ generators retain their own confirmation gates as a second safety layer.
 `create_video.bat` is the autonomous launcher. Each ordinary choice waits 15 seconds
 before taking its displayed default:
 create a new Tech News project, allow the shown provider-cost plan, skip manual
-separators, and approve the checksum-bound preview. The final upload choice waits 30
+separators, and approve the checksum-bound preview. The final upload choice waits 120
 seconds and defaults to uploading the MP4 plus its thumbnail, title, description, and
 chapter metadata. Press the alternative key during the countdown to override any
 default. The timeout values can be changed with
@@ -186,7 +186,7 @@ inspected; press any key only when ready to close it.
 7. The final render runs only after approval.
 8. Publishing copy and one series-aligned AI thumbnail are generated or reused from
    cache, then the complete `09_publish/` package is saved.
-9. The launcher waits 30 seconds at the final upload decision and uploads by default.
+9. The launcher waits two minutes at the final upload decision and uploads by default.
    Complete one OAuth browser authorization first so later scheduled runs can use the
    cached refresh token without interaction.
 
@@ -254,4 +254,16 @@ Video N/
 
 The upload manifest remains private-by-default and checksum-locks the final MP4 and
 thumbnail. Direct uploader commands still require `--confirm-upload`; the autonomous
-launcher supplies it only after the visible 30-second opt-out countdown.
+launcher supplies it only after the visible two-minute opt-out countdown.
+
+Before the first autonomous upload, save a Google OAuth Desktop-app credential as
+`.youtube_credentials/client_secret.json`, then run
+`scripts\youtube_authorize.bat`. The one-time browser sign-in creates the ignored
+refresh-token file without uploading a video. Later runs reuse that token. A completed
+upload is idempotent, and a run interrupted after the video but before its thumbnail
+resumes the thumbnail step without uploading a duplicate video.
+
+For unattended long-term use, do not leave the Google OAuth consent configuration in
+`Testing`: Google expires testing authorizations (including offline refresh tokens)
+after seven days. Use an appropriate production/personal-use OAuth configuration and
+request only the `youtube.upload` scope used by this project.

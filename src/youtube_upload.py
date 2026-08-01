@@ -24,12 +24,18 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 SCRIPT_DIR = SOURCE_ROOT.parent
 load_dotenv(SCRIPT_DIR / ".env")
 
-from file_utils import atomic_write_json, report_cli_error, sha256_file  # noqa: E402
+from file_utils import (  # noqa: E402
+    atomic_write_json,
+    atomic_write_text,
+    report_cli_error,
+    sha256_file,
+)
 from file_locations import YOUTUBE_CREDENTIALS_ROOT, project_dir  # noqa: E402
 
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
-RETRIABLE_STATUS_CODES = {500, 502, 503, 504}
+RETRIABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+RETRIABLE_403_REASONS = {"backendError", "rateLimitExceeded", "userRateLimitExceeded"}
 MINIMUM_CHAPTERS = 3
 MINIMUM_CHAPTER_SECONDS = 10
 CHUNK_GRANULARITY = 256 * 1024
@@ -239,6 +245,7 @@ def validate_upload_manifest(
 def _google_dependencies() -> dict[str, Any]:
     try:
         from google.auth.transport.requests import Request
+        from google.auth.exceptions import RefreshError
         from google.oauth2.credentials import Credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
@@ -251,6 +258,7 @@ def _google_dependencies() -> dict[str, Any]:
         ) from exc
     return {
         "Request": Request,
+        "RefreshError": RefreshError,
         "Credentials": Credentials,
         "InstalledAppFlow": InstalledAppFlow,
         "build": build,
@@ -262,19 +270,59 @@ def _google_dependencies() -> dict[str, Any]:
 def _credentials(settings: YouTubeUploadSettings, google: dict[str, Any]) -> Any:
     credentials = None
     if settings.token_file.is_file():
-        credentials = google["Credentials"].from_authorized_user_file(
-            str(settings.token_file), [YOUTUBE_UPLOAD_SCOPE]
-        )
+        try:
+            credentials = google["Credentials"].from_authorized_user_file(
+                str(settings.token_file), [YOUTUBE_UPLOAD_SCOPE]
+            )
+        except (OSError, ValueError):
+            credentials = None
     if credentials and credentials.expired and credentials.refresh_token:
-        credentials.refresh(google["Request"]())
-    elif not credentials or not credentials.valid:
+        try:
+            credentials.refresh(google["Request"]())
+        except google["RefreshError"]:
+            credentials = None
+    if not credentials or not credentials.valid:
         flow = google["InstalledAppFlow"].from_client_secrets_file(
             str(settings.client_secrets_file), [YOUTUBE_UPLOAD_SCOPE]
         )
         credentials = flow.run_local_server(port=0, access_type="offline")
     settings.token_file.parent.mkdir(parents=True, exist_ok=True)
-    settings.token_file.write_text(credentials.to_json(), encoding="utf-8")
+    atomic_write_text(settings.token_file, credentials.to_json())
     return credentials
+
+
+def authorize(settings: YouTubeUploadSettings) -> dict[str, Any]:
+    """Complete or refresh OAuth without creating a YouTube video."""
+    settings.validate(require_credentials=True)
+    google = _google_dependencies()
+    credentials = _credentials(settings, google)
+    if not credentials or not credentials.valid:
+        raise RuntimeError(
+            "YouTube OAuth authorization did not produce valid credentials."
+        )
+    return {
+        "status": "YOUTUBE_AUTHORIZED",
+        "token_file": str(settings.token_file),
+        "scope": YOUTUBE_UPLOAD_SCOPE,
+    }
+
+
+def _http_error_is_retriable(exc: Exception) -> bool:
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status in RETRIABLE_STATUS_CODES:
+        return True
+    if status != 403:
+        return False
+    try:
+        payload = json.loads(getattr(exc, "content", b"{}").decode("utf-8"))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    reasons = {
+        str(item.get("reason", ""))
+        for item in payload.get("error", {}).get("errors", [])
+        if isinstance(item, dict)
+    }
+    return bool(reasons & RETRIABLE_403_REASONS)
 
 
 def _next_chunk_with_retry(
@@ -285,8 +333,7 @@ def _next_chunk_with_retry(
         try:
             return request.next_chunk()
         except http_error as exc:
-            status = getattr(getattr(exc, "resp", None), "status", None)
-            if status not in RETRIABLE_STATUS_CODES or attempt >= maximum_retries:
+            if not _http_error_is_retriable(exc) or attempt >= maximum_retries:
                 raise
         except (OSError, TimeoutError, ConnectionError):
             if attempt >= maximum_retries:
@@ -294,6 +341,46 @@ def _next_chunk_with_retry(
         wait_seconds = min(2**attempt + random.random(), 64)
         time.sleep(wait_seconds)
         attempt += 1
+
+
+def _execute_with_retry(
+    request: Any, *, maximum_retries: int, http_error: type[Exception]
+) -> Any:
+    attempt = 0
+    while True:
+        try:
+            return request.execute()
+        except http_error as exc:
+            if not _http_error_is_retriable(exc) or attempt >= maximum_retries:
+                raise
+        except (OSError, TimeoutError, ConnectionError):
+            if attempt >= maximum_retries:
+                raise
+        wait_seconds = min(2**attempt + random.random(), 64)
+        time.sleep(wait_seconds)
+        attempt += 1
+
+
+def _upload_thumbnail(
+    youtube: Any,
+    google: dict[str, Any],
+    *,
+    video_id: str,
+    thumbnail_path: Path,
+    maximum_retries: int,
+) -> Any:
+    thumbnail_type = mimetypes.guess_type(thumbnail_path.name)[0] or "image/png"
+    request = youtube.thumbnails().set(
+        videoId=video_id,
+        media_body=google["MediaFileUpload"](
+            str(thumbnail_path), mimetype=thumbnail_type, resumable=False
+        ),
+    )
+    return _execute_with_retry(
+        request,
+        maximum_retries=maximum_retries,
+        http_error=google["HttpError"],
+    )
 
 
 def upload_from_manifest(
@@ -309,15 +396,25 @@ def upload_from_manifest(
     manifest = load_manifest(manifest_path)
     validation = validate_upload_manifest(manifest, settings)
     result_path = manifest_path.parent / "youtube_upload_result.json"
+    previous: dict[str, Any] | None = None
     if result_path.is_file() and not force_new_upload:
         previous = load_manifest(result_path)
         if (
             previous.get("video_id")
             and previous.get("video_sha256") == validation["video_sha256"]
         ):
+            if previous.get("status") == "UPLOAD_COMPLETE":
+                return previous
+            if previous.get("status") != "VIDEO_UPLOADED_THUMBNAIL_PENDING":
+                raise RuntimeError(
+                    "An upload result already contains this video's YouTube ID but "
+                    "has an unknown recovery state. Inspect youtube_upload_result.json "
+                    "before using --force-new-upload."
+                )
+        elif previous.get("video_id"):
             raise RuntimeError(
-                "This exact video was already uploaded as "
-                f"{previous['video_id']}. Use --force-new-upload only if a duplicate "
+                "This project already uploaded a different final-video checksum as "
+                f"{previous['video_id']}. Use --force-new-upload only if another "
                 "YouTube video is intentional."
             )
 
@@ -326,51 +423,59 @@ def upload_from_manifest(
     youtube = google["build"](
         "youtube", "v3", credentials=credentials, cache_discovery=False
     )
-    video_path = Path(validation["video_file"])
-    video_media = google["MediaFileUpload"](
-        str(video_path),
-        mimetype="video/mp4",
-        chunksize=settings.chunk_size_bytes,
-        resumable=True,
-    )
-    request = youtube.videos().insert(
-        part="snippet,status",
-        body=manifest["metadata"],
-        notifySubscribers=settings.notify_subscribers,
-        media_body=video_media,
-    )
-    response = None
-    while response is None:
-        progress, response = _next_chunk_with_retry(
-            request,
-            maximum_retries=settings.maximum_retries,
-            http_error=google["HttpError"],
+    if previous and previous.get("status") == "VIDEO_UPLOADED_THUMBNAIL_PENDING":
+        video_id = str(previous["video_id"])
+        partial_result = previous
+        print(f"Resuming thumbnail setup for uploaded video {video_id}.")
+    else:
+        video_path = Path(validation["video_file"])
+        video_media = google["MediaFileUpload"](
+            str(video_path),
+            mimetype="video/mp4",
+            chunksize=settings.chunk_size_bytes,
+            resumable=True,
         )
-        if progress is not None:
-            print(f"Upload progress: {progress.progress() * 100:.1f}%")
-    video_id = response.get("id")
-    if not video_id:
-        raise RuntimeError("YouTube returned no video ID after upload.")
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body=manifest["metadata"],
+            notifySubscribers=settings.notify_subscribers,
+            media_body=video_media,
+        )
+        response = None
+        while response is None:
+            progress, response = _next_chunk_with_retry(
+                request,
+                maximum_retries=settings.maximum_retries,
+                http_error=google["HttpError"],
+            )
+            if progress is not None:
+                print(
+                    f"Upload progress: {progress.progress() * 100:.1f}%",
+                    flush=True,
+                )
+        video_id = response.get("id")
+        if not video_id:
+            raise RuntimeError("YouTube returned no video ID after upload.")
 
-    partial_result = {
-        "schema_version": 1,
-        "status": "VIDEO_UPLOADED_THUMBNAIL_PENDING",
-        "video_id": video_id,
-        "watch_url": f"https://www.youtube.com/watch?v={video_id}",
-        "video_sha256": validation["video_sha256"],
-        "privacy_status": settings.privacy_status,
-        "uploaded_at_utc": utc_now(),
-    }
-    atomic_write_json(result_path, partial_result)
+        partial_result = {
+            "schema_version": 1,
+            "status": "VIDEO_UPLOADED_THUMBNAIL_PENDING",
+            "video_id": video_id,
+            "watch_url": f"https://www.youtube.com/watch?v={video_id}",
+            "video_sha256": validation["video_sha256"],
+            "privacy_status": settings.privacy_status,
+            "uploaded_at_utc": utc_now(),
+        }
+        atomic_write_json(result_path, partial_result)
 
     thumbnail_path = Path(validation["thumbnail_file"])
-    thumbnail_type = mimetypes.guess_type(thumbnail_path.name)[0] or "image/png"
-    thumbnail_response = youtube.thumbnails().set(
-        videoId=video_id,
-        media_body=google["MediaFileUpload"](
-            str(thumbnail_path), mimetype=thumbnail_type, resumable=False
-        ),
-    ).execute()
+    thumbnail_response = _upload_thumbnail(
+        youtube,
+        google,
+        video_id=video_id,
+        thumbnail_path=thumbnail_path,
+        maximum_retries=settings.maximum_retries,
+    )
     result = {
         **partial_result,
         "status": "UPLOAD_COMPLETE",
@@ -392,7 +497,9 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--video", type=int)
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--action", choices=("validate", "upload"), default="validate")
+    parser.add_argument(
+        "--action", choices=("validate", "authorize", "upload"), default="validate"
+    )
     parser.add_argument("--confirm-upload", action="store_true")
     parser.add_argument("--force-new-upload", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -402,24 +509,31 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> int:
     args = parse_arguments()
     try:
-        if args.manifest is None and (args.video is None or args.video < 1):
+        if (
+            args.action != "authorize"
+            and args.manifest is None
+            and (args.video is None or args.video < 1)
+        ):
             raise ValueError("Provide --video N or --manifest PATH.")
-        manifest_path = (
-            args.manifest.resolve()
-            if args.manifest is not None
-            else default_manifest(args.video)
-        )
         settings = YouTubeUploadSettings.from_environment()
+        if args.action == "authorize":
+            result = authorize(settings)
+        else:
+            manifest_path = (
+                args.manifest.resolve()
+                if args.manifest is not None
+                else default_manifest(args.video)
+            )
         if args.action == "validate":
             result = validate_upload_manifest(load_manifest(manifest_path), settings)
-        else:
+        elif args.action == "upload":
             result = upload_from_manifest(
                 manifest_path,
                 settings,
                 confirm_upload=args.confirm_upload,
                 force_new_upload=args.force_new_upload,
             )
-        if args.json or args.action == "validate":
+        if args.json or args.action in {"validate", "authorize"}:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             print(f"YouTube upload complete: {result['watch_url']}")
