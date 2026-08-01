@@ -38,6 +38,7 @@ from file_utils import (  # noqa: E402
     sha256_text,
 )
 from file_locations import PROJECTS_ROOT, project_dir, project_name  # noqa: E402
+from separator_policy import require_separator_checkpoint  # noqa: E402
 from tooling import find_executable  # noqa: E402
 
 
@@ -284,17 +285,8 @@ def load_json(path: Path, label: str) -> dict:
 
 def _require_manual_checkpoint_ready(video_dir: Path) -> tuple[dict, dict]:
     state = load_json(video_dir / "state.json", "Stage state")
-    checkpoint = state.get("stages", {}).get("manual_separators", {})
-    if checkpoint.get("status") != "READY":
-        raise RuntimeError(
-            "Manual separator checkpoint must be READY before storyboarding."
-        )
     timing = load_json(video_dir / "story_timing.json", "Story timing manifest")
-    quality = timing.get("quality", {})
-    if quality.get("status") != "passed":
-        raise RuntimeError("Story timing quality gate has not passed.")
-    if not quality.get("manual_separators_validated", False):
-        raise RuntimeError("Validated manual separator timing is missing.")
+    require_separator_checkpoint(state, timing)
     return state, timing
 
 
@@ -383,22 +375,54 @@ def load_story_contexts(
 def candidate_beats(context: dict) -> list[dict]:
     timing = context["timing"]
     raw_candidates = timing.get("visual_beats", [])
-    if len(raw_candidates) < 2:
-        raw_candidates = timing.get("sentences", [])
+    separator_hidden_seconds = (
+        0.0
+        if timing.get("separator", {}).get("skipped", False)
+        else float(timing.get("separator", {}).get("duration", 0.0))
+    )
+    eligible = [
+        beat
+        for beat in raw_candidates
+        if float(beat.get("start", 0)) >= separator_hidden_seconds - 0.001
+    ]
+    if len(eligible) < 2:
+        eligible = [
+            beat
+            for beat in timing.get("sentences", [])
+            if float(beat.get("start", 0)) >= separator_hidden_seconds - 0.001
+        ]
+    if len(eligible) < 2:
+        # A beat crossing the separator boundary still has visible screen time.
+        combined = [*raw_candidates, *timing.get("sentences", [])]
+        eligible = [
+            beat
+            for beat in combined
+            if float(beat.get("end", beat.get("start", 0)))
+            > separator_hidden_seconds + 0.001
+        ]
+    raw_candidates = eligible
     candidates: list[dict] = []
-    for index, beat in enumerate(raw_candidates, start=1):
+    seen_ranges: set[tuple[float, float, str]] = set()
+    for beat in raw_candidates:
         text = str(
             beat.get("important_claim")
             or beat.get("text")
             or ""
         ).strip()
-        start = float(beat.get("start", 0))
+        start = max(
+            float(beat.get("start", 0)),
+            separator_hidden_seconds,
+        )
         end = float(beat.get("end", start))
         if not text or end <= start:
             continue
+        identity = (round(start, 6), round(end, 6), text.casefold())
+        if identity in seen_ranges:
+            continue
+        seen_ranges.add(identity)
         candidates.append(
             {
-                "candidate_id": f"beat_{index:02d}",
+                "candidate_id": f"beat_{len(candidates) + 1:02d}",
                 "beat_text": text,
                 "start": round(start, 6),
                 "end": round(end, 6),
@@ -413,11 +437,13 @@ def candidate_beats(context: dict) -> list[dict]:
                 "importance": beat.get("importance", "supporting"),
                 "visual_query": beat.get("visual_query", ""),
                 "named_entities": beat.get("named_entities", {}),
+                "visible_after_seconds": round(separator_hidden_seconds, 6),
             }
         )
     if len(candidates) < 2:
         raise RuntimeError(
-            f"{context['story_id']} has fewer than two timed visual candidates."
+            f"{context['story_id']} has fewer than two visible timed visual "
+            f"candidates after {separator_hidden_seconds:.3f}s of separator coverage."
         )
     return candidates
 

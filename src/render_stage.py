@@ -33,6 +33,7 @@ from file_utils import (  # noqa: E402
     sha256_file,
 )
 from file_locations import project_dir, project_name  # noqa: E402
+from separator_policy import require_separator_checkpoint  # noqa: E402
 from tooling import find_executable  # noqa: E402
 
 
@@ -239,6 +240,7 @@ def _required_inputs(video_dir: Path) -> tuple[dict, dict, dict, dict]:
     if state.get("stages", {}).get("effects", {}).get("status") != "EFFECTS_READY":
         raise RuntimeError("Milestone 6 must be EFFECTS_READY before rendering.")
     timing = load_json(video_dir / "story_timing.json", "Story timing")
+    require_separator_checkpoint(state, timing)
     if timing.get("separator_timing_mode") != "overlay_at_narration_start":
         raise RuntimeError(
             "Story timing is stale: separators must overlay narration from story start."
@@ -271,23 +273,24 @@ def build_render_plan(
             raise FileNotFoundError(f"Visual asset is missing: {path}")
         referenced.append({"file": str(path), "sha256": sha256_file(path)})
     separators = []
-    for story in timing.get("stories", []):
-        item = story["separator"]
-        path = Path(item["file"])
-        if not path.is_file():
-            raise FileNotFoundError(f"Separator is missing: {path}")
-        separators.append(
-            {
-                "story_id": story["story_id"],
-                "order": story["order"],
-                "start": item["start"],
-                "end": item["end"],
-                "duration": item["duration"],
-                "file": str(path),
-                "sha256": sha256_file(path),
-                "has_audio": bool(item.get("has_audio")),
-            }
-        )
+    if not timing.get("quality", {}).get("manual_separators_skipped", False):
+        for story in timing.get("stories", []):
+            item = story["separator"]
+            path = Path(item["file"])
+            if not path.is_file():
+                raise FileNotFoundError(f"Separator is missing: {path}")
+            separators.append(
+                {
+                    "story_id": story["story_id"],
+                    "order": story["order"],
+                    "start": item["start"],
+                    "end": item["end"],
+                    "duration": item["duration"],
+                    "file": str(path),
+                    "sha256": sha256_file(path),
+                    "has_audio": bool(item.get("has_audio")),
+                }
+            )
     narration = []
     for story in timing.get("stories", []):
         path = Path(story["audio_file"])
@@ -385,9 +388,23 @@ def build_render_plan(
         "referenced_visuals": referenced,
         "quality": {
             "status": "passed",
-            "separator_and_narration_start_together": all(
-                math.isclose(float(s["start"]), float(n["start"]), abs_tol=0.001)
-                for s, n in zip(separators, narration, strict=True)
+            "separator_and_narration_start_together": (
+                not separators
+                or (
+                    len(separators) == len(narration)
+                    and all(
+                        math.isclose(
+                            float(s["start"]),
+                            float(n["start"]),
+                            abs_tol=0.001,
+                        )
+                        for s, n in zip(separators, narration)
+                    )
+                )
+            ),
+            "images_start_at_chapter_start": (
+                not timing.get("quality", {}).get("manual_separators_skipped", False)
+                or not separators
             ),
             "first_caption_starts_at_program_start": math.isclose(
                 float(captions.get("quality", {}).get("first_caption_start", -1)),

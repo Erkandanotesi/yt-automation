@@ -788,14 +788,15 @@ news-studio render "Video N"
 2. Create next project safely.
 3. Produce news/source/scripts.
 4. Produce TTS and alignment.
-5. Enter manual checkpoint.
-6. Resume after separator validation.
+5. Offer the manual checkpoint, defaulting to separator-free continuation after 15 seconds.
+6. Resume after separator validation, or persist `SKIPPED` and continue immediately.
 7. Storyboard and generate two AI images per story.
 8. Select archive images.
 9. Generate captions and timeline.
 10. Mix effects/music and render preview.
-11. Require preview approval before expensive final render if configured.
+11. Offer preview approval, defaulting to approval after 15 seconds.
 12. Render final and create publishing package.
+13. Offer YouTube upload, defaulting to upload after a 30-second opt-out window.
 
 ### Recovery
 
@@ -809,8 +810,8 @@ news-studio render "Video N"
 
 ### Done when
 
-- A new project can be completed with one initial launch, one manual-animation resume,
-  and one preview approval.
+- A new project can complete unattended when the separator-free defaults are accepted;
+  manual separators and stopping before upload remain available countdown choices.
 
 ### Implementation report (complete, 2026-08-01)
 
@@ -829,6 +830,10 @@ news-studio render "Video N"
   preserves successful outputs and releases the current process's lock.
 - The manual separator checkpoint and preview approval are resumable. Preview approval
   is tied to the proof-video SHA-256 and is invalidated when that file changes.
+- The autonomous launcher defaults to a new Tech News project, paid-stage approval,
+  separator skipping, preview approval, and final YouTube upload. Manual choices wait
+  15 seconds; upload waits 30 seconds. The skipped mode keeps visual order tied to
+  narration and excludes manual-separator-covered beats from paid hero generation.
 - Final publishing automatically generates or reuses one medium-quality, series-aligned
   AI thumbnail and the complete Milestone 9 package.
 - Video 5 is recognized as complete by the new orchestrator without provider calls.

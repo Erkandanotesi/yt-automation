@@ -35,6 +35,7 @@ from file_locations import (  # noqa: E402
     project_dir,
     project_name,
 )
+from separator_policy import require_separator_checkpoint  # noqa: E402
 from tooling import find_executable  # noqa: E402
 
 
@@ -385,11 +386,8 @@ def select_music_track(settings: EffectsSettings) -> tuple[Path, dict]:
 
 def _require_inputs(video_dir: Path) -> tuple[dict, dict, dict, dict]:
     state = load_json(video_dir / "state.json", "Stage state")
-    if state.get("stages", {}).get("manual_separators", {}).get("status") != "READY":
-        raise RuntimeError("Manual separator checkpoint must be READY.")
     timing = load_json(video_dir / "story_timing.json", "Story timing manifest")
-    if not timing.get("quality", {}).get("manual_separators_validated", False):
-        raise RuntimeError("Validated manual separator timing is required.")
+    require_separator_checkpoint(state, timing)
     media = load_json(video_dir / "05_visuals" / "media_plan.json", "Media plan")
     if media.get("quality", {}).get("status") != "passed":
         raise RuntimeError("A complete, passing Milestone 5 media plan is required.")
@@ -585,11 +583,12 @@ def build_glitch_events(
     duration = float(timing.get("duration_seconds", 0))
     maximum = max(1, math.ceil(duration / 60) * settings.glitch_max_per_minute)
     candidates: list[tuple[float, str, int | None]] = []
-    for story in timing.get("stories", []):
-        separator = story.get("separator", {})
-        start = float(separator.get("start", 0))
-        end = float(separator.get("end", start))
-        candidates.append((end, "separator_exit_accent", int(story["order"])))
+    if not timing.get("quality", {}).get("manual_separators_skipped", False):
+        for story in timing.get("stories", []):
+            separator = story.get("separator", {})
+            start = float(separator.get("start", 0))
+            end = float(separator.get("end", start))
+            candidates.append((end, "separator_exit_accent", int(story["order"])))
     for index, event in enumerate(visuals[1:], start=1):
         if index % 3 == 0:
             candidates.append((float(event["timeline_start"]), "selected_cut", event["story_order"]))
@@ -687,6 +686,8 @@ def _music_plan(
 
 
 def _separator_events(timing: dict) -> list[dict]:
+    if timing.get("quality", {}).get("manual_separators_skipped", False):
+        return []
     events = []
     for story in timing.get("stories", []):
         path = Path(story["separator"]["file"])

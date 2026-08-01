@@ -13,6 +13,7 @@ from manual_checkpoint import (
     prepare_checkpoint,
     open_checkpoint_folders,
     prompt_checkpoint,
+    skip_checkpoint,
     validate_checkpoint,
     validate_separator_file,
     validate_separator_set,
@@ -150,6 +151,28 @@ def make_separator(
 
 
 class ManualCheckpointTests(unittest.TestCase):
+    def test_skip_starts_narration_and_images_at_each_chapter_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_timing_project(root, 2)
+            with patch("manual_checkpoint.project_dir", return_value=root):
+                stage = skip_checkpoint(5, test_spec())
+
+            timing = json.loads(
+                (root / "story_timing.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(stage["status"], "SKIPPED")
+            self.assertTrue(timing["quality"]["manual_separators_skipped"])
+            self.assertTrue(timing["quality"]["images_start_at_chapter_start"])
+            self.assertEqual(timing["required_separator_count"], 0)
+            self.assertEqual(timing["stories"][0]["narration"]["start"], 0.0)
+            self.assertEqual(timing["stories"][0]["separator"]["duration"], 0.0)
+            self.assertEqual(timing["stories"][1]["narration"]["start"], 3.0)
+            self.assertEqual(
+                timing["stories"][1]["sentences"][0]["timeline_start"],
+                3.0,
+            )
+
     def test_checkpoint_opens_news_then_separator_folder(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

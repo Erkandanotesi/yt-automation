@@ -29,6 +29,7 @@ from file_utils import (  # noqa: E402
     sha256_text,
 )
 from file_locations import project_dir, project_name  # noqa: E402
+from separator_policy import require_separator_checkpoint  # noqa: E402
 
 
 CAPTION_SCHEMA_VERSION = 1
@@ -454,19 +455,8 @@ def validate_cues(
 
 def _require_inputs(video_dir: Path) -> tuple[dict, dict, list[dict]]:
     state = load_json(video_dir / "state.json", "Stage state")
-    if (
-        state.get("stages", {})
-        .get("manual_separators", {})
-        .get("status")
-        != "READY"
-    ):
-        raise RuntimeError("Manual separator checkpoint must be READY.")
     timing = load_json(video_dir / "story_timing.json", "Story timing manifest")
-    if not timing.get("quality", {}).get(
-        "manual_separators_validated",
-        False,
-    ):
-        raise RuntimeError("Validated manual separator timing is required.")
+    require_separator_checkpoint(state, timing)
     inputs = []
     for story in timing.get("stories", []):
         alignment_path = Path(story.get("alignment_file", ""))

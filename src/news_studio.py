@@ -284,7 +284,7 @@ def collect_project_status(video_number: int) -> dict:
         },
         "manual_separators": {
             "status": TERMINAL_COMPLETE
-            if state.get("manual_separators", {}).get("status") == "READY"
+            if state.get("manual_separators", {}).get("status") in {"READY", "SKIPPED"}
             else TERMINAL_WAITING
             if (video_dir / "03_manual_separators").is_dir()
             else "NOT_STARTED",
@@ -551,6 +551,7 @@ def execute_stage(
     category: str,
     confirm_api_costs: bool,
     approve_current_preview: bool,
+    manual_separator_mode: Literal["manual", "skip", "defer"] = "manual",
 ) -> StageResult:
     video_dir = project_dir(video_number)
     if stage in COST_STAGES and not confirm_api_costs:
@@ -575,6 +576,29 @@ def execute_stage(
     elif stage == "alignment":
         _run_subprocess(video_dir, stage, ["alignment_stage.py", "--video", str(video_number)])
     elif stage == "manual_separators":
+        if manual_separator_mode == "defer":
+            return StageResult(
+                TERMINAL_WAITING,
+                stage,
+                "Choose manual separator production or skip it.",
+            )
+        if manual_separator_mode == "skip":
+            _run_subprocess(
+                video_dir,
+                stage,
+                [
+                    "manual_checkpoint.py",
+                    "--video",
+                    str(video_number),
+                    "--action",
+                    "skip",
+                ],
+            )
+            return StageResult(
+                TERMINAL_COMPLETE,
+                stage,
+                "Manual separators skipped; images start at each chapter beginning.",
+            )
         result = subprocess.run(
             [
                 sys.executable,
@@ -703,6 +727,7 @@ def run_flow(
     approve_current_preview: bool,
     recover_stale_lock: bool,
     dry_run: bool,
+    manual_separator_mode: Literal["manual", "skip", "defer"] = "manual",
 ) -> dict:
     before = collect_project_status(video_number)
     planned = [
@@ -740,6 +765,7 @@ def run_flow(
                 category=category,
                 confirm_api_costs=confirm_api_costs,
                 approve_current_preview=approve_current_preview,
+                manual_separator_mode=manual_separator_mode,
             )
             if result.status == TERMINAL_WAITING:
                 _event(
@@ -801,53 +827,190 @@ def _print_stage_table(status: dict) -> None:
             print(f"  - {warning}")
 
 
+def timed_choice(
+    prompt: str,
+    options: dict[str, str],
+    *,
+    default: str,
+    timeout_seconds: float = 15.0,
+) -> str:
+    """Read one menu key, falling back predictably when nobody is present."""
+    if default not in options:
+        raise ValueError("The timed-choice default must be one of the options.")
+    if timeout_seconds < 0:
+        raise ValueError("The timed-choice timeout cannot be negative.")
+    print()
+    print(prompt)
+    for key, label in options.items():
+        suffix = " [default]" if key == default else ""
+        print(f"{key}. {label}{suffix}")
+    print(
+        f"Press a choice key within {timeout_seconds:g} seconds; "
+        f"otherwise {default} is selected automatically: ",
+        end="",
+        flush=True,
+    )
+
+    selected: str | None = None
+    deadline = time.monotonic() + timeout_seconds
+    if sys.stdin.isatty() and os.name == "nt":
+        import msvcrt
+
+        while time.monotonic() < deadline:
+            if msvcrt.kbhit():
+                key = msvcrt.getwch()
+                if key == "\x03":
+                    raise KeyboardInterrupt
+                if key in options:
+                    selected = key
+                    break
+            time.sleep(0.05)
+    elif sys.stdin.isatty():
+        import select
+
+        remaining = max(0.0, deadline - time.monotonic())
+        readable, _, _ = select.select([sys.stdin], [], [], remaining)
+        if readable:
+            candidate = sys.stdin.readline().strip()
+            if candidate in options:
+                selected = candidate
+    else:
+        time.sleep(timeout_seconds)
+
+    selected = selected or default
+    print(selected)
+    print(f"Selected: {options[selected]}")
+    return selected
+
+
+def upload_project(video_number: int) -> dict:
+    video_dir = project_dir(video_number)
+    _run_subprocess(
+        video_dir,
+        "youtube_upload",
+        [
+            "youtube_upload.py",
+            "--video",
+            str(video_number),
+            "--action",
+            "upload",
+            "--confirm-upload",
+        ],
+    )
+    result = _read_json(video_dir / "09_publish" / "youtube_upload_result.json")
+    if result.get("status") != "UPLOAD_COMPLETE":
+        raise RuntimeError("YouTube upload did not produce a complete result file.")
+    return result
+
+
 def interactive() -> int:
     latest = latest_project_number()
-    print("NEWS STUDIO — ONE-BUTTON PRODUCTION")
-    print("1. Start a new Tech News video")
+    decision_timeout = float(os.getenv("AUTOMATION_DECISION_TIMEOUT_SECONDS", "15"))
+    upload_timeout = float(os.getenv("AUTOMATION_UPLOAD_TIMEOUT_SECONDS", "30"))
+    print("NEWS STUDIO - AUTONOMOUS PRODUCTION")
+    start_options = {"1": "Create a new Tech News video"}
     if latest is not None:
-        print(f"2. Resume {project_name(latest)}")
-    choice = input("Selection: ").strip()
+        start_options["2"] = f"Resume {project_name(latest)}"
+    choice = timed_choice(
+        "Choose the production action.",
+        start_options,
+        default="1",
+        timeout_seconds=decision_timeout,
+    )
     if choice == "1":
         video_number = next_project_number()
         category = "tech"
-    elif choice == "2" and latest is not None:
+    else:
         video_number = latest
         category = _read_json(project_dir(video_number) / "project_info.json").get(
             "category", "tech"
         )
-    else:
-        print("Invalid selection.")
-        return 1
+
     print(json.dumps(api_cost_plan(video_number), ensure_ascii=False, indent=2))
-    confirmation = input("Type COST to allow required provider requests: ").strip()
-    if confirmation != "COST":
+    confirmation = timed_choice(
+        "Allow the listed provider requests?",
+        {"1": "Continue with provider requests", "0": "Cancel safely"},
+        default="1",
+        timeout_seconds=decision_timeout,
+    )
+    if confirmation != "1":
         print("Cancelled before any provider request.")
         return 0
-    result = run_flow(
-        video_number,
-        category=category,
-        confirm_api_costs=True,
-        approve_current_preview=False,
-        recover_stale_lock=False,
-        dry_run=False,
-    )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    if result.get("stage") == "preview_approval":
-        proof = project_dir(video_number) / "07_effects" / "milestone6_reference_60s.mp4"
-        if hasattr(os, "startfile"):
-            os.startfile(proof)  # type: ignore[attr-defined]
-        approved = input("Type 1 after reviewing and approving this preview: ").strip()
-        if approved == "1":
-            result = run_flow(
-                video_number,
-                category=category,
-                confirm_api_costs=True,
-                approve_current_preview=True,
-                recover_stale_lock=False,
-                dry_run=False,
+
+    separator_mode: Literal["manual", "skip", "defer"] = "defer"
+    preview_approved = False
+    while True:
+        result = run_flow(
+            video_number,
+            category=category,
+            confirm_api_costs=True,
+            approve_current_preview=preview_approved,
+            recover_stale_lock=False,
+            dry_run=False,
+            manual_separator_mode=separator_mode,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("stage") == "manual_separators":
+            separator_choice = timed_choice(
+                "Manual video separator checkpoint.",
+                {
+                    "1": "Wait for manually created separators",
+                    "2": "Skip separators and show images from chapter start",
+                },
+                default="2",
+                timeout_seconds=decision_timeout,
             )
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            separator_mode = "manual" if separator_choice == "1" else "skip"
+            if separator_mode == "manual":
+                result = run_flow(
+                    video_number,
+                    category=category,
+                    confirm_api_costs=True,
+                    approve_current_preview=False,
+                    recover_stale_lock=False,
+                    dry_run=False,
+                    manual_separator_mode="manual",
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                if result.get("stage") == "manual_separators":
+                    return 0
+            else:
+                continue
+        if result.get("stage") == "preview_approval":
+            proof = (
+                project_dir(video_number)
+                / "07_effects"
+                / "milestone6_reference_60s.mp4"
+            )
+            if sys.stdin.isatty() and hasattr(os, "startfile"):
+                os.startfile(proof)  # type: ignore[attr-defined]
+            preview_choice = timed_choice(
+                f"Approve the review preview? {proof}",
+                {"1": "Approve and render", "0": "Stop before final render"},
+                default="1",
+                timeout_seconds=decision_timeout,
+            )
+            if preview_choice != "1":
+                print("Stopped before final render; generated work was preserved.")
+                return 0
+            preview_approved = True
+            continue
+        break
+
+    if result.get("status") != "COMPLETE":
+        print("Production did not complete, so upload was not attempted.")
+        return 1
+    upload_choice = timed_choice(
+        "Upload the video, thumbnail, title, description, and chapters to YouTube?",
+        {"1": "Upload to YouTube", "0": "Do not upload"},
+        default="1",
+        timeout_seconds=upload_timeout,
+    )
+    if upload_choice == "1":
+        uploaded = upload_project(video_number)
+        print(json.dumps(uploaded, ensure_ascii=False, indent=2))
+    else:
+        print("Upload skipped; the complete publish package was preserved.")
     return 0
 
 
@@ -863,6 +1026,7 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument("video")
         sub.add_argument("--confirm-api-costs", action="store_true")
         sub.add_argument("--approve-preview", action="store_true")
+        sub.add_argument("--skip-separators", action="store_true")
         sub.add_argument("--recover-stale-lock", action="store_true")
         sub.add_argument("--dry-run", action="store_true")
         sub.add_argument("--json", action="store_true")
@@ -877,6 +1041,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_parser.add_argument("--category", choices=("tech", "gaming"), default="tech")
     stage_parser.add_argument("--confirm-api-costs", action="store_true")
     stage_parser.add_argument("--approve-preview", action="store_true")
+    stage_parser.add_argument("--skip-separators", action="store_true")
 
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("video")
@@ -909,6 +1074,7 @@ def main() -> int:
                 approve_current_preview=args.approve_preview,
                 recover_stale_lock=args.recover_stale_lock,
                 dry_run=args.dry_run,
+                manual_separator_mode="skip" if args.skip_separators else "manual",
             )
         else:
             number = parse_video_number(args.video)
@@ -923,6 +1089,7 @@ def main() -> int:
                     approve_current_preview=args.approve_preview,
                     recover_stale_lock=args.recover_stale_lock,
                     dry_run=args.dry_run,
+                    manual_separator_mode="skip" if args.skip_separators else "manual",
                 )
             elif args.command == "status":
                 result = collect_project_status(number)
@@ -945,6 +1112,9 @@ def main() -> int:
                             category=args.category,
                             confirm_api_costs=args.confirm_api_costs,
                             approve_current_preview=args.approve_preview,
+                            manual_separator_mode=(
+                                "skip" if args.skip_separators else "manual"
+                            ),
                         )
                     result = stage_result.__dict__
             elif args.command == "validate":

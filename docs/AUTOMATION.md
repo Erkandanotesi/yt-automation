@@ -26,7 +26,7 @@ Tech News/
 |   |-- .env                         # secrets; ignored by Git
 |   |-- .env.example
 |   |-- requirements.txt
-|   |-- create_video.bat             # interactive one-button workflow
+|   |-- create_video.bat             # autonomous/scheduled one-button workflow
 |   |-- news-studio.bat              # stable CLI wrapper
 |   |-- setup.bat
 |   |-- src/
@@ -38,6 +38,7 @@ Tech News/
 |   |   |-- elevenlabs_tts.py
 |   |   |-- alignment_stage.py
 |   |   |-- manual_checkpoint.py
+|   |   |-- separator_policy.py      # shared manual/skipped checkpoint rules
 |   |   |-- storyboard_stage.py
 |   |   |-- media_index.py
 |   |   |-- media_selection_stage.py
@@ -135,21 +136,36 @@ news-studio.bat render "Video N"
 stages do not begin without `--confirm-api-costs`. Individual story-image and publishing
 generators retain their own confirmation gates as a second safety layer.
 
+`create_video.bat` is the autonomous launcher. Each ordinary choice waits 15 seconds
+before taking its displayed default:
+create a new Tech News project, allow the shown provider-cost plan, skip manual
+separators, and approve the checksum-bound preview. The final upload choice waits 30
+seconds and defaults to uploading the MP4 plus its thumbnail, title, description, and
+chapter metadata. Press the alternative key during the countdown to override any
+default. The timeout values can be changed with
+`AUTOMATION_DECISION_TIMEOUT_SECONDS` and `AUTOMATION_UPLOAD_TIMEOUT_SECONDS`.
+
 ## Milestone 10 lifecycle
 
 1. Preflight validates the modular layout, configuration, assets, and tools.
 2. `new` creates the next numbered project and runs news, TTS, and alignment.
-3. The flow creates `03_manual_separators/` and stops without losing state. Windows
-   Explorer opens `Haberler/` first for reading and then `03_manual_separators/` as
-   the save destination. Set `AUTO_OPEN_SEPARATOR_FOLDERS=false` only on a headless
-   machine.
-4. `resume` validates the manual separators, then produces storyboard images, archive
+3. At the separator choice, the default is `skip`. Skip records a durable `SKIPPED`
+   checkpoint, uses no separator files, and starts narration, captions, and relevant
+   images at each chapter boundary. AI hero-image candidates inside a real manual
+   separator's covered interval are excluded so paid generations are not hidden.
+4. If manual mode is selected, the flow creates `03_manual_separators/` and stops
+   without losing state. Windows Explorer opens `Haberler/` first for reading and then
+   `03_manual_separators/` as the save destination.
+5. `resume` validates manual separators when selected, then produces storyboard images, archive
    selections, captions, effects, and the 60-second review preview.
-5. The review preview must be approved. Approval is tied to its SHA-256; replacing the
+6. The review preview must be approved. Approval is tied to its SHA-256; replacing the
    preview invalidates approval automatically.
-6. The final render runs only after approval.
-7. Publishing copy and one series-aligned AI thumbnail are generated or reused from
+7. The final render runs only after approval.
+8. Publishing copy and one series-aligned AI thumbnail are generated or reused from
    cache, then the complete `09_publish/` package is saved.
+9. The launcher waits 30 seconds at the final upload decision and uploads by default.
+   Complete one OAuth browser authorization first so later scheduled runs can use the
+   cached refresh token without interaction.
 
 Every mutating flow creates an exclusive `.news_studio.lock` inside the project. A
 second process cannot edit the same project. Ctrl+C preserves completed outputs and
@@ -195,4 +211,5 @@ Video N/
 ```
 
 The upload manifest remains private-by-default and checksum-locks the final MP4 and
-thumbnail. Actual YouTube upload is separate and always requires `--confirm-upload`.
+thumbnail. Direct uploader commands still require `--confirm-upload`; the autonomous
+launcher supplies it only after the visible 30-second opt-out countdown.

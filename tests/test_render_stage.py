@@ -29,11 +29,19 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
         encoding="utf-8",
     )
     (root / "state.json").write_text(
-        json.dumps({"stages": {"effects": {"status": "EFFECTS_READY"}}}),
+        json.dumps(
+            {
+                "stages": {
+                    "effects": {"status": "EFFECTS_READY"},
+                    "manual_separators": {"status": "READY"},
+                }
+            }
+        ),
         encoding="utf-8",
     )
     timing = {
         "duration_seconds": 2.0,
+        "quality": {"status": "passed", "manual_separators_validated": True},
         "separator_timing_mode": (
             "overlay_at_narration_start" if overlay_mode else "reserved_before_narration"
         ),
@@ -97,6 +105,48 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
 
 
 class RenderStageTests(unittest.TestCase):
+    def test_skipped_separator_plan_uses_images_from_program_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 5"
+            write_fixture(root)
+            state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+            state["stages"]["manual_separators"] = {"status": "SKIPPED"}
+            (root / "state.json").write_text(json.dumps(state), encoding="utf-8")
+            timing = json.loads(
+                (root / "story_timing.json").read_text(encoding="utf-8")
+            )
+            timing["quality"] = {
+                "status": "passed",
+                "manual_separators_validated": False,
+                "manual_separators_skipped": True,
+                "images_start_at_chapter_start": True,
+            }
+            timing["stories"][0]["separator"] = {
+                "start": 0,
+                "end": 0,
+                "duration": 0,
+                "file": "",
+                "skipped": True,
+            }
+            (root / "story_timing.json").write_text(
+                json.dumps(timing), encoding="utf-8"
+            )
+            (root / "separator.mp4").unlink()
+
+            with patch("render_stage.project_dir", return_value=root):
+                plan = build_render_plan(
+                    5,
+                    RenderSettings(
+                        width=320,
+                        height=180,
+                        preview_width=320,
+                        preview_height=180,
+                    ),
+                )
+
+            self.assertEqual(plan["separators"], [])
+            self.assertTrue(plan["quality"]["images_start_at_chapter_start"])
+
     def test_preview_encode_limits_aac_peak_overshoot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

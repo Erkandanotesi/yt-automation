@@ -165,10 +165,7 @@ def checkpoint_input_fingerprint(
         )
     return json_fingerprint(
         {
-            "required_separator_count": timing.get(
-                "required_separator_count",
-                len(stories),
-            ),
+            "required_separator_count": len(stories),
             "stories": stories,
             "spec": asdict(spec),
         }
@@ -227,9 +224,7 @@ def prepare_checkpoint(
     if timing.get("quality", {}).get("status") != "passed":
         raise RuntimeError("Story timing quality gate has not passed.")
 
-    required_count = int(
-        timing.get("required_separator_count", len(timing.get("stories", [])))
-    )
+    required_count = len(timing.get("stories", []))
     paths = expected_separator_paths(video_dir, required_count)
     paths[0].parent.mkdir(parents=True, exist_ok=True)
     fingerprint = checkpoint_input_fingerprint(timing, spec)
@@ -242,6 +237,7 @@ def prepare_checkpoint(
         "WAITING",
         "CANCELLED",
         "READY",
+        "SKIPPED",
     }
     if preserve_status:
         stage = dict(existing)
@@ -617,6 +613,8 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
     updated["separator_duration_seconds"] = None
     updated["inter_story_gap_seconds"] = round(inter_story_gap, 6)
     updated["separator_timing_mode"] = "overlay_at_narration_start"
+    updated["manual_separator_mode"] = "manual"
+    updated.pop("manual_separators_skipped_at_utc", None)
     audio_states = {bool(item["has_audio"]) for item in files}
     audio_presence = (
         "mixed"
@@ -629,12 +627,103 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         **timing.get("quality", {}),
         "status": "passed",
         "manual_separators_validated": True,
+        "manual_separators_skipped": False,
         "separator_audio_presence": audio_presence,
         "no_story_or_separator_overlaps": True,
         "separator_overlays_narration": True,
+        "images_start_at_chapter_start": False,
         "inter_story_gaps_are_exact": True,
     }
     return updated
+
+
+def apply_skipped_separators(timing: dict) -> dict:
+    """Remove separator media and rebuild a narration-first chapter timeline."""
+    stories = timing.get("stories", [])
+    if not stories:
+        raise ValueError("Cannot skip separators for an empty story timeline.")
+    inter_story_gap = float(timing.get("inter_story_gap_seconds", 1.0))
+    if inter_story_gap < 0:
+        raise ValueError("INTER_STORY_GAP_SECONDS cannot be negative.")
+
+    cursor = 0.0
+    updated_stories: list[dict] = []
+    for index, story in enumerate(stories, start=1):
+        item = dict(story)
+        narration_duration = float(story["narration"]["duration"])
+        narration_start = cursor
+        narration_end = narration_start + narration_duration
+        expected_filename = story.get("separator", {}).get(
+            "expected_filename", f"{index:02d}_separator.mp4"
+        )
+        item["separator"] = {
+            "start": round(narration_start, 6),
+            "end": round(narration_start, 6),
+            "duration": 0.0,
+            "expected_filename": expected_filename,
+            "file": "",
+            "sha256": "",
+            "has_audio": False,
+            "skipped": True,
+        }
+        item["narration"] = {
+            **story["narration"],
+            "start": round(narration_start, 6),
+            "end": round(narration_end, 6),
+        }
+        item["gap_after_seconds"] = round(
+            inter_story_gap if index < len(stories) else 0.0,
+            6,
+        )
+        for name in ("sentences", "phrases", "visual_beats", "important_claims"):
+            item[name] = _offset_records(story.get(name, []), narration_start)
+        updated_stories.append(item)
+        cursor = narration_end
+        if index < len(stories):
+            cursor += inter_story_gap
+
+    updated = dict(timing)
+    updated["stories"] = updated_stories
+    updated["duration_seconds"] = round(cursor, 6)
+    updated["separator_duration_seconds"] = 0.0
+    updated["required_separator_count"] = 0
+    updated["inter_story_gap_seconds"] = round(inter_story_gap, 6)
+    updated["separator_timing_mode"] = "overlay_at_narration_start"
+    updated["manual_separator_mode"] = "skipped"
+    updated.pop("manual_separators_validated_at_utc", None)
+    updated["manual_separators_skipped_at_utc"] = utc_now()
+    updated["quality"] = {
+        **timing.get("quality", {}),
+        "status": "passed",
+        "manual_separators_validated": False,
+        "manual_separators_skipped": True,
+        "separator_audio_presence": "absent",
+        "no_story_or_separator_overlaps": True,
+        "separator_overlays_narration": False,
+        "images_start_at_chapter_start": True,
+        "inter_story_gaps_are_exact": True,
+    }
+    return updated
+
+
+def skip_checkpoint(
+    video_number: int,
+    spec: SeparatorSpec | None = None,
+) -> dict:
+    """Persist an intentional no-separator mode and continue automatically."""
+    state_path, state, stage, timing = prepare_checkpoint(video_number, spec)
+    updated_timing = apply_skipped_separators(timing)
+    atomic_write_json(project_dir(video_number) / "story_timing.json", updated_timing)
+    stage["status"] = "SKIPPED"
+    stage["reason"] = (
+        "Manual separators were skipped; story images start with narration."
+    )
+    stage["required_count"] = 0
+    stage["skipped_at_utc"] = utc_now()
+    stage.pop("ready_at_utc", None)
+    stage.pop("validation", None)
+    _write_stage(state_path, state, stage)
+    return stage
 
 
 def validate_checkpoint(
@@ -760,7 +849,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--video", type=int, required=True)
     parser.add_argument(
         "--action",
-        choices=("prompt", "prepare", "validate", "cancel", "status"),
+        choices=("prompt", "prepare", "validate", "skip", "cancel", "status"),
         default="prompt",
     )
     parser.add_argument("--json", action="store_true")
@@ -784,6 +873,14 @@ def main() -> int:
             elif not success:
                 print_validation_failures(stage)
             return 0 if success else 1
+        if args.action == "skip":
+            stage = skip_checkpoint(args.video)
+            print(
+                json.dumps(stage, ensure_ascii=False, indent=2)
+                if args.json
+                else "SKIPPED. Story images will start at each chapter's beginning."
+            )
+            return 0
         if args.action == "cancel":
             stage = cancel_checkpoint(args.video)
             print(

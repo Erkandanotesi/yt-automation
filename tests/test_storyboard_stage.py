@@ -14,6 +14,7 @@ from storyboard_stage import (
     StoryboardSettings,
     archive_approved_images,
     build_storyboard,
+    candidate_beats,
     generate_storyboard_images,
     render_storyboard_proof,
     validate_generated_image,
@@ -270,6 +271,59 @@ def planner(context: dict, _: StoryboardSettings) -> StoryBeatSelection:
 
 
 class StoryboardStageTests(unittest.TestCase):
+    def test_manual_separator_hidden_beats_are_not_ai_candidates(self) -> None:
+        context = {
+            "story_id": "story_1",
+            "timing": {
+                "narration": {"start": 0},
+                "separator": {"duration": 5, "skipped": False},
+                "visual_beats": [
+                    {"important_claim": "hidden", "start": 0, "end": 3},
+                    {"important_claim": "visible one", "start": 6, "end": 9},
+                    {"important_claim": "visible two", "start": 12, "end": 15},
+                ],
+                "sentences": [],
+            },
+        }
+        candidates = candidate_beats(context)
+        self.assertEqual(
+            [item["beat_text"] for item in candidates],
+            ["visible one", "visible two"],
+        )
+
+    def test_skipped_separator_keeps_chapter_start_ai_candidates(self) -> None:
+        context = {
+            "story_id": "story_1",
+            "timing": {
+                "narration": {"start": 0},
+                "separator": {"duration": 0, "skipped": True},
+                "visual_beats": [
+                    {"important_claim": "opening", "start": 0, "end": 3},
+                    {"important_claim": "later", "start": 7, "end": 10},
+                ],
+                "sentences": [],
+            },
+        }
+        candidates = candidate_beats(context)
+        self.assertEqual(candidates[0]["beat_text"], "opening")
+
+    def test_boundary_crossing_candidate_is_clamped_after_separator(self) -> None:
+        context = {
+            "story_id": "story_1",
+            "timing": {
+                "narration": {"start": 10},
+                "separator": {"duration": 5, "skipped": False},
+                "visual_beats": [
+                    {"important_claim": "crossing", "start": 2, "end": 8},
+                    {"important_claim": "visible", "start": 9, "end": 12},
+                ],
+                "sentences": [],
+            },
+        }
+        candidates = candidate_beats(context)
+        self.assertEqual(candidates[0]["start"], 5.0)
+        self.assertEqual(candidates[0]["timeline_start"], 15.0)
+
     def test_approved_image_is_archived_with_descriptive_filename(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

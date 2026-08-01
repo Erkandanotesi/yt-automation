@@ -10,7 +10,9 @@ from news_studio import (
     ProjectLock,
     _preview_status,
     approve_preview,
+    interactive,
     run_flow,
+    timed_choice,
 )
 
 
@@ -25,6 +27,49 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_autonomous_defaults_skip_separators_then_upload(self) -> None:
+        results = [
+            {"status": "WAITING", "video_number": 6, "stage": "manual_separators"},
+            {"status": "WAITING", "video_number": 6, "stage": "preview_approval"},
+            {"status": "COMPLETE", "video_number": 6},
+        ]
+        with (
+            patch("news_studio.latest_project_number", return_value=5),
+            patch("news_studio.next_project_number", return_value=6),
+            patch("news_studio.api_cost_plan", return_value={}),
+            patch(
+                "news_studio.timed_choice",
+                side_effect=["1", "1", "2", "1", "1"],
+            ),
+            patch("news_studio.run_flow", side_effect=results) as run,
+            patch(
+                "news_studio.upload_project",
+                return_value={"status": "UPLOAD_COMPLETE"},
+            ) as upload,
+        ):
+            exit_code = interactive()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            [call.kwargs["manual_separator_mode"] for call in run.call_args_list],
+            ["defer", "skip", "skip"],
+        )
+        self.assertEqual(
+            [call.kwargs["approve_current_preview"] for call in run.call_args_list],
+            [False, False, True],
+        )
+        upload.assert_called_once_with(6)
+
+    def test_timed_choice_uses_configured_default_at_timeout(self) -> None:
+        with patch("news_studio.sys.stdin.isatty", return_value=False):
+            selected = timed_choice(
+                "Decision",
+                {"1": "manual", "2": "skip"},
+                default="2",
+                timeout_seconds=0,
+            )
+        self.assertEqual(selected, "2")
+
     def test_dry_run_does_not_create_project_or_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 6"

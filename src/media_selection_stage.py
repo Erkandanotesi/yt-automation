@@ -36,6 +36,7 @@ from media_index import (  # noqa: E402
     update_usage_events,
 )
 from file_locations import project_dir, project_name  # noqa: E402
+from separator_policy import require_separator_checkpoint  # noqa: E402
 
 
 MEDIA_PLAN_SCHEMA_VERSION = 1
@@ -195,12 +196,8 @@ def load_json(path: Path, label: str) -> dict:
 
 def _require_inputs(video_dir: Path) -> tuple[dict, dict, dict]:
     state = load_json(video_dir / "state.json", "Stage state")
-    manual = state.get("stages", {}).get("manual_separators", {})
-    if manual.get("status") != "READY":
-        raise RuntimeError("Manual separator checkpoint must be READY.")
     timing = load_json(video_dir / "story_timing.json", "Story timing manifest")
-    if not timing.get("quality", {}).get("manual_separators_validated", False):
-        raise RuntimeError("Validated manual separator timing is missing.")
+    require_separator_checkpoint(state, timing)
     storyboard = load_json(
         video_dir / "04_storyboard" / "storyboard.json",
         "Storyboard",
