@@ -89,6 +89,25 @@ class PublishStageTests(unittest.TestCase):
         self.assertIn(repaired.recommended_thumbnail_text, concept.text_options)
         self.assertEqual(len(repaired.tags), 8)
 
+    def test_oversized_thumbnail_option_is_shortened_before_cross_field_repair(self) -> None:
+        payload = publishing_copy().model_dump(mode="json")
+        payload["thumbnail_concepts"][0]["text_options"][0] = (
+            "Claude Reached Production"
+        )
+        payload["recommended_thumbnail_text"] = "Claude Reached Production"
+
+        repaired = PublishingCopy.model_validate(payload)
+        concept = next(
+            item
+            for item in repaired.thumbnail_concepts
+            if item.concept_id == repaired.recommended_concept_id
+        )
+
+        self.assertEqual(repaired.recommended_thumbnail_text, "Claude Reached")
+        self.assertLessEqual(len(repaired.recommended_thumbnail_text), 24)
+        self.assertIn(repaired.recommended_thumbnail_text, concept.text_options)
+        self.assertTrue(all(len(option) <= 24 for option in concept.text_options))
+
     def test_local_copy_fallback_is_complete_and_grounded(self) -> None:
         project = {
             "stories": [

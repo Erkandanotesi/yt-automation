@@ -17,7 +17,14 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -47,6 +54,24 @@ STAGE_NAME = "publish"
 YOUTUBE_TITLE_LIMIT = 100
 YOUTUBE_MINIMUM_CHAPTERS = 3
 YOUTUBE_MINIMUM_CHAPTER_SECONDS = 10
+
+
+def _normalize_thumbnail_text(value: object) -> str:
+    compact = re.sub(r"\s+", " ", str(value or "")).strip(" -|:;,.")
+    if not compact:
+        return "TECH NEWS"
+    selected: list[str] = []
+    for word in compact.split():
+        candidate = " ".join([*selected, word])
+        if len(selected) >= 4 or len(candidate) > 24:
+            break
+        selected.append(word)
+    result = " ".join(selected)
+    if not result:
+        result = compact[:24].strip(" -|:;,.")
+    if len(result) < 4:
+        result = f"{result} NEWS".strip()[:24]
+    return result
 
 
 def utc_now() -> str:
@@ -144,6 +169,24 @@ class ThumbnailConcept(BaseModel):
     text_options: list[str] = Field(min_length=2, max_length=4)
     rationale: str = Field(min_length=20, max_length=400)
 
+    @field_validator("text_options", mode="before")
+    @classmethod
+    def normalize_text_options(cls, value: object) -> list[str]:
+        raw_options = value if isinstance(value, list) else [value]
+        options: list[str] = []
+        for raw in raw_options:
+            normalized = _normalize_thumbnail_text(raw)
+            if normalized.casefold() not in {
+                option.casefold() for option in options
+            }:
+                options.append(normalized)
+        for fallback in ("TECH NEWS", "TECH ALERT"):
+            if len(options) >= 2:
+                break
+            if fallback.casefold() not in {option.casefold() for option in options}:
+                options.append(fallback)
+        return options[:4]
+
 
 class PublishingCopy(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -158,6 +201,11 @@ class PublishingCopy(BaseModel):
     episode_description: str = Field(min_length=80, max_length=650)
     tags: list[str] = Field(min_length=8, max_length=25)
     hashtags: list[str] = Field(min_length=3, max_length=5)
+
+    @field_validator("recommended_thumbnail_text", mode="before")
+    @classmethod
+    def normalize_recommended_thumbnail_text(cls, value: object) -> str:
+        return _normalize_thumbnail_text(value)
 
     @model_validator(mode="after")
     def validate_recommendations(self) -> "PublishingCopy":
@@ -1153,13 +1201,18 @@ def build_publish_package(
             lead,
             narration,
         )
-    thumbnail_headline = (
+    requested_thumbnail_headline = (
         rendered_headline.strip()
         if rendered_headline and rendered_headline.strip()
         else publishing_copy.recommended_thumbnail_text
     )
-    if len(thumbnail_headline) > 24:
-        raise RuntimeError("Thumbnail headline must contain at most 24 characters.")
+    thumbnail_headline = _normalize_thumbnail_text(requested_thumbnail_headline)
+    if thumbnail_headline != requested_thumbnail_headline:
+        print(
+            "[PUBLISH WARNING] Thumbnail headline exceeded the layout boundary; "
+            f"using '{thumbnail_headline}' locally.",
+            file=sys.stderr,
+        )
     if generate_thumbnail:
         thumbnail_text_rendering = "ai_rendered"
         background = prepare_ai_rendered_thumbnail(
