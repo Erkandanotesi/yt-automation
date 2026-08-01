@@ -82,7 +82,14 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6").strip()
 OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
 
-MAX_AGE_HOURS = int(os.getenv("MAX_AGE_HOURS", "36"))
+RSS_FEED_TIME_INTERVAL_HOURS = int(
+    os.getenv(
+        "RSS_FEED_TIME_INTERVAL_HOURS",
+        os.getenv("MAX_AGE_HOURS", "24"),
+    )
+)
+if RSS_FEED_TIME_INTERVAL_HOURS < 1:
+    raise ValueError("RSS_FEED_TIME_INTERVAL_HOURS must be at least 1 hour.")
 MAX_CANDIDATES = int(os.getenv("MAX_CANDIDATES", "25"))
 MAX_FEED_ITEMS = int(os.getenv("MAX_FEED_ITEMS", "30"))
 TOP_N_DEFAULT = int(os.getenv("TOP_N", "5"))
@@ -682,7 +689,7 @@ def collect_candidates(feed_urls: list[str], used_urls: set[str]) -> list[dict]:
 
             # Gelecek tarihli hatalı feed kayıtlarını 0 saat yaşında kabul et.
             age_hours = max(0.0, age_hours)
-            if age_hours > MAX_AGE_HOURS:
+            if age_hours > RSS_FEED_TIME_INTERVAL_HOURS:
                 continue
 
             content_parts: list[str] = []
@@ -1595,6 +1602,10 @@ def main(argv: list[str] | None = None) -> int:
             OPENAI_MODEL if PROVIDER == "openai" else GEMINI_MODEL,
         )
         LOGGER.info("Seçilecek azami haber: %s", TOP_N)
+        LOGGER.info(
+            "RSS publication interval: last %s hour(s)",
+            RSS_FEED_TIME_INTERVAL_HOURS,
+        )
         LOGGER.info("=" * 68)
 
         if ARGS.repair_existing:

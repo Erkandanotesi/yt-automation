@@ -114,6 +114,10 @@ terms remain grounded in the article; short titles retain the stricter threshold
 Ungrounded items in the model's audit metadata are discarded locally instead of
 spending another summary request when the narration itself passes its number and quote
 checks.
+
+`RSS_FEED_TIME_INTERVAL_HOURS` in `.env` controls the RSS publication-age window in
+whole hours. For example, `24` accepts feed entries published during the preceding
+24 hours and rejects older entries before article extraction or paid AI processing.
 Rejected sources never occupy a video slot. The news stage immediately tries the
 next ranked RSS candidate from a 15-story reserve prepared in the same ranking call.
 If the feeds still cannot supply the requested number of valid articles, the project
