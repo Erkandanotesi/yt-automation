@@ -33,6 +33,7 @@ Tech News/
 |   |   |-- file_locations.py        # single source of truth for every path
 |   |   |-- news_studio.py           # Milestone 10 orchestrator
 |   |   |-- news_pipeline.py
+|   |   |-- news_archive.py          # persistent hash + AI duplicate guard
 |   |   |-- elevenlabs_tts.py
 |   |   |-- alignment_stage.py
 |   |   |-- manual_checkpoint.py
@@ -53,6 +54,7 @@ Tech News/
 |   |   `-- gaming_channel_profile.txt
 |   |-- data/
 |   |   |-- processed_urls.json      # runtime history; ignored by Git
+|   |   |-- news_archive/            # pulled sources, summaries, index, AI cache
 |   |   |-- indexes/                 # generated media indexes/reports
 |   |   `-- benchmarks/
 |   |-- docs/
@@ -68,6 +70,33 @@ Tech News/
 |-- Video 1/
 |-- ...
 `-- Video N/
+```
+
+## Pulled-news archive and duplicate prevention
+
+Every full article fetched by the news stage is saved under
+`data/news_archive/articles/`. Its filename contains both the stable story ID derived
+from the canonical URL and a normalized source-text SHA-256 prefix; `index.json`
+stores the complete hash. Successfully used
+narrations are mirrored under `data/news_archive/summaries/`, while `index.json`
+records which `Video N` used each story.
+
+Duplicate checks are deliberately layered:
+
+1. Identical normalized source hashes are rejected locally with no provider request.
+2. Unrelated files are cleared locally with no provider request.
+3. For plausible cross-feed matches, the new file and up to three strongest previous
+   files are sent in one structured AI request. The AI must distinguish the same event
+   from a genuinely new follow-up.
+4. The decision is cached by the new/prior content hashes and model namespace, so an
+   interrupted or repeated run does not pay for the same comparison twice.
+
+Completed `Video N` projects are backfilled automatically before a new news run. This
+backfill performs no AI requests. Inspect it manually with:
+
+```text
+scripts\news_archive.bat status
+scripts\news_archive.bat backfill
 ```
 
 Only folders named exactly `Video N` participate in project numbering.

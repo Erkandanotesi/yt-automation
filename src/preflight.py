@@ -28,6 +28,7 @@ from file_locations import (  # noqa: E402 - .env must be loaded first
     CONFIG_ROOT,
     DATA_ROOT,
     DOCS_ROOT,
+    NEWS_ARCHIVE_ROOT,
     PROJECTS_ROOT,
     REFERENCES_ROOT,
     SCRIPTS_ROOT,
@@ -46,6 +47,7 @@ from effects_stage import EffectsSettings, SUPPORTED_AUDIO  # noqa: E402
 from render_stage import RenderSettings  # noqa: E402
 from publish_stage import PublishSettings  # noqa: E402
 from youtube_upload import YouTubeUploadSettings  # noqa: E402
+from news_archive import ArchiveSettings  # noqa: E402
 
 
 PLACEHOLDER_MARKERS = (
@@ -137,25 +139,31 @@ def git_ignores_env() -> tuple[bool, str]:
 def git_ignores_runtime_state() -> tuple[bool, str]:
     if not (AUTOMATION_ROOT / ".git").exists():
         return False, "Git repository is not initialized."
-    result = subprocess.run(
-        [
-            "git",
-            "-c",
-            f"safe.directory={AUTOMATION_ROOT.as_posix()}",
-            "check-ignore",
-            "-q",
-            "data/processed_urls.json",
-        ],
-        cwd=AUTOMATION_ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    return result.returncode == 0, (
-        "Runtime URL history is excluded from Git."
-        if result.returncode == 0
-        else "data/processed_urls.json is not excluded from Git."
+    targets = ("data/processed_urls.json", "data/news_archive/index.json")
+    ignored: list[str] = []
+    for target in targets:
+        result = subprocess.run(
+            [
+                "git",
+                "-c",
+                f"safe.directory={AUTOMATION_ROOT.as_posix()}",
+                "check-ignore",
+                "-q",
+                target,
+            ],
+            cwd=AUTOMATION_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            ignored.append(target)
+    passed = len(ignored) == len(targets)
+    return passed, (
+        "Runtime URL history and pulled-news archive are excluded from Git."
+        if passed
+        else f"Runtime paths not excluded from Git: {sorted(set(targets) - set(ignored))}"
     )
 
 
@@ -253,6 +261,22 @@ def collect_checks() -> list[Check]:
     add("Secret exclusion", ignored, ignore_detail)
     ignored_state, state_detail = git_ignores_runtime_state()
     add("Runtime-state exclusion", ignored_state, state_detail)
+
+    try:
+        news_archive_settings = ArchiveSettings.from_environment()
+        news_archive_settings.validate()
+    except ValueError as exc:
+        add("Pulled-news archive configuration", False, str(exc))
+    else:
+        add(
+            "Pulled-news archive configuration",
+            NEWS_ARCHIVE_ROOT.is_dir(),
+            (
+                f"archive={NEWS_ARCHIVE_ROOT}; exact SHA-256 first; "
+                f"AI candidates={news_archive_settings.candidate_limit}; "
+                f"local threshold={news_archive_settings.local_similarity_threshold:g}"
+            ),
+        )
 
     provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
     provider_key = "OPENAI_API_KEY" if provider == "openai" else "GEMINI_API_KEY"

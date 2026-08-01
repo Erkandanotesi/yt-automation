@@ -17,6 +17,9 @@ Kaynak kod `src`, RSS/profil ayarları `config`, çalışma verileri `data`, bel
 klasöründedir. Bütün yolların tek kaynağı `src\file_locations.py` dosyasıdır.
 
 `data\processed_urls.json` ve medya indeksleri üretim durumudur; Git'e eklenmez.
+`data\news_archive` çekilen haber metinlerini ID + SHA-256 ile saklar. Aynı metin
+yerel olarak engellenir; farklı feed'deki muhtemel aynı olaylar yalnızca gerektiğinde
+AI ile karşılaştırılır ve sonuç hash'lerle önbelleğe alınır.
 
 2. KURULUM
 ----------

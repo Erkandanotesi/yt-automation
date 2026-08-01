@@ -41,6 +41,7 @@ from file_utils import (
     sha256_text,
     stable_story_id,
 )
+from news_archive import ArchiveSettings, NewsArchive
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -227,7 +228,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="Allow stories used in previous videos to be considered again.",
+        help=(
+            "Ignore processed URL history while scanning; the persistent news "
+            "archive still prevents duplicate story creation."
+        ),
     )
     parser.add_argument(
         "--repair-existing",
@@ -337,6 +341,15 @@ class NewsSummary(BaseModel):
     factual_review: FactualReview
 
 
+class NewsDuplicateReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_duplicate: bool
+    duplicate_archive_id: str = ""
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
@@ -435,7 +448,10 @@ def load_channel_profile() -> str:
 
 def load_state() -> set[str]:
     if ARGS.reset:
-        LOGGER.warning("--reset kullanıldı; geçmiş haberler bu çalışmada yeniden değerlendirilecek.")
+        LOGGER.warning(
+            "--reset ignores URL history only; hash and AI archive duplicate "
+            "protection remains active."
+        )
         return set()
 
     if not GLOBAL_STATE_PATH.exists():
@@ -748,6 +764,33 @@ def structured_ai_call(prompt: str, schema_type: type[SchemaT]) -> SchemaT:
         attempts=API_RETRIES,
         description=f"{PROVIDER} API çağrısı",
     )
+
+
+def compare_news_files_with_ai(payload: dict) -> dict:
+    """Determine whether a pulled article repeats a previously used news event."""
+    previous_ids = [item["archive_id"] for item in payload["previous_files"]]
+    prompt = f"""
+Compare NEW_FILE with PREVIOUS_FILES and decide whether NEW_FILE reports the
+same underlying news event as any previous file.
+
+Rules:
+- Reworded, syndicated, translated, or independently reported coverage of the
+  same announcement, incident, lawsuit, launch, disclosure, or decision is a
+  duplicate.
+- Sharing a company, product, person, or broad topic is not enough.
+- A genuine follow-up with a materially new event or new facts is not a
+  duplicate, even when it refers to an older event.
+- Base the decision only on the supplied file contents and metadata.
+- If is_duplicate is true, duplicate_archive_id must be exactly one of:
+  {json.dumps(previous_ids, ensure_ascii=False)}
+- If is_duplicate is false, duplicate_archive_id must be an empty string.
+- Keep reason concise and identify the event used for the decision.
+
+FILES:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+"""
+    result = structured_ai_call(prompt, NewsDuplicateReview)
+    return result.model_dump()
 
 
 # =========================================================
@@ -1168,6 +1211,16 @@ def save_project_info(
                 "word_count": word_count(item["summary"].summary_en),
                 "narration_sha256": sha256_file(item["text_path"]),
                 "source_sha256": sha256_file(item["original_path"]),
+                "news_archive_id": item.get("archive_record", {}).get(
+                    "archive_id", ""
+                ),
+                "news_archive_source_file": item.get("archive_record", {}).get(
+                    "source_file", ""
+                ),
+                "news_archive_content_sha256": item.get("archive_record", {}).get(
+                    "content_sha256", ""
+                ),
+                "duplicate_check": item.get("duplicate_decision", {}),
                 "source_extraction": item["candidate"].get("extraction", {}),
                 "validation": item["validation"],
             }
@@ -1451,6 +1504,8 @@ def validate_configuration() -> None:
 
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
 
+    ArchiveSettings.from_environment().validate()
+
     if PROVIDER == "gemini" and not os.getenv("GEMINI_API_KEY"):
         raise RuntimeError(
             "Gemini seçili ancak GEMINI_API_KEY eksik. "
@@ -1496,6 +1551,22 @@ def main() -> int:
             return 0
 
         channel_profile = load_channel_profile()
+        archive = NewsArchive(
+            ArchiveSettings.from_environment(
+                cache_namespace=(
+                    f"news-duplicate-v1:{PROVIDER}:"
+                    f"{OPENAI_MODEL if PROVIDER == 'openai' else GEMINI_MODEL}"
+                )
+            )
+        )
+        backfill = archive.backfill_projects(PROJECTS_ROOT)
+        LOGGER.info(
+            "News archive ready: %s | imported=%s | already_present=%s | skipped=%s",
+            backfill["archive_root"],
+            backfill["imported"],
+            backfill["already_present"],
+            backfill["skipped"],
+        )
         feed_urls = load_feed_urls()
         used_urls = load_state()
 
@@ -1560,6 +1631,33 @@ def main() -> int:
                     )
                     continue
 
+                archive_result = archive.inspect_and_store(
+                    canonical_url=canonical_url(candidate["url"]),
+                    title=candidate["title"],
+                    source=candidate["source"],
+                    source_url=candidate["url"],
+                    published_utc=safe_iso_datetime(candidate["published"]),
+                    category=CONTENT_CATEGORY,
+                    article_text=article_text,
+                    video_name=VIDEO_NAME,
+                    active_record_ids={
+                        item["archive_record"]["archive_id"]
+                        for item in created_items
+                    },
+                    compare_with_ai=compare_news_files_with_ai,
+                )
+                duplicate_decision = archive_result["decision"]
+                if duplicate_decision["is_duplicate"]:
+                    LOGGER.warning(
+                        "Duplicate news event rejected: %s | method=%s | "
+                        "duplicate_of=%s | reason=%s",
+                        candidate["title"],
+                        duplicate_decision["method"],
+                        duplicate_decision["duplicate_archive_id"],
+                        duplicate_decision["reason"],
+                    )
+                    continue
+
                 try:
                     validate_unique_source_content(
                         [
@@ -1608,6 +1706,8 @@ def main() -> int:
                         "text_path": text_path,
                         "original_path": original_path,
                         "validation": validation,
+                        "archive_record": archive_result["record"],
+                        "duplicate_decision": duplicate_decision,
                     }
                 )
 
@@ -1639,6 +1739,17 @@ def main() -> int:
             return 1
 
         used_urls.update(item["candidate"]["url"] for item in created_items)
+        archive.mark_project_used(
+            video_name=VIDEO_NAME,
+            items=[
+                {
+                    "archive_id": item["archive_record"]["archive_id"],
+                    "order": item["order"],
+                    "narration": item["summary"].summary_en,
+                }
+                for item in created_items
+            ],
+        )
         save_state(used_urls)
         save_project_info(
             len(candidates),

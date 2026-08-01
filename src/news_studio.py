@@ -24,6 +24,7 @@ from file_locations import (
     source_file,
 )
 from file_utils import atomic_write_json, sha256_file
+from news_archive import NewsArchive
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -353,6 +354,10 @@ def collect_project_status(video_number: int) -> dict:
         None,
     )
     lock = _read_json(video_dir / ".news_studio.lock")
+    try:
+        archive_status = {"status": "READY", **NewsArchive().status()}
+    except RuntimeError as exc:
+        archive_status = {"status": "ERROR", "detail": str(exc)}
     return {
         "schema_version": SCHEMA_VERSION,
         "video_number": video_number,
@@ -365,6 +370,7 @@ def collect_project_status(video_number: int) -> dict:
         "rebuild_warnings": rebuild_warnings,
         "locked": bool(lock),
         "lock": lock or None,
+        "news_archive": archive_status,
     }
 
 
@@ -383,6 +389,10 @@ def api_cost_plan(video_number: int | None = None) -> dict:
             )
     return {
         "news_text_requests": f"up to {top_n + 1}",
+        "news_duplicate_comparison_requests": (
+            "0 for exact or unrelated articles; one cached request per plausible "
+            "cross-feed match"
+        ),
         "elevenlabs_tts_stories": f"up to {top_n}",
         "forced_alignment_requests": "0 normally; only missing timestamp alignments",
         "storyboard_planning_requests": 1,

@@ -41,6 +41,15 @@ GAMING_FEEDS_FILE = CONFIG_ROOT / "gaming_feeds.opml"
 TECH_PROFILE_FILE = CONFIG_ROOT / "channel_profile.txt"
 GAMING_PROFILE_FILE = CONFIG_ROOT / "gaming_channel_profile.txt"
 PROCESSED_URLS_FILE = DATA_ROOT / "processed_urls.json"
+NEWS_ARCHIVE_ROOT = _configured_path(
+    "NEWS_ARCHIVE_PATH",
+    DATA_ROOT / "news_archive",
+    base=AUTOMATION_ROOT,
+)
+NEWS_ARCHIVE_ARTICLES_ROOT = NEWS_ARCHIVE_ROOT / "articles"
+NEWS_ARCHIVE_SUMMARIES_ROOT = NEWS_ARCHIVE_ROOT / "summaries"
+NEWS_ARCHIVE_INDEX_FILE = NEWS_ARCHIVE_ROOT / "index.json"
+NEWS_SIMILARITY_CACHE_FILE = NEWS_ARCHIVE_ROOT / "similarity_cache.json"
 MEDIA_INDEX_ROOT = DATA_ROOT / "indexes"
 MEDIA_INDEX_FILE = MEDIA_INDEX_ROOT / "media_index.json"
 MEDIA_INDEX_REPORT_FILE = MEDIA_INDEX_ROOT / "media_index_report.json"
@@ -120,5 +129,11 @@ def validate_project_path(path: Path) -> Path:
 
 
 def ensure_runtime_directories() -> None:
-    for path in (DATA_ROOT, MEDIA_INDEX_ROOT):
+    for path in (
+        DATA_ROOT,
+        NEWS_ARCHIVE_ROOT,
+        NEWS_ARCHIVE_ARTICLES_ROOT,
+        NEWS_ARCHIVE_SUMMARIES_ROOT,
+        MEDIA_INDEX_ROOT,
+    ):
         path.mkdir(parents=True, exist_ok=True)

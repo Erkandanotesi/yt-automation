@@ -8,6 +8,7 @@ from file_locations import (
     DATA_ROOT,
     EDITING_REFERENCE_FILE,
     PROCESSED_URLS_FILE,
+    NEWS_ARCHIVE_ROOT,
     SOURCE_ROOT,
     parse_video_number,
 )
@@ -19,6 +20,7 @@ class FileLocationTests(unittest.TestCase):
         self.assertEqual(CONFIG_ROOT, AUTOMATION_ROOT / "config")
         self.assertEqual(DATA_ROOT, AUTOMATION_ROOT / "data")
         self.assertEqual(PROCESSED_URLS_FILE, DATA_ROOT / "processed_urls.json")
+        self.assertEqual(NEWS_ARCHIVE_ROOT, DATA_ROOT / "news_archive")
         self.assertEqual(
             EDITING_REFERENCE_FILE,
             AUTOMATION_ROOT / "references" / "capcut_screenshot.png",
