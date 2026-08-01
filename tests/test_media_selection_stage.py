@@ -18,6 +18,7 @@ from media_selection_stage import (
     _load_selector_cache,
     _save_selector_cache,
     _validate_decisions,
+    _window_entities,
     build_archive_windows,
     coverage_quality,
     resolve_wikimedia_fallbacks,
@@ -139,6 +140,102 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_entity_context_is_carried_into_pronoun_window(self) -> None:
+        story = {
+            "title": "OpenAI prepares a new developer platform",
+            "named_entities": {"companies": ["OpenAI"], "products": []},
+            "phrases": [
+                {
+                    "start": 0,
+                    "end": 3,
+                    "text": "OpenAI introduced the platform.",
+                }
+            ],
+            "sentences": [],
+            "visual_beats": [],
+        }
+
+        entities = _window_entities(
+            story,
+            "It will become available to developers next week.",
+            start=3,
+        )
+
+        self.assertEqual(entities, ["OpenAI"])
+
+    def test_broad_only_ai_choice_is_redirected_to_online_fallback(self) -> None:
+        window = {
+            "window_id": "story_01_archive_001",
+            "entities": ["OpenAI"],
+            "visual_queries": ["OpenAI developer platform"],
+            "shortlist": [
+                {
+                    "asset_id": "generic-ai",
+                    "context_grounded": False,
+                }
+            ],
+        }
+        decisions = StoryMediaDecisions(
+            decisions=[
+                WindowDecision(
+                    window_id=window["window_id"],
+                    selected_asset_id="generic-ai",
+                    confidence=0.95,
+                    selection_reason=(
+                        "The generic technology image loosely matches the category."
+                    ),
+                )
+            ]
+        )
+
+        validated = _validate_decisions(
+            decisions,
+            [window],
+            {"title": "OpenAI prepares a new developer platform"},
+            minimum_confidence=0.70,
+        )
+
+        self.assertEqual(
+            validated[window["window_id"]].relevance_status,
+            "images_are_irrelevant",
+        )
+        self.assertIsNone(validated[window["window_id"]].selected_asset_id)
+
+    def test_low_confidence_choice_is_redirected_to_online_fallback(self) -> None:
+        window = {
+            "window_id": "story_01_archive_002",
+            "entities": ["Nvidia"],
+            "visual_queries": ["Nvidia GPU"],
+            "shortlist": [
+                {
+                    "asset_id": "nvidia-gpu",
+                    "context_grounded": True,
+                }
+            ],
+        }
+        decisions = StoryMediaDecisions(
+            decisions=[
+                WindowDecision(
+                    window_id=window["window_id"],
+                    selected_asset_id="nvidia-gpu",
+                    confidence=0.55,
+                    selection_reason="The entity matches but the exact event is uncertain.",
+                )
+            ]
+        )
+
+        validated = _validate_decisions(
+            decisions,
+            [window],
+            {"title": "Nvidia announces a new GPU"},
+            minimum_confidence=0.70,
+        )
+
+        self.assertEqual(
+            validated[window["window_id"]].relevance_status,
+            "images_are_irrelevant",
+        )
+
     def test_image_usage_is_capped_twice_across_stories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

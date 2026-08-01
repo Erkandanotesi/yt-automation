@@ -245,6 +245,12 @@ Media-selector output is treated as a recommendation rather than trusted routing
 Missing windows, foreign asset IDs, inconsistent relevance fields, and ungrounded
 online entities are repaired deterministically from that window's own shortlist and
 the complete story context. These recoverable model mistakes do not abort production.
+The selector sends no local image pixels. Candidate metadata must now pass a local
+context-grounding gate before Luna may select it: an exact company/product/person match
+or at least two distinctive non-generic context terms are required. Entity context is
+carried across pronouns and split sentences, while choices below
+`MEDIA_MIN_AI_CONFIDENCE=0.70` are rejected in favor of the existing Wikimedia path.
+This improves precision without adding a vision request or another paid AI call.
 Each raw per-story selector response is saved before validation under
 `05_visuals/selector_cache/`. A matching fingerprint lets a resumed run reuse that
 response without paying for the same selector request again.

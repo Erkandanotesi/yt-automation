@@ -48,6 +48,12 @@ MEDIA_PLAN_SCHEMA_VERSION = 1
 SELECTOR_CACHE_SCHEMA_VERSION = 1
 STAGE_NAME = "archive_visuals"
 
+GENERIC_CONTEXT_TOKENS = {
+    "ai", "artificial", "company", "computer", "digital", "image", "internet",
+    "model", "news", "online", "report", "software", "system", "tech",
+    "technology", "video", "website",
+}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -69,6 +75,7 @@ class MediaSelectionSettings:
     wikimedia_max_downloads_per_video: int = 10
     wikimedia_max_searches_per_video: int = 6
     maximum_uses_per_video: int = 2
+    minimum_ai_confidence: float = 0.70
 
     @classmethod
     def from_environment(cls) -> "MediaSelectionSettings":
@@ -117,6 +124,9 @@ class MediaSelectionSettings:
             maximum_uses_per_video=int(
                 os.getenv("MEDIA_MAX_USES_PER_VIDEO", "2")
             ),
+            minimum_ai_confidence=float(
+                os.getenv("MEDIA_MIN_AI_CONFIDENCE", "0.70")
+            ),
         )
 
     def validate(self) -> None:
@@ -151,6 +161,8 @@ class MediaSelectionSettings:
             )
         if not 1 <= self.maximum_uses_per_video <= 10:
             raise ValueError("MEDIA_MAX_USES_PER_VIDEO must be between 1 and 10.")
+        if not 0.0 <= self.minimum_ai_confidence <= 1.0:
+            raise ValueError("MEDIA_MIN_AI_CONFIDENCE must be between 0 and 1.")
 
 
 class WindowDecision(BaseModel):
@@ -361,14 +373,52 @@ def _window_text(story: dict, start: float, end: float) -> str:
     return str(story.get("title", "")).strip()
 
 
-def _window_entities(story: dict, text: str) -> list[str]:
-    normalized = normalize_search_text(text)
+def _story_entities(story: dict) -> list[str]:
     entities: list[str] = []
     for values in story.get("named_entities", {}).values():
         for value in values:
-            if normalize_search_text(str(value)) in normalized and value not in entities:
-                entities.append(str(value))
+            cleaned = str(value).strip()
+            if cleaned and cleaned not in entities:
+                entities.append(cleaned)
     return entities
+
+
+def _entities_in_text(entities: list[str], text: str) -> list[str]:
+    normalized = f" {normalize_search_text(text)} "
+    return [
+        entity
+        for entity in entities
+        if f" {normalize_search_text(entity)} " in normalized
+    ]
+
+
+def _window_entities(story: dict, text: str, start: float = 0.0) -> list[str]:
+    """Resolve explicit entities, then carry nearby context across split narration."""
+    entities = _story_entities(story)
+    direct = _entities_in_text(entities, text)
+    if direct:
+        return direct
+
+    preceding: list[tuple[float, str]] = []
+    for collection in ("visual_beats", "sentences", "phrases"):
+        for item in story.get(collection, []):
+            end = float(item.get("end", item.get("start", 0)))
+            if end > start + 0.05:
+                continue
+            item_text = " ".join(
+                str(item.get(field, ""))
+                for field in ("text", "important_claim", "visual_query")
+            )
+            preceding.append((end, item_text))
+    for _, prior_text in sorted(preceding, reverse=True):
+        carried = _entities_in_text(entities, prior_text)
+        if carried:
+            return carried
+
+    title_entities = _entities_in_text(entities, str(story.get("title", "")))
+    if title_entities:
+        return title_entities[:2]
+    return entities[:1]
 
 
 def infer_scene_intent(text: str) -> str:
@@ -421,12 +471,16 @@ def build_archive_windows(
             settings,
         ):
             text = _window_text(story, start, end)
-            entities = _window_entities(story, text)
             visual_queries = [
                 str(item.get("visual_query", "")).strip()
                 for item in story.get("visual_beats", [])
                 if _overlap(start, end, item) and item.get("visual_query")
             ]
+            entities = _window_entities(
+                story,
+                " ".join([text, *visual_queries]),
+                start,
+            )
             windows.append(
                 {
                     "window_id": (
@@ -524,11 +578,22 @@ def _asset_score(
         1.0 + math.log((asset_count + 1) / (document_frequencies[token] + 1))
         for token in overlap
     )
-    normalized_path = normalize_search_text(asset.get("workspace_relative_path", ""))
+    searchable_asset_text = normalize_search_text(
+        " ".join(
+            [
+                asset.get("workspace_relative_path", ""),
+                asset.get("local_caption", ""),
+                " ".join(asset.get("keywords", [])),
+            ]
+        )
+    )
     entity_hits = [
         entity
         for entity in entities
-        if normalize_search_text(entity) in normalized_path
+        if (
+            f" {normalize_search_text(entity)} "
+            in f" {searchable_asset_text} "
+        )
     ]
     exact_entity_bonus = 5.0 * len(entity_hits)
     phrase_bonus = sum(
@@ -649,6 +714,20 @@ def shortlist_assets(
             ranked.insert(0, neutral)
     result = []
     for score, asset, components in ranked[: settings.shortlist_size]:
+        distinctive_overlap = [
+            token
+            for token in components.get("overlap_tokens", [])
+            if token not in GENERIC_CONTEXT_TOKENS and len(token) >= 3
+        ]
+        entity_hits = components.get("entity_hits", [])
+        context_grounded = bool(entity_hits) or len(distinctive_overlap) >= 2
+        grounding_basis = (
+            "exact_entity"
+            if entity_hits
+            else "distinctive_context"
+            if context_grounded
+            else "broad_or_weak_match"
+        )
         result.append(
             {
                 "asset_id": asset["asset_id"],
@@ -667,6 +746,9 @@ def shortlist_assets(
                 "sha256": asset["sha256"],
                 "local_score": score,
                 "score_components": components,
+                "context_grounded": context_grounded,
+                "grounding_basis": grounding_basis,
+                "distinctive_overlap_tokens": distinctive_overlap,
                 "neutral_fallback": bool(
                     components.get("neutral_fallback", False)
                 ),
@@ -697,6 +779,13 @@ story. Select one only when it is clearly relevant to the exact spoken context.
 
 Rules:
 - Match the precise spoken claim and entity, not merely a broad technology category.
+- `context_grounded=false` is a hard rejection: never select that candidate even if
+  its broad category, local score, or filename appears superficially useful.
+- Prefer `grounding_basis=exact_entity`. A distinctive-context match is acceptable
+  only when the visible subject described by its metadata accurately represents the
+  spoken claim without implying the wrong company, person, product, or event.
+- confidence measures exact contextual relevance, not image quality. Use less than
+  0.70 whenever visible entity/event support is uncertain.
 - Do not use the same image twice in this story unless no reasonable alternative exists.
 - Never use the same image in adjacent windows.
 - Prefer crop-safe 16:9 assets without low-resolution or crop-risk flags.
@@ -902,6 +991,7 @@ def _validate_decisions(
     decisions: StoryMediaDecisions,
     windows: list[dict],
     story: dict,
+    minimum_confidence: float = 0.0,
 ) -> dict[str, WindowDecision]:
     supplied: dict[str, WindowDecision] = {}
     for decision in decisions.decisions:
@@ -910,17 +1000,18 @@ def _validate_decisions(
     for window in windows:
         decision = supplied.get(window["window_id"])
         if decision is None:
-            chosen = window["shortlist"][0]
-            decision = WindowDecision(
-                window_id=window["window_id"],
-                relevance_status="relevant",
-                selected_asset_id=chosen["asset_id"],
-                confidence=0.1,
-                selection_reason=(
-                    "The AI selector omitted this window; the strongest grounded "
-                    "local candidate was selected automatically."
+            decision = _fallback_to_local_candidate(
+                WindowDecision(
+                    window_id=window["window_id"],
+                    relevance_status="relevant",
+                    selected_asset_id=window["shortlist"][0]["asset_id"],
+                    confidence=0.1,
+                    selection_reason=(
+                        "The AI selector omitted this narration window entirely."
+                    ),
                 ),
-                alternative_asset_ids=[],
+                window,
+                "The AI selector omitted this narration window entirely.",
             )
         allowed = {
             candidate["asset_id"]
@@ -935,10 +1026,57 @@ def _validate_decisions(
                 window,
                 "The AI returned an asset from outside this window's shortlist.",
             )
+        selected_candidate = next(
+            (
+                candidate
+                for candidate in window["shortlist"]
+                if candidate["asset_id"] == decision.selected_asset_id
+            ),
+            None,
+        )
+        if (
+            decision.relevance_status == "relevant"
+            and selected_candidate is not None
+            and (
+                not selected_candidate.get("context_grounded", True)
+                or decision.confidence < minimum_confidence
+            )
+        ):
+            cause = (
+                "The local candidate matched only broad or weak context."
+                if not selected_candidate.get("context_grounded", True)
+                else (
+                    f"The AI relevance confidence {decision.confidence:.2f} was below "
+                    f"the required {minimum_confidence:.2f}."
+                )
+            )
+            decision = WindowDecision(
+                window_id=window["window_id"],
+                relevance_status="images_are_irrelevant",
+                confidence=decision.confidence,
+                selection_reason=(
+                    f"{cause} Use a precisely grounded online fallback instead."
+                ),
+                online_search_query=" ".join(
+                    [
+                        *window.get("entities", []),
+                        *window.get("visual_queries", []),
+                    ]
+                )[:180],
+                required_entity=(window.get("entities") or [""])[0],
+            )
         decision.alternative_asset_ids = [
             asset_id
             for asset_id in decision.alternative_asset_ids
             if asset_id in allowed
+            and any(
+                candidate["asset_id"] == asset_id
+                and (
+                    candidate.get("context_grounded", True)
+                    or candidate.get("neutral_fallback", False)
+                )
+                for candidate in window["shortlist"]
+            )
         ][:3]
         if decision.relevance_status == "images_are_irrelevant":
             decision = _ground_irrelevant_decision(decision, window, story)
@@ -951,10 +1089,38 @@ def _fallback_to_local_candidate(
     window: dict,
     reason: str,
 ) -> WindowDecision:
-    chosen = window["shortlist"][0]
+    grounded = [
+        item
+        for item in window["shortlist"]
+        if item.get("context_grounded", True)
+    ]
+    neutral = [
+        item
+        for item in window["shortlist"]
+        if item.get("neutral_fallback", False)
+    ]
+    eligible = grounded or neutral
+    if not eligible:
+        return WindowDecision(
+            window_id=window["window_id"],
+            relevance_status="images_are_irrelevant",
+            confidence=0.05,
+            selection_reason=(
+                "Automatic recovery rejected every local candidate because none "
+                f"passed contextual grounding. {reason}"
+            )[:700],
+            online_search_query=" ".join(
+                [
+                    *window.get("entities", []),
+                    *window.get("visual_queries", []),
+                ]
+            )[:180],
+            required_entity=(window.get("entities") or [""])[0],
+        )
+    chosen = eligible[0]
     alternatives = [
         item["asset_id"]
-        for item in window["shortlist"][1:4]
+        for item in eligible[1:4]
     ]
     return WindowDecision(
         window_id=window["window_id"],
@@ -1204,6 +1370,12 @@ def _enforce_selection_constraints(
             candidate = candidate_by_id.get(asset_id)
             if candidate is None:
                 return False
+            if not (
+                candidate.get("context_grounded", True)
+                or candidate.get("neutral_fallback", False)
+                or candidate.get("online_fallback", False)
+            ):
+                return False
             sha = candidate["sha256"]
             if sha == previous_sha:
                 return False
@@ -1253,6 +1425,17 @@ def _enforce_selection_constraints(
                     asset_id
                     for asset_id in deduplicated_ids
                     if candidate_by_id.get(asset_id, {}).get("sha256") != previous_sha
+                    and (
+                        candidate_by_id.get(asset_id, {}).get(
+                            "context_grounded", True
+                        )
+                        or candidate_by_id.get(asset_id, {}).get(
+                            "neutral_fallback", False
+                        )
+                        or candidate_by_id.get(asset_id, {}).get(
+                            "online_fallback", False
+                        )
+                    )
                     and video_usage_counts[
                         candidate_by_id.get(asset_id, {}).get("sha256", "")
                     ]
@@ -1536,7 +1719,12 @@ def run_media_selection(
                 selector_requests_this_run += 1
         else:
             selector_cache_hits += 1
-        decision_by_window = _validate_decisions(decisions, windows, story)
+        decision_by_window = _validate_decisions(
+            decisions,
+            windows,
+            story,
+            minimum_confidence=settings.minimum_ai_confidence,
+        )
         (
             decision_by_window,
             media_index,
