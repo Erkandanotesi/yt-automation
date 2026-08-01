@@ -1775,10 +1775,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
             except Exception as exc:  # noqa: BLE001
-                LOGGER.exception(
-                    "Haber işlenirken hata oluştu: %s | %s",
+                LOGGER.warning(
+                    "Aday haber atlandı; sıradaki RSS adayı denenecek: %s | %s",
                     candidate["title"],
                     exc,
+                    exc_info=True,
                 )
 
         save_combined_script(created_items)

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import io
+import json
+import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +16,7 @@ from news_studio import (
     _preview_status,
     approve_preview,
     interactive,
+    run_preflight,
     run_flow,
     timed_choice,
 )
@@ -29,6 +33,29 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_compact_preflight_hides_pass_detail_and_keeps_warning(self) -> None:
+        payload = {
+            "checks": [
+                {"status": "PASS", "name": "Python", "detail": "verbose detail"},
+                {"status": "WARN", "name": "OAuth", "detail": "setup remains"},
+            ]
+        }
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(payload), stderr=""
+        )
+        output = io.StringIO()
+        with (
+            patch("news_studio.subprocess.run", return_value=completed),
+            patch("news_studio._console_color_enabled", return_value=False),
+            redirect_stdout(output),
+        ):
+            passed = run_preflight()
+
+        self.assertTrue(passed)
+        self.assertIn("PREFLIGHT PASSED", output.getvalue())
+        self.assertIn("OAuth", output.getvalue())
+        self.assertNotIn("verbose detail", output.getvalue())
+
     def test_interactive_preflight_failure_stops_before_project_creation(self) -> None:
         with (
             patch("news_studio.run_preflight", return_value=False),
@@ -72,6 +99,14 @@ class NewsStudioTests(unittest.TestCase):
         self.assertIn("82%", output)
         self.assertIn("91%", output)
         self.assertIn("COMPLETE", output)
+
+    def test_live_progress_without_color_does_not_emit_ansi_clear(self) -> None:
+        stream = io.StringIO()
+        display = ProgressDisplay(6, stream=stream, live=True, color=False)
+
+        display.start_stage("render", 9)
+
+        self.assertNotIn("\x1b[2J", stream.getvalue())
 
     def test_autonomous_defaults_skip_separators_then_upload(self) -> None:
         results = [

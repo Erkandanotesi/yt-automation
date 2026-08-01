@@ -363,10 +363,11 @@ class StoryboardStageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_project(root)
+            configured = replace(settings(), archive_directory=root / "archive")
             with patch("storyboard_stage.project_dir", return_value=root):
                 result = build_storyboard(
                     video_number=5,
-                    settings=settings(),
+                    settings=configured,
                     planner=planner,
                 )
 
@@ -380,6 +381,10 @@ class StoryboardStageTests(unittest.TestCase):
             self.assertIn("bottom 22%", images[0]["prompt"])
             self.assertIn("No readable text", images[0]["prompt"])
             self.assertEqual(images[0]["generation"]["status"], "pending")
+            self.assertEqual(
+                result["configuration"]["archive_directory"],
+                str(root / "archive"),
+            )
 
     def test_generation_requires_explicit_cost_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

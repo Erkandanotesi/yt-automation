@@ -144,11 +144,13 @@ seconds and defaults to uploading the MP4 plus its thumbnail, title, description
 chapter metadata. Press the alternative key during the countdown to override any
 default. The timeout values can be changed with
 `AUTOMATION_DECISION_TIMEOUT_SECONDS` and `AUTOMATION_UPLOAD_TIMEOUT_SECONDS`.
-During production, a persistent overall progress panel stays below live stage output.
-Completed rectangles are green, the active stage segment turns red if it fails, and
-remaining rectangles stay dim. The panel shows the current stage, percentage, and
-completed/total stage count. Headless scheduled runs emit the same information as
-plain progress snapshots for log files.
+The interactive launcher clears the screen between major decisions and stages. Its
+compact preflight reports only the overall result and actionable warnings; full stage
+output remains in each project's `orchestration/logs/` folder. During production, a
+color progress panel shows the current stage, percentage, and completed/total count.
+Completed rectangles are green, a failed stage segment is red, waiting states are
+yellow, and remaining rectangles stay dim. Headless scheduled runs emit plain progress
+snapshots without destructive screen clearing.
 Successful autonomous runs exit normally. If the launcher returns an error, its console
 stays open indefinitely at a failure prompt so the red stage and traceback can be
 inspected; press any key only when ready to close it.

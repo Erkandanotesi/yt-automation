@@ -19,7 +19,6 @@
       <outline type="rss" text="Slashdot" title="Slashdot" xmlUrl="https://rss.slashdot.org/Slashdot/slashdotMain" htmlUrl="https://rss.slashdot.org/Slashdot/slashdotMain"/>
       <outline type="rss" text="Stratechery by Ben Thompson" title="Stratechery by Ben Thompson" xmlUrl="https://stratechery.com/feed/" htmlUrl="https://stratechery.com/feed/"/>
       <outline type="rss" text="Tech | The Verge" title="Tech | The Verge" xmlUrl="https://theverge.com/rss/tech/index.xml" htmlUrl="https://theverge.com/rss/tech/index.xml"/>
-      <outline type="rss" text="The Next Web" title="The Next Web" xmlUrl="https://thenextweb.com/feed/" htmlUrl="https://thenextweb.com/feed/"/>
       <outline type="rss" text="The Register" title="The Register" xmlUrl="https://www.theregister.com/headlines.rss" htmlUrl="https://www.theregister.com/headlines.rss"/>
     </outline>
     <outline text="Cyber Security" title="Cyber Security">

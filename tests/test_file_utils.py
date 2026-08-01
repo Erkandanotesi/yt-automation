@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,16 @@ import file_utils
 
 
 class AtomicWriteTests(unittest.TestCase):
+    def test_atomic_json_serializes_windows_safe_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "state.json"
+            configured_path = Path(directory) / "Assets" / "Media"
+
+            file_utils.atomic_write_json(target, {"archive_directory": configured_path})
+
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(payload["archive_directory"], str(configured_path))
+
     def test_atomic_write_replaces_complete_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "state.json"

@@ -59,6 +59,12 @@ TERMINAL_COMPLETE = "COMPLETE"
 TERMINAL_WAITING = "WAITING"
 TERMINAL_FAILED = "FAILED"
 PROGRESS_WIDTH = 36
+ANSI_RESET = "\x1b[0m"
+ANSI_BOLD = "\x1b[1m"
+ANSI_CYAN = "\x1b[96m"
+ANSI_GREEN = "\x1b[92m"
+ANSI_YELLOW = "\x1b[93m"
+ANSI_RED = "\x1b[91m"
 STAGE_LABELS = {
     "news": "Collecting and writing news",
     "tts": "Creating ElevenLabs voiceovers",
@@ -72,6 +78,49 @@ STAGE_LABELS = {
     "render": "Encoding the final video",
     "publish": "Creating thumbnail and YouTube metadata",
 }
+
+
+def _enable_windows_ansi() -> bool:
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+    except (AttributeError, OSError):
+        return False
+
+
+def _console_color_enabled() -> bool:
+    return bool(sys.stdout.isatty()) and _enable_windows_ansi()
+
+
+def _paint(text: str, color: str, *, enabled: bool) -> str:
+    return f"{color}{text}{ANSI_RESET}" if enabled else text
+
+
+def clear_console() -> None:
+    """Clear only an interactive terminal; redirected logs must remain intact."""
+    if not sys.stdout.isatty():
+        return
+    if _enable_windows_ansi():
+        print("\x1b[2J\x1b[H", end="", flush=True)
+    elif os.name == "nt":
+        os.system("cls")
+
+
+def print_header(title: str, subtitle: str = "") -> None:
+    color = _console_color_enabled()
+    print(_paint("=" * 72, ANSI_CYAN, enabled=color))
+    print(_paint(title, ANSI_BOLD + ANSI_CYAN, enabled=color))
+    if subtitle:
+        print(subtitle)
+    print(_paint("=" * 72, ANSI_CYAN, enabled=color))
 
 
 def utc_now() -> str:
@@ -448,21 +497,7 @@ class ProgressDisplay:
         self._state = "QUEUED"
         self._stage_label = "Production queued"
         if self.color and os.name == "nt":
-            self.color = self._enable_windows_ansi()
-
-    @staticmethod
-    def _enable_windows_ansi() -> bool:
-        try:
-            import ctypes
-
-            kernel32 = ctypes.windll.kernel32
-            handle = kernel32.GetStdHandle(-11)
-            mode = ctypes.c_uint32()
-            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-                return False
-            return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
-        except (AttributeError, OSError):
-            return False
+            self.color = _enable_windows_ansi()
 
     def _bar_line(self, completed: int, state: str) -> str:
         completed = min(self.total, max(0, completed))
@@ -482,9 +517,18 @@ class ProgressDisplay:
         if self.color and failed:
             failed = f"\x1b[31m{failed}\x1b[0m"
         percentage = round(completed * 100 / self.total)
+        state_text = state
+        if self.color:
+            state_color = {
+                "COMPLETE": ANSI_GREEN,
+                "RUNNING": ANSI_CYAN,
+                "WAITING": ANSI_YELLOW,
+                "FAILED": ANSI_RED,
+            }.get(state, ANSI_RESET)
+            state_text = _paint(state, ANSI_BOLD + state_color, enabled=True)
         return (
             f"[{filled}{failed}{remaining}] {percentage:3d}%  "
-            f"{completed:02d}/{self.total:02d}  {state} - {self._stage_label}"
+            f"{completed:02d}/{self.total:02d}  {state_text} - {self._stage_label}"
         )
 
     def _clear_live_line(self) -> None:
@@ -504,12 +548,23 @@ class ProgressDisplay:
             self.stream.flush()
 
     def start_stage(self, stage: str, completed: int) -> None:
-        self._clear_live_line()
-        if self._active:
-            self.stream.write("\n")
+        if self.live and self.color:
+            self.stream.write("\x1b[2J\x1b[H")
+        elif self.live and self.stream is sys.stdout and os.name == "nt":
+            os.system("cls")
+        else:
+            self._clear_live_line()
+            if self._active:
+                self.stream.write("\n")
         label = STAGE_LABELS.get(stage, stage.replace("_", " ").title())
         self._stage_label = label
-        self.stream.write(f"\n⚙ {label}...\n")
+        stage_number = FLOW_STAGES.index(stage) + 1
+        heading = f"NEWS STUDIO  |  {project_name(self.video_number)}"
+        if self.color:
+            heading = f"{ANSI_BOLD}{ANSI_CYAN}{heading}{ANSI_RESET}"
+        self.stream.write(f"{heading}\n")
+        self.stream.write("-" * 72 + "\n")
+        self.stream.write(f"Stage {stage_number:02d}/{self.total:02d}  {label}\n")
         self._active = False
         self._draw(completed, "RUNNING")
 
@@ -518,10 +573,30 @@ class ProgressDisplay:
             self.stream.write(line)
             self.stream.flush()
             return
+        normalized = line.strip()
+        important = any(
+            marker in normalized.casefold()
+            for marker in (
+                "warning",
+                "error",
+                "failed",
+                "saved:",
+                "complete:",
+                "completed.",
+            )
+        )
+        if not important:
+            return
         self._clear_live_line()
-        self.stream.write(line)
-        if line and not line.endswith("\n"):
-            self.stream.write("\n")
+        lowered = normalized.casefold()
+        if "error" in lowered or "failed" in lowered:
+            message_color = ANSI_RED
+        elif "warning" in lowered:
+            message_color = ANSI_YELLOW
+        else:
+            message_color = ANSI_GREEN
+        message = _paint(normalized, message_color, enabled=self.color)
+        self.stream.write(message + "\n")
         self._active = False
         self._draw(self._completed, self._state)
 
@@ -1035,11 +1110,14 @@ def timed_choice(
         raise ValueError("The timed-choice default must be one of the options.")
     if timeout_seconds < 0:
         raise ValueError("The timed-choice timeout cannot be negative.")
+    color = _console_color_enabled()
     print()
-    print(prompt)
+    print(_paint(prompt, ANSI_BOLD + ANSI_CYAN, enabled=color))
     for key, label in options.items():
         suffix = " [default]" if key == default else ""
-        print(f"{key}. {label}{suffix}")
+        key_text = _paint(key, ANSI_GREEN, enabled=color)
+        default_text = _paint(suffix, ANSI_YELLOW, enabled=color)
+        print(f"  {key_text}. {label}{default_text}")
     print(
         f"Press a choice key within {timeout_seconds:g} seconds; "
         f"otherwise {default} is selected automatically: ",
@@ -1075,7 +1153,7 @@ def timed_choice(
 
     selected = selected or default
     print(selected)
-    print(f"Selected: {options[selected]}")
+    print(_paint(f"Selected: {options[selected]}", ANSI_GREEN, enabled=color))
     return selected
 
 
@@ -1100,25 +1178,95 @@ def upload_project(video_number: int) -> dict:
 
 
 def run_preflight() -> bool:
-    print("Running no-cost production preflight...")
+    color = _console_color_enabled()
+    print(
+        _paint(
+            "Checking the production environment (no API calls)...",
+            ANSI_CYAN,
+            enabled=color,
+        )
+    )
     result = subprocess.run(
-        [sys.executable, str(source_file("preflight.py"))],
+        [sys.executable, str(source_file("preflight.py")), "--json"],
         cwd=AUTOMATION_ROOT,
         check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
-    if result.returncode != 0:
-        print("Preflight failed. No project or provider request was started.")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        payload = {}
+    checks = payload.get("checks", []) if isinstance(payload, dict) else []
+    failures = [item for item in checks if item.get("status") == "FAIL"]
+    warnings = [item for item in checks if item.get("status") == "WARN"]
+    if result.returncode != 0 or failures:
+        print(_paint("PREFLIGHT FAILED", ANSI_BOLD + ANSI_RED, enabled=color))
+        if failures:
+            for item in failures:
+                print(f"  - {item.get('name')}: {item.get('detail')}")
+        else:
+            detail = (
+                result.stderr.strip()
+                or result.stdout.strip()
+                or "Unknown preflight error."
+            )
+            print(detail)
+        print("No project or provider request was started.")
         return False
+    print(
+        _paint(
+            f"PREFLIGHT PASSED  |  {len(checks)} checks, {len(warnings)} warning(s)",
+            ANSI_BOLD + ANSI_GREEN,
+            enabled=color,
+        )
+    )
+    for item in warnings:
+        print(
+            _paint(
+                f"  Warning: {item.get('name')} - {item.get('detail')}",
+                ANSI_YELLOW,
+                enabled=color,
+            )
+        )
     return True
 
 
+def print_api_cost_plan(plan: dict) -> None:
+    color = _console_color_enabled()
+    print(
+        _paint(
+            "Provider request ceiling for this run",
+            ANSI_BOLD + ANSI_CYAN,
+            enabled=color,
+        )
+    )
+    labels = {
+        "news_text_requests": "News summaries",
+        "news_duplicate_comparison_requests": "Duplicate checks",
+        "elevenlabs_tts_stories": "Voiceovers",
+        "forced_alignment_requests": "Alignment",
+        "storyboard_planning_requests": "Storyboard plan",
+        "story_image_requests_remaining": "AI images remaining",
+        "archive_selection_requests": "Archive selection",
+        "publishing_copy_requests": "YouTube copy",
+        "thumbnail_image_requests": "Thumbnail",
+    }
+    for key, label in labels.items():
+        if key in plan:
+            print(f"  {label:22} {plan[key]}")
+
+
 def interactive() -> int:
+    clear_console()
+    print_header("NEWS STUDIO", "Autonomous technology-news production")
     if not run_preflight():
         return 1
     latest = latest_project_number()
     decision_timeout = float(os.getenv("AUTOMATION_DECISION_TIMEOUT_SECONDS", "15"))
     upload_timeout = float(os.getenv("AUTOMATION_UPLOAD_TIMEOUT_SECONDS", "30"))
-    print("NEWS STUDIO - AUTONOMOUS PRODUCTION")
     start_options = {"1": "Create a new Tech News video"}
     if latest is not None:
         start_options["2"] = f"Resume {project_name(latest)}"
@@ -1137,7 +1285,9 @@ def interactive() -> int:
             "category", "tech"
         )
 
-    print(json.dumps(api_cost_plan(video_number), ensure_ascii=False, indent=2))
+    clear_console()
+    print_header("NEWS STUDIO", f"Selected project: {project_name(video_number)}")
+    print_api_cost_plan(api_cost_plan(video_number))
     confirmation = timed_choice(
         "Allow the listed provider requests?",
         {"1": "Continue with provider requests", "0": "Cancel safely"},
@@ -1148,6 +1298,7 @@ def interactive() -> int:
         print("Cancelled before any provider request.")
         return 0
 
+    clear_console()
     progress_display = ProgressDisplay(video_number)
     separator_mode: Literal["manual", "skip", "defer"] = "defer"
     preview_approved = False
@@ -1162,8 +1313,12 @@ def interactive() -> int:
             manual_separator_mode=separator_mode,
             progress=progress_display,
         )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("stage") == "manual_separators":
+            clear_console()
+            print_header(
+                "NEWS STUDIO - ACTION REQUIRED",
+                f"{project_name(video_number)} | Manual separator checkpoint",
+            )
             separator_choice = timed_choice(
                 "Manual video separator checkpoint.",
                 {
@@ -1185,7 +1340,6 @@ def interactive() -> int:
                     manual_separator_mode="manual",
                     progress=progress_display,
                 )
-                print(json.dumps(result, ensure_ascii=False, indent=2))
                 if result.get("stage") == "manual_separators":
                     return 0
             else:
@@ -1198,6 +1352,11 @@ def interactive() -> int:
             )
             if sys.stdin.isatty() and hasattr(os, "startfile"):
                 os.startfile(proof)  # type: ignore[attr-defined]
+            clear_console()
+            print_header(
+                "NEWS STUDIO - PREVIEW REVIEW",
+                f"{project_name(video_number)} | {proof}",
+            )
             preview_choice = timed_choice(
                 f"Approve the review preview? {proof}",
                 {"1": "Approve and render", "0": "Stop before final render"},
@@ -1214,6 +1373,11 @@ def interactive() -> int:
     if result.get("status") != "COMPLETE":
         print("Production did not complete, so upload was not attempted.")
         return 1
+    clear_console()
+    print_header(
+        "NEWS STUDIO - PRODUCTION COMPLETE",
+        f"{project_name(video_number)} is ready for YouTube",
+    )
     upload_choice = timed_choice(
         "Upload the video, thumbnail, title, description, and chapters to YouTube?",
         {"1": "Upload to YouTube", "0": "Do not upload"},
@@ -1222,7 +1386,13 @@ def interactive() -> int:
     )
     if upload_choice == "1":
         uploaded = upload_project(video_number)
-        print(json.dumps(uploaded, ensure_ascii=False, indent=2))
+        print(
+            _paint(
+                f"Upload complete: {uploaded.get('video_url', uploaded.get('status', 'complete'))}",
+                ANSI_BOLD + ANSI_GREEN,
+                enabled=_console_color_enabled(),
+            )
+        )
     else:
         print("Upload skipped; the complete publish package was preserved.")
     return 0
@@ -1361,7 +1531,14 @@ def main() -> int:
         print("\nInterrupted safely. Completed artifacts were preserved.", file=sys.stderr)
         return 130
     except Exception as exc:  # noqa: BLE001
-        print(f"[NEWS STUDIO ERROR] {exc}", file=sys.stderr)
+        print(
+            _paint(
+                f"[NEWS STUDIO ERROR] {exc}",
+                ANSI_BOLD + ANSI_RED,
+                enabled=_console_color_enabled(),
+            ),
+            file=sys.stderr,
+        )
         return 1
 
 

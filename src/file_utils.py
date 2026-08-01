@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+def _json_default(value: Any) -> str:
+    """Serialize filesystem paths consistently without hiding other type errors."""
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -34,6 +41,7 @@ def json_fingerprint(value: Any) -> str:
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+        default=_json_default,
     ).encode("utf-8")
     return sha256_bytes(encoded)
 
@@ -65,5 +73,11 @@ def atomic_write_text(path: Path, text: str) -> None:
 def atomic_write_json(path: Path, value: Any) -> None:
     atomic_write_text(
         path,
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            default=_json_default,
+        )
+        + "\n",
     )

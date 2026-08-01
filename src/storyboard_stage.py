@@ -758,7 +758,10 @@ def build_storyboard(
         "video_name": project_name(video_number),
         "created_at_utc": existing.get("created_at_utc", utc_now()),
         "updated_at_utc": utc_now(),
-        "configuration": asdict(settings),
+        "configuration": {
+            key: str(value) if isinstance(value, Path) else value
+            for key, value in asdict(settings).items()
+        },
         "story_count": len(contexts),
         "planned_story_count": len(ordered),
         "planned_image_count": sum(len(item.get("images", [])) for item in ordered),
