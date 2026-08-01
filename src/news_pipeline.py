@@ -100,6 +100,9 @@ MAX_CANDIDATES = int(os.getenv("MAX_CANDIDATES", "25"))
 NEWS_SELECTION_CANDIDATE_COUNT = int(
     os.getenv("NEWS_SELECTION_CANDIDATE_COUNT", "40")
 )
+NEWS_SELECTION_TITLE_SIMILARITY_THRESHOLD = float(
+    os.getenv("NEWS_SELECTION_TITLE_SIMILARITY_THRESHOLD", "0.60")
+)
 MAX_FEED_ITEMS = int(os.getenv("MAX_FEED_ITEMS", "30"))
 TOP_N_DEFAULT = int(os.getenv("TOP_N", "5"))
 RANKING_RESERVE = int(os.getenv("RANKING_RESERVE", "15"))
@@ -440,6 +443,99 @@ def normalized_title(title: str) -> str:
     title = unicodedata.normalize("NFKD", title.lower())
     title = title.encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^a-z0-9]+", " ", title).strip()
+
+
+TITLE_DIVERSITY_STOPWORDS = {
+    "after", "about", "against", "from", "into", "over", "says", "that",
+    "their", "this", "with", "will", "report", "reports", "new", "news",
+}
+
+
+def title_terms(title: str) -> set[str]:
+    return {
+        term
+        for term in normalized_title(title).split()
+        if len(term) >= 3 and term not in TITLE_DIVERSITY_STOPWORDS
+    }
+
+
+def title_similarity(first_title: str, second_title: str) -> float:
+    """Return headline containment similarity for cross-feed event suppression."""
+    first_terms = title_terms(first_title)
+    second_terms = title_terms(second_title)
+    if not first_terms or not second_terms:
+        return 0.0
+    return len(first_terms & second_terms) / min(len(first_terms), len(second_terms))
+
+
+def candidate_source_key(candidate: dict) -> str:
+    feed_host = urlsplit(str(candidate.get("feed_url", ""))).netloc.casefold()
+    return feed_host or str(candidate.get("source", "unknown-source")).casefold()
+
+
+def diversify_candidates(candidates: list[dict], selection_count: int) -> list[dict]:
+    """Put a publisher-balanced, headline-diverse group first, deterministically."""
+    if selection_count <= 0 or not candidates:
+        return list(candidates)
+
+    source_order: list[str] = []
+    buckets: dict[str, list[dict]] = {}
+    for candidate in candidates:
+        source_key = candidate_source_key(candidate)
+        if source_key not in buckets:
+            source_order.append(source_key)
+            buckets[source_key] = []
+        buckets[source_key].append(candidate)
+
+    selected: list[dict] = []
+    selected_urls: set[str] = set()
+    deferred_similar = 0
+    limit = min(selection_count, len(candidates))
+
+    # One candidate per publisher per pass prevents a prolific feed from filling
+    # the entire AI request. Candidates remain score-ordered within each bucket.
+    while len(selected) < limit:
+        made_progress = False
+        for source_key in source_order:
+            bucket = buckets[source_key]
+            while bucket:
+                candidate = bucket.pop(0)
+                if any(
+                    title_similarity(candidate["title"], chosen["title"])
+                    >= NEWS_SELECTION_TITLE_SIMILARITY_THRESHOLD
+                    for chosen in selected
+                ):
+                    deferred_similar += 1
+                    continue
+                selected.append(candidate)
+                selected_urls.add(candidate["url"])
+                made_progress = True
+                break
+            if len(selected) >= limit:
+                break
+        if not made_progress:
+            break
+
+    # Similar headlines are deferred, not discarded. If diversity filtering leaves
+    # too few items, restore the best remaining candidates in their original order.
+    for candidate in candidates:
+        if len(selected) >= limit:
+            break
+        if candidate["url"] not in selected_urls:
+            selected.append(candidate)
+            selected_urls.add(candidate["url"])
+
+    remainder = [
+        candidate for candidate in candidates if candidate["url"] not in selected_urls
+    ]
+    LOGGER.info(
+        "Diversified AI ranking pool: first=%s | publishers=%s | "
+        "similar headlines deferred=%s",
+        len(selected),
+        len({candidate_source_key(item) for item in selected}),
+        deferred_similar,
+    )
+    return selected + remainder
 
 
 def slugify(value: str, max_length: int = 90) -> str:
@@ -1688,6 +1784,10 @@ def validate_configuration() -> None:
         raise ValueError("MAX_CANDIDATES must be at least TOP_N.")
     if NEWS_SELECTION_CANDIDATE_COUNT < TOP_N:
         raise ValueError("NEWS_SELECTION_CANDIDATE_COUNT must be at least TOP_N.")
+    if not 0.0 <= NEWS_SELECTION_TITLE_SIMILARITY_THRESHOLD <= 1.0:
+        raise ValueError(
+            "NEWS_SELECTION_TITLE_SIMILARITY_THRESHOLD must be between 0 and 1."
+        )
     if PROVIDER == "openai" and not OPENAI_NEWS_SELECTION_MODEL:
         raise ValueError("OPENAI_NEWS_SELECTION_MODEL cannot be empty.")
     if (
@@ -1781,6 +1881,10 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("Önceki videolarda kullanılan URL sayısı: %s", len(used_urls))
 
         candidates = collect_candidates(feed_urls, used_urls)
+        candidates = diversify_candidates(
+            candidates,
+            NEWS_SELECTION_CANDIDATE_COUNT,
+        )
         created_items = load_incomplete_created_items(candidates)
         save_candidates(candidates)
 

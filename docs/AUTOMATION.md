@@ -125,6 +125,11 @@ factual-quality gate. A rerun restores the validated prefix of an incomplete pro
 News ranking uses `OPENAI_NEWS_SELECTION_MODEL=gpt-5.6-luna` with
 `OPENAI_NEWS_SELECTION_REASONING_EFFORT=medium` and receives up to
 `NEWS_SELECTION_CANDIDATE_COUNT=40` candidates in its single selection request. The
+40 are selected deterministically from a larger local pool: publishers are rotated
+round-robin and strongly similar cross-feed headlines are deferred. This avoids both
+feed-order bias and random, irreproducible selections while preserving local relevance
+order within each publisher. `MAX_CANDIDATES=80` controls the larger local pool and
+`NEWS_SELECTION_TITLE_SIMILARITY_THRESHOLD=0.60` controls headline suppression. The
 all Luna-backed text stages use `medium` reasoning effort, including summaries,
 duplicate review, storyboard planning, archive selection, and publishing copy.
 Rejected sources never occupy a video slot. The news stage immediately tries the

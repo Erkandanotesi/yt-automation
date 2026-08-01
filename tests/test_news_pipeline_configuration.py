@@ -12,6 +12,43 @@ from file_utils import sha256_file
 
 
 class NewsPipelineConfigurationTests(unittest.TestCase):
+    def test_candidate_pool_balances_publishers_and_defers_similar_headlines(self) -> None:
+        now = news_pipeline.datetime.now(news_pipeline.timezone.utc)
+
+        def candidate(title: str, source: str, score: int) -> dict:
+            return {
+                "title": title,
+                "source": source,
+                "feed_url": f"https://{source}.example/feed.xml",
+                "url": f"https://{source}.example/{score}-{len(title)}",
+                "published": now,
+                "rss_text": "A substantive technology report.",
+                "rough_score": score,
+            }
+
+        candidates = [
+            candidate("OpenAI launches Atlas AI model for developers", "alpha", 100),
+            candidate("Alpha publishes another unrelated chip report", "alpha", 99),
+            candidate("Alpha announces a third technology product", "alpha", 98),
+            candidate("OpenAI unveils Atlas AI model for developers", "beta", 97),
+            candidate("Beta reveals a new battery architecture", "beta", 96),
+            candidate("Cybersecurity researchers disclose Orion flaw", "gamma", 95),
+        ]
+
+        with patch.object(
+            news_pipeline, "NEWS_SELECTION_TITLE_SIMILARITY_THRESHOLD", 0.60
+        ):
+            diversified = news_pipeline.diversify_candidates(candidates, 3)
+
+        self.assertEqual(
+            [news_pipeline.candidate_source_key(item) for item in diversified[:3]],
+            ["alpha.example", "beta.example", "gamma.example"],
+        )
+        self.assertEqual(
+            diversified[1]["title"],
+            "Beta reveals a new battery architecture",
+        )
+
     def test_ai_ranking_is_completed_with_local_reserves(self) -> None:
         candidates = [
             {
