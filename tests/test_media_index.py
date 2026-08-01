@@ -86,6 +86,31 @@ class MediaIndexTests(unittest.TestCase):
             self.assertIn("openai", cleared_asset["keywords"])
             self.assertIn("phone", cleared_asset["keywords"])
 
+    def test_thumbnail_directories_are_excluded_from_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "Media"
+            make_image(media / "Thumbnails" / "openai launch thumbnail.png", "red")
+            make_image(media / "OpenAI" / "openai office.png", "blue")
+            settings = MediaIndexSettings(
+                index_path=root / "index.json",
+                roots=(MediaRoot("primary", media, "unknown"),),
+                workers=1,
+            )
+
+            result = scan_media_index(settings)
+
+            self.assertEqual(len(result["assets"]), 1)
+            self.assertEqual(result["assets"][0]["filename"], "openai office.png")
+            self.assertFalse(
+                any(
+                    part.casefold() == "thumbnails"
+                    for part in Path(
+                        result["assets"][0]["absolute_path"]
+                    ).parts
+                )
+            )
+
     def test_rename_is_detected_and_usage_history_survives(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

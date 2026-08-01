@@ -37,6 +37,7 @@ from file_utils import (  # noqa: E402
 )
 from media_index import (  # noqa: E402
     MediaIndexSettings,
+    is_excluded_in_video_media_path,
     load_media_index,
     normalize_search_text,
     tokenize,
@@ -56,6 +57,17 @@ GENERIC_CONTEXT_TOKENS = {
     "model", "news", "online", "report", "software", "system", "tech",
     "technology", "video", "website",
 }
+
+
+def _is_in_video_media_asset(asset: dict) -> bool:
+    paths = (
+        asset.get("absolute_path", ""),
+        asset.get("workspace_relative_path", ""),
+    )
+    return not any(
+        path and is_excluded_in_video_media_path(path)
+        for path in paths
+    )
 
 
 def utc_now() -> str:
@@ -668,6 +680,7 @@ def shortlist_assets(
         for item in index.get("assets", [])
         if Path(item.get("absolute_path", "")).is_file()
         and item.get("sha256")
+        and _is_in_video_media_asset(item)
     ]
     if not assets:
         raise RuntimeError("The media index contains no usable assets.")
@@ -1196,6 +1209,8 @@ def resolve_wikimedia_fallbacks(
         ).strip()
         matches = []
         for asset in media_index.get("assets", []):
+            if not _is_in_video_media_asset(asset):
+                continue
             source_url = str(asset.get("source_url", "")).casefold()
             identity = re.sub(
                 r"[^a-z0-9]+",
@@ -1293,7 +1308,7 @@ def resolve_wikimedia_fallbacks(
     assets_by_sha = {
         item.get("sha256"): item
         for item in refreshed.get("assets", [])
-        if item.get("sha256")
+        if item.get("sha256") and _is_in_video_media_asset(item)
     }
     for window in irrelevant:
         item = pending_downloads.get(window["window_id"])
@@ -1734,6 +1749,7 @@ def run_media_selection(
     assets_by_id = {
         item["asset_id"]: item
         for item in media_index.get("assets", [])
+        if _is_in_video_media_asset(item)
     }
     timing_stories = timing.get("stories", [])
     storyboard_by_id = {
@@ -1903,6 +1919,7 @@ def run_media_selection(
         assets_by_id = {
             item["asset_id"]: item
             for item in media_index.get("assets", [])
+            if _is_in_video_media_asset(item)
         }
         for window in windows:
             for asset in window.get("_transient_assets", []):

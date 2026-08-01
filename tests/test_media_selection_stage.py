@@ -143,6 +143,39 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_stale_thumbnail_asset_is_excluded_from_shortlist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            thumbnail = make_asset(
+                root,
+                "Media/Thumbnails/openai phone launch.png",
+                ["openai", "phone", "launch"],
+                "user_confirmed_no_copyright",
+            )
+            regular = make_asset(
+                root,
+                "Media/OpenAI/openai office.png",
+                ["openai", "office"],
+                "user_confirmed_no_copyright",
+            )
+
+            shortlist = shortlist_assets(
+                {"assets": [thumbnail, regular]},
+                {
+                    "text": "OpenAI announced a new phone product.",
+                    "entities": ["OpenAI"],
+                    "scene_intent": "company_or_product",
+                    "visual_queries": [],
+                },
+                selection_settings(),
+            )
+
+            self.assertIn(regular["asset_id"], {item["asset_id"] for item in shortlist})
+            self.assertNotIn(
+                thumbnail["asset_id"],
+                {item["asset_id"] for item in shortlist},
+            )
+
     @unittest.skipUnless(find_executable("ffmpeg"), "FFmpeg is not available")
     def test_real_context_safe_fallback_is_rendered_locally(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -569,6 +602,16 @@ class MediaSelectionTests(unittest.TestCase):
                 "name": "CC0",
                 "attribution_required": False,
             }
+            thumbnail = make_asset(
+                root,
+                "Thumbnails/wikimedia_microsoft-outlook_logo.png",
+                ["microsoft", "outlook", "logo"],
+                "public_domain",
+            )
+            thumbnail["source_url"] = online["source_url"]
+            thumbnail["license"] = dict(online["license"])
+            thumbnail["width"] = 3840
+            thumbnail["height"] = 2160
             window = {
                 "window_id": "story_01_archive_001",
                 "text": "Microsoft Outlook added a new control.",
@@ -600,7 +643,7 @@ class MediaSelectionTests(unittest.TestCase):
                     video_number=5,
                     windows=[window],
                     decisions={window["window_id"]: decision},
-                    media_index={"assets": [local, online]},
+                    media_index={"assets": [local, thumbnail, online]},
                     index_settings=MediaIndexSettings(
                         index_path=root / "index.json",
                         roots=(MediaRoot("test", root, "unknown"),),
@@ -613,7 +656,7 @@ class MediaSelectionTests(unittest.TestCase):
             online_search.assert_not_called()
             self.assertEqual(used, 0)
             self.assertEqual(searches, 0)
-            self.assertEqual(refreshed["assets"], [local, online])
+            self.assertEqual(refreshed["assets"], [local, thumbnail, online])
             self.assertEqual(
                 resolved[window["window_id"]].selected_asset_id,
                 online["asset_id"],

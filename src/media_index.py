@@ -52,6 +52,7 @@ SUPPORTED_EXTENSIONS = {
     ".tiff",
     ".webp",
 }
+EXCLUDED_IN_VIDEO_MEDIA_DIRECTORIES = frozenset({"thumbnails"})
 GENERIC_FILENAME_TOKENS = {
     "copy",
     "download",
@@ -376,6 +377,15 @@ def _path_key(path: Path | str) -> str:
     return os.path.normcase(str(Path(path).resolve()))
 
 
+def is_excluded_in_video_media_path(path: Path | str) -> bool:
+    """Return whether an image lives under a non-video media directory."""
+    directory_parts = Path(path).parts[:-1]
+    return any(
+        part.casefold() in EXCLUDED_IN_VIDEO_MEDIA_DIRECTORIES
+        for part in directory_parts
+    )
+
+
 def discover_files(roots: Iterable[MediaRoot]) -> list[tuple[Path, MediaRoot]]:
     found: list[tuple[Path, MediaRoot]] = []
     for root in roots:
@@ -387,6 +397,8 @@ def discover_files(roots: Iterable[MediaRoot]) -> list[tuple[Path, MediaRoot]]:
             if path.name.endswith(".metadata.json"):
                 continue
             if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                continue
+            if is_excluded_in_video_media_path(path):
                 continue
             found.append((path.resolve(), root))
     return sorted(found, key=lambda item: _path_key(item[0]))

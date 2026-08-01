@@ -255,6 +255,9 @@ If no acceptable local or Wikimedia result exists, FFmpeg creates a unique dark,
 context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
 chapter title remains visible, production continues without an API request, and no
 unrelated person, company, product, or event is implied.
+Folders named `Thumbnails` are excluded both when the media index is scanned and when
+an in-video shortlist is built. The second guard also blocks thumbnail files lingering
+in an older cached index; thumbnail creation and YouTube publishing remain unchanged.
 Each raw per-story selector response is saved before validation under
 `05_visuals/selector_cache/`. A matching fingerprint lets a resumed run reuse that
 response without paying for the same selector request again.
