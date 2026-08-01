@@ -13,6 +13,8 @@ Tech News/
 |   |-- Audio/
 |   |   |-- background_music/
 |   |   `-- sfx/
+|   |       |-- paper_sound.MP3
+|   |       `-- shutter_sound.MP3
 |   |-- Media/
 |   |   |-- AI Generated/
 |   |   |-- Online Retrieved/Wikimedia Commons/
@@ -187,6 +189,14 @@ inspected; press any key only when ready to close it.
 9. The launcher waits 30 seconds at the final upload decision and uploads by default.
    Complete one OAuth browser authorization first so later scheduled runs can use the
    cached refresh token without interaction.
+
+The image-only animated TV overlay keeps its native alpha but defaults to 18% overall
+opacity; the additional procedural noise/dropout glitch is disabled by default. The
+static TV frame remains fully opaque and the animated overlay remains disabled during
+manual separators. `paper_sound.MP3` plays at every news-section start at `-10.0 dB`.
+`shutter_sound.MP3` plays at `-10.0 dB` on every third actual image event; separators and repeated
+inter-story hold frames are not counted, and a shutter cue hidden by a separator moves
+to that image's first visible frame.
 
 Every mutating flow creates an exclusive `.news_studio.lock` inside the project. A
 second process cannot edit the same project. Ctrl+C preserves completed outputs and

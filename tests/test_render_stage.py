@@ -9,6 +9,7 @@ from unittest.mock import patch
 from render_stage import (
     RenderSettings,
     _compose_video_track,
+    _mix_audio_track,
     _render_preview,
     build_render_plan,
 )
@@ -105,6 +106,51 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
 
 
 class RenderStageTests(unittest.TestCase):
+    def test_timeline_paper_and_shutter_sfx_are_delayed_and_mixed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = {
+                "duration_seconds": 10,
+                "narration": [
+                    {"file": str(root / "voice.mp3"), "start": 0, "duration": 10}
+                ],
+                "separators": [],
+                "background_music": None,
+                "glitch_events": [],
+                "glitch_sfx": {},
+                "timeline_sfx": {
+                    "assets": {
+                        "paper": {
+                            "file": str(root / "paper.mp3"),
+                            "gain_db": -10,
+                            "duration_seconds": 1.85,
+                        },
+                        "shutter": {
+                            "file": str(root / "shutter.mp3"),
+                            "gain_db": -10,
+                            "duration_seconds": 0.44,
+                        },
+                    },
+                    "events": [
+                        {"sound": "paper", "start": 0},
+                        {"sound": "paper", "start": 5},
+                        {"sound": "shutter", "start": 3},
+                    ],
+                },
+            }
+            with (
+                patch("render_stage._ffmpeg", return_value=Path("ffmpeg")),
+                patch("render_stage._run") as run,
+            ):
+                _mix_audio_track(root, plan, [], RenderSettings())
+
+            command = run.call_args.args[0]
+            filters = command[command.index("-filter_complex") + 1]
+            self.assertIn("asplit=2[timeline_paper_0][timeline_paper_1]", filters)
+            self.assertIn("adelay=5000|5000[timeline_delayed_paper_1]", filters)
+            self.assertIn("adelay=3000|3000[timeline_delayed_shutter_0]", filters)
+            self.assertIn("amix=inputs=4", filters)
+
     def test_skipped_separator_plan_uses_images_from_program_start(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 5"

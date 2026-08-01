@@ -267,6 +267,14 @@ def _effects_complete(video_dir: Path, state: dict) -> bool:
         or manifest.get("quality", {}).get("status") != "passed"
     ):
         return False
+    try:
+        from effects_stage import effects_status
+
+        current = effects_status(parse_video_number(video_dir.name))
+    except (ImportError, RuntimeError, ValueError):
+        return False
+    if current.get("status") != "EFFECTS_READY":
+        return False
     assets = [item.get("asset", {}) for item in manifest.get("visual_events", [])]
     return bool(assets) and all(
         _file_matches(asset.get("file"), asset.get("sha256")) for asset in assets
@@ -307,6 +315,13 @@ def _preview_status(video_dir: Path) -> tuple[str, str]:
     approval_path = video_dir / "orchestration" / "preview_approval.json"
     if not proof.is_file():
         return "NOT_STARTED", "The 60-second review preview has not been rendered."
+    proof_report = _read_json(proof.with_suffix(".json"))
+    effects_plan = video_dir / "07_effects" / "effects_plan.json"
+    if (
+        not effects_plan.is_file()
+        or proof_report.get("effects_plan_sha256") != sha256_file(effects_plan)
+    ):
+        return "NOT_STARTED", "The review preview is stale after effects changed."
     approval = _read_json(approval_path)
     if (
         approval.get("status") == "APPROVED"
@@ -397,12 +412,28 @@ def collect_project_status(video_number: int) -> dict:
         },
     }
     rebuild_warnings: list[str] = []
+    effects_configuration_stale = False
+    if checks["effects"]["status"] != TERMINAL_COMPLETE:
+        try:
+            from effects_stage import effects_status
+
+            effects_configuration_stale = (
+                effects_status(video_number).get("status") == "STALE"
+            )
+        except (ImportError, RuntimeError, ValueError):
+            effects_configuration_stale = False
     if (
         checks["render"]["status"] == TERMINAL_COMPLETE
         and checks["publish"]["status"] == TERMINAL_COMPLETE
     ):
         for stage in FLOW_STAGES[:-3]:
             if checks[stage]["status"] == TERMINAL_COMPLETE:
+                continue
+            if stage == "effects" and effects_configuration_stale:
+                rebuild_warnings.append(
+                    "effects: configuration changed; effects and downstream outputs "
+                    "must be rebuilt"
+                )
                 continue
             rebuild_warnings.append(
                 f"{stage}: one or more original inputs moved or changed"
@@ -958,7 +989,8 @@ def execute_stage(
         )
     elif stage == "preview_approval":
         proof = video_dir / "07_effects" / "milestone6_reference_60s.mp4"
-        if not proof.is_file():
+        preview_status, _ = _preview_status(video_dir)
+        if preview_status == "NOT_STARTED":
             _run_subprocess(
                 video_dir,
                 "preview",

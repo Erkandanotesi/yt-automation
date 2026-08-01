@@ -31,8 +31,13 @@ from file_utils import (  # noqa: E402
     sha256_file,
 )
 from file_locations import (  # noqa: E402
+    BACKGROUND_MUSIC_ROOT,
     EDITING_REFERENCE_FILE,
+    IMAGE_TV_EFFECT_FILE,
+    PAPER_SFX_FILE,
     PROJECTS_ROOT,
+    SHUTTER_SFX_FILE,
+    TV_FRAME_FILE,
     project_dir,
     project_name,
 )
@@ -76,23 +81,25 @@ class EffectsSettings:
     motion_scale: float = 1.0
     hero_motion_scale: float = 1.0
     tv_frame_enabled: bool = True
-    tv_frame_file: Path = PROJECTS_ROOT / "Assets" / "Overlays" / "tv_frame.png"
+    tv_frame_file: Path = TV_FRAME_FILE
     tv_frame_opacity: float = 1.0
     image_tv_effect_enabled: bool = True
-    image_tv_effect_file: Path = (
-        PROJECTS_ROOT / "Assets" / "Overlays" / "green-screen-tv-effect.mov"
-    )
-    image_tv_effect_opacity: float = 1.0
-    glitch_enabled: bool = True
-    glitch_duration_seconds: float = 0.16
-    glitch_max_per_minute: int = 4
+    image_tv_effect_file: Path = IMAGE_TV_EFFECT_FILE
+    image_tv_effect_opacity: float = 0.18
+    glitch_enabled: bool = False
+    glitch_duration_seconds: float = 0.08
+    glitch_max_per_minute: int = 1
     glitch_minimum_spacing_seconds: float = 10.0
-    glitch_noise_strength: int = 8
-    sfx_gain_db: float = -15.0
+    glitch_noise_strength: int = 2
+    sfx_gain_db: float = -24.0
+    paper_sfx_enabled: bool = True
+    paper_sfx_file: Path = PAPER_SFX_FILE
+    paper_sfx_gain_db: float = -10.0
+    shutter_sfx_enabled: bool = True
+    shutter_sfx_file: Path = SHUTTER_SFX_FILE
+    shutter_sfx_gain_db: float = -10.0
     music_enabled: bool = True
-    music_directory: Path = (
-        PROJECTS_ROOT / "Assets" / "Audio" / "background_music"
-    )
+    music_directory: Path = BACKGROUND_MUSIC_ROOT
     music_file: Path | None = None
     music_target_lufs: float = -20.0
     music_speech_gain_db: float = -22.0
@@ -123,38 +130,47 @@ class EffectsSettings:
             tv_frame_enabled=_bool_env("TV_FRAME_ENABLED", True),
             tv_frame_file=_path_env(
                 "TV_FRAME_FILE",
-                PROJECTS_ROOT / "Assets" / "Overlays" / "tv_frame.png",
+                TV_FRAME_FILE,
             ),
             tv_frame_opacity=float(os.getenv("TV_FRAME_OPACITY", "1.0")),
             image_tv_effect_enabled=_bool_env("IMAGE_TV_EFFECT_ENABLED", True),
             image_tv_effect_file=_path_env(
                 "IMAGE_TV_EFFECT_FILE",
-                PROJECTS_ROOT
-                / "Assets"
-                / "Overlays"
-                / "green-screen-tv-effect.mov",
+                IMAGE_TV_EFFECT_FILE,
             ),
             image_tv_effect_opacity=float(
-                os.getenv("IMAGE_TV_EFFECT_OPACITY", "1.0")
+                os.getenv("IMAGE_TV_EFFECT_OPACITY", "0.18")
             ),
-            glitch_enabled=_bool_env("GLITCH_ENABLED", True),
+            glitch_enabled=_bool_env("GLITCH_ENABLED", False),
             glitch_duration_seconds=float(
-                os.getenv("GLITCH_DURATION_SECONDS", "0.16")
+                os.getenv("GLITCH_DURATION_SECONDS", "0.08")
             ),
             glitch_max_per_minute=int(
-                os.getenv("GLITCH_MAX_PER_MINUTE", "4")
+                os.getenv("GLITCH_MAX_PER_MINUTE", "1")
             ),
             glitch_minimum_spacing_seconds=float(
                 os.getenv("GLITCH_MINIMUM_SPACING_SECONDS", "10")
             ),
             glitch_noise_strength=int(
-                os.getenv("GLITCH_NOISE_STRENGTH", "8")
+                os.getenv("GLITCH_NOISE_STRENGTH", "2")
             ),
-            sfx_gain_db=float(os.getenv("GLITCH_SFX_GAIN_DB", "-15")),
+            sfx_gain_db=float(os.getenv("GLITCH_SFX_GAIN_DB", "-24")),
+            paper_sfx_enabled=_bool_env("PAPER_SFX_ENABLED", True),
+            paper_sfx_file=_path_env(
+                "PAPER_SFX_FILE",
+                PAPER_SFX_FILE,
+            ),
+            paper_sfx_gain_db=float(os.getenv("PAPER_SFX_GAIN_DB", "-10.0")),
+            shutter_sfx_enabled=_bool_env("SHUTTER_SFX_ENABLED", True),
+            shutter_sfx_file=_path_env(
+                "SHUTTER_SFX_FILE",
+                SHUTTER_SFX_FILE,
+            ),
+            shutter_sfx_gain_db=float(os.getenv("SHUTTER_SFX_GAIN_DB", "-10.0")),
             music_enabled=_bool_env("BACKGROUND_MUSIC_ENABLED", True),
             music_directory=_path_env(
                 "BACKGROUND_MUSIC_DIRECTORY",
-                PROJECTS_ROOT / "Assets" / "Audio" / "background_music",
+                BACKGROUND_MUSIC_ROOT,
             ),
             music_file=music_file,
             music_target_lufs=float(
@@ -203,6 +219,12 @@ class EffectsSettings:
             raise ValueError("GLITCH_MAX_PER_MINUTE must be between 0 and 12.")
         if self.glitch_minimum_spacing_seconds < 2:
             raise ValueError("Glitch spacing must be at least 2 seconds.")
+        for label, gain in (
+            ("PAPER_SFX_GAIN_DB", self.paper_sfx_gain_db),
+            ("SHUTTER_SFX_GAIN_DB", self.shutter_sfx_gain_db),
+        ):
+            if not -36 <= gain <= 0:
+                raise ValueError(f"{label} must be between -36 and 0 dB.")
         if not -36 <= self.music_speech_gain_db <= -12:
             raise ValueError("Speech music gain must be between -36 and -12 dB.")
         if not -30 <= self.music_separator_gain_db <= -8:
@@ -623,6 +645,123 @@ def build_glitch_events(
     return result
 
 
+def _timeline_sfx_asset(path: Path, gain_db: float, label: str) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} sound is missing: {path}")
+    probe = probe_media(path)
+    if not any(
+        stream.get("codec_type") == "audio"
+        for stream in probe.get("streams", [])
+    ):
+        raise RuntimeError(f"{label} sound has no audio stream: {path}")
+    duration = float(probe.get("duration_seconds", 0))
+    if duration <= 0:
+        raise RuntimeError(f"{label} sound has no measurable duration: {path}")
+    return {
+        "file": str(path),
+        "sha256": sha256_file(path),
+        "duration_seconds": round(duration, 6),
+        "gain_db": gain_db,
+        "user_provided": True,
+    }
+
+
+def build_timeline_sfx(
+    timing: dict,
+    visuals: list[dict],
+    settings: EffectsSettings,
+) -> dict:
+    assets: dict[str, dict] = {}
+    events: list[dict] = []
+    if settings.paper_sfx_enabled:
+        assets["paper"] = _timeline_sfx_asset(
+            settings.paper_sfx_file,
+            settings.paper_sfx_gain_db,
+            "Paper",
+        )
+        for story in timing.get("stories", []):
+            events.append(
+                {
+                    "event_id": f"paper_story_{int(story['order']):02d}",
+                    "sound": "paper",
+                    "start": round(float(story["narration"]["start"]), 6),
+                    "reason": "news_section_start",
+                    "story_id": story["story_id"],
+                    "story_order": int(story["order"]),
+                }
+            )
+
+    separator_ranges: list[tuple[float, float]] = []
+    if not timing.get("quality", {}).get("manual_separators_skipped", False):
+        separator_ranges = [
+            (
+                float(story.get("separator", {}).get("start", 0)),
+                float(story.get("separator", {}).get("end", 0)),
+            )
+            for story in timing.get("stories", [])
+            if float(story.get("separator", {}).get("end", 0))
+            > float(story.get("separator", {}).get("start", 0))
+        ]
+
+    image_events = [
+        event
+        for event in sorted(
+            visuals,
+            key=lambda item: (item["timeline_start"], item["timeline_end"]),
+        )
+        if event.get("source_type") != "inter_story_hold"
+    ]
+    shutter_candidates = 0
+    if settings.shutter_sfx_enabled:
+        assets["shutter"] = _timeline_sfx_asset(
+            settings.shutter_sfx_file,
+            settings.shutter_sfx_gain_db,
+            "Shutter",
+        )
+        for image_number, event in enumerate(image_events, start=1):
+            if image_number % 3:
+                continue
+            shutter_candidates += 1
+            start = float(event["timeline_start"])
+            for separator_start, separator_end in separator_ranges:
+                if separator_start <= start < separator_end:
+                    start = separator_end
+                    break
+            if start >= float(event["timeline_end"]):
+                continue
+            events.append(
+                {
+                    "event_id": f"shutter_image_{image_number:04d}",
+                    "sound": "shutter",
+                    "start": round(start, 6),
+                    "reason": "every_third_visible_image",
+                    "visual_event_id": event["event_id"],
+                    "visual_sequence_number": image_number,
+                    "story_id": event["story_id"],
+                    "story_order": int(event["story_order"]),
+                }
+            )
+    events.sort(key=lambda item: (item["start"], item["event_id"]))
+    return {
+        "enabled": bool(assets),
+        "assets": assets,
+        "events": events,
+        "selection_rule": {
+            "paper": "once at every narration/news-section start",
+            "shutter": (
+                "every third image event globally; manual separators and "
+                "inter-story hold extensions are excluded"
+            ),
+            "separator_collision_policy": (
+                "move a shutter cue to the first visible frame after the separator; "
+                "skip it if that image is never visible"
+            ),
+        },
+        "image_event_count": len(image_events),
+        "shutter_candidate_count": shutter_candidates,
+    }
+
+
 def _db_factor(value: float) -> float:
     return 10 ** (value / 20)
 
@@ -731,11 +870,14 @@ def _input_fingerprint(
     editing_reference: dict | None,
     music: dict | None,
     sfx: dict,
+    timeline_sfx: dict,
 ) -> str:
     settings_payload = asdict(settings)
     for key in (
         "tv_frame_file",
         "image_tv_effect_file",
+        "paper_sfx_file",
+        "shutter_sfx_file",
         "music_directory",
         "music_file",
         "editing_reference_file",
@@ -753,6 +895,7 @@ def _input_fingerprint(
             "editing_reference": editing_reference,
             "music": music,
             "sfx": sfx,
+            "timeline_sfx": timeline_sfx,
         }
     )
 
@@ -805,7 +948,24 @@ def _filter_templates(settings: EffectsSettings) -> dict:
 
 
 def _write_state(video_dir: Path, state: dict, manifest_path: Path, plan: dict) -> None:
-    state.setdefault("stages", {})[STAGE_NAME] = {
+    stages = state.setdefault("stages", {})
+    previous_fingerprint = stages.get(STAGE_NAME, {}).get("input_fingerprint")
+    if previous_fingerprint and previous_fingerprint != plan["input_fingerprint"]:
+        invalidated = [
+            stage
+            for stage in ("render", "publish")
+            if stage in stages
+        ]
+        for stage in invalidated:
+            stages.pop(stage, None)
+        state["downstream_invalidation"] = {
+            "reason": "Effects inputs or configuration changed.",
+            "invalidated_stages": invalidated,
+            "previous_effects_fingerprint": previous_fingerprint,
+            "current_effects_fingerprint": plan["input_fingerprint"],
+            "updated_at_utc": utc_now(),
+        }
+    stages[STAGE_NAME] = {
         "status": "EFFECTS_READY",
         "reason": (
             "Motion, TV treatment, controlled glitch/SFX, and looped ducked music "
@@ -815,6 +975,9 @@ def _write_state(video_dir: Path, state: dict, manifest_path: Path, plan: dict) 
         "input_fingerprint": plan["input_fingerprint"],
         "visual_event_count": len(plan["visual_events"]),
         "glitch_event_count": len(plan["glitch_events"]),
+        "timeline_sfx_event_count": len(
+            plan.get("audio", {}).get("timeline_sfx", {}).get("events", [])
+        ),
         "updated_at_utc": utc_now(),
     }
     state["updated_at_utc"] = state["stages"][STAGE_NAME]["updated_at_utc"]
@@ -853,6 +1016,8 @@ def render_reference_proof(
     narration_file: Path,
     music_file: Path,
     sfx_file: Path,
+    paper_sfx_file: Path | None = None,
+    shutter_sfx_file: Path | None = None,
     settings: EffectsSettings,
     duration_seconds: float = 60.0,
     separator_file: Path | None = None,
@@ -865,7 +1030,15 @@ def render_reference_proof(
         raise RuntimeError("FFmpeg is required for the effects reference proof.")
     if len(images) < 3:
         raise ValueError("The reference proof requires three images.")
-    inputs = [*images[:3], narration_file, music_file, sfx_file]
+    inputs = [*images[:3], narration_file, music_file]
+    if settings.glitch_enabled:
+        inputs.append(sfx_file)
+    if paper_sfx_file is not None:
+        inputs.append(paper_sfx_file)
+    if shutter_sfx_file is not None:
+        inputs.append(shutter_sfx_file)
+    if settings.image_tv_effect_enabled:
+        inputs.append(settings.image_tv_effect_file)
     if separator_file is not None:
         inputs.append(separator_file)
     if captions_file is not None:
@@ -934,15 +1107,37 @@ def render_reference_proof(
         command.extend(
             ["-loop", "1", "-framerate", str(fps), "-t", str(image_duration), "-i", str(image)]
         )
-    overlay_index = len(images[:3]) + 1
+    next_input_index = len(images[:3]) + 1
+    overlay_index = -1
     if settings.tv_frame_enabled:
+        overlay_index = next_input_index
         command.extend(["-loop", "1", "-framerate", str(fps), "-i", str(settings.tv_frame_file)])
-    narration_index = overlay_index + (1 if settings.tv_frame_enabled else 0)
+        next_input_index += 1
+    narration_index = next_input_index
     command.extend(["-i", str(narration_file)])
-    music_index = narration_index + 1
+    next_input_index += 1
+    music_index = next_input_index
     command.extend(["-stream_loop", "-1", "-i", str(music_file)])
-    sfx_index = music_index + 1
-    command.extend(["-i", str(sfx_file)])
+    next_input_index += 1
+    sfx_index = -1
+    if settings.glitch_enabled:
+        sfx_index = next_input_index
+        command.extend(["-i", str(sfx_file)])
+        next_input_index += 1
+    paper_sfx_index = -1
+    if paper_sfx_file is not None:
+        paper_sfx_index = next_input_index
+        command.extend(["-i", str(paper_sfx_file)])
+        next_input_index += 1
+    shutter_sfx_index = -1
+    if shutter_sfx_file is not None:
+        shutter_sfx_index = next_input_index
+        command.extend(["-i", str(shutter_sfx_file)])
+        next_input_index += 1
+    image_effect_index = -1
+    if settings.image_tv_effect_enabled:
+        image_effect_index = next_input_index
+        command.extend(["-stream_loop", "-1", "-i", str(settings.image_tv_effect_file)])
 
     filters = [
         (
@@ -970,15 +1165,29 @@ def render_reference_proof(
         image_duration,
         2 * image_duration,
     ]
-    enable = "+".join(
-        f"between(t\\,{start:.3f}\\,{min(duration_seconds, start + settings.glitch_duration_seconds):.3f})"
-        for start in glitch_starts
-    )
-    filters.append(
-        f"[vstory]noise=alls={settings.glitch_noise_strength}:allf=t+u:enable='{enable}',"
-        f"drawbox=y=ih*0.43:w=iw:h=8:color=white@0.16:t=fill:enable='{enable}'[vfx]"
-    )
-    current_video = "vfx"
+    current_video = "vstory"
+    if settings.glitch_enabled:
+        enable = "+".join(
+            f"between(t\\,{start:.3f}\\,{min(duration_seconds, start + settings.glitch_duration_seconds):.3f})"
+            for start in glitch_starts
+        )
+        filters.append(
+            f"[{current_video}]noise=alls={settings.glitch_noise_strength}:allf=t+u:enable='{enable}',"
+            f"drawbox=y=ih*0.43:w=iw:h=8:color=white@0.10:t=fill:enable='{enable}'[vfx]"
+        )
+        current_video = "vfx"
+    if image_effect_index >= 0:
+        filters.append(
+            f"[{image_effect_index}:v]scale={width}:{height}:flags=lanczos,"
+            "format=rgba,"
+            f"colorchannelmixer=aa={settings.image_tv_effect_opacity},"
+            "setpts=PTS-STARTPTS[imageeffect]"
+        )
+        filters.append(
+            f"[{current_video}][imageeffect]overlay=0:0:eof_action=repeat:repeatlast=1:"
+            f"shortest=0:format=auto:enable='not(between(t\\,0\\,{separator_duration:.3f}))'[veffect]"
+        )
+        current_video = "veffect"
     if settings.tv_frame_enabled:
         filters.append(
             f"[{overlay_index}:v]scale={width}:{height},format=rgba,"
@@ -1014,18 +1223,38 @@ def render_reference_proof(
             "aresample=48000,aformat=channel_layouts=stereo[separator_audio]"
         )
         audio_inputs.insert(0, "[separator_audio]")
-    sfx_factor = _db_factor(settings.sfx_gain_db)
-    filters.append(f"[{sfx_index}:a]asplit=3[sfx0][sfx1][sfx2]")
-    sfx_labels = []
-    for index, start in enumerate(glitch_starts):
-        delay = round(start * 1000)
-        label = f"s{index}"
+    if sfx_index >= 0:
+        sfx_factor = _db_factor(settings.sfx_gain_db)
+        filters.append(f"[{sfx_index}:a]asplit=3[sfx0][sfx1][sfx2]")
+        sfx_labels = []
+        for index, start in enumerate(glitch_starts):
+            delay = round(start * 1000)
+            label = f"s{index}"
+            filters.append(
+                f"[sfx{index}]aresample=48000,aformat=channel_layouts=stereo,"
+                f"volume={sfx_factor:.6f},adelay={delay}|{delay}[{label}]"
+            )
+            sfx_labels.append(f"[{label}]")
+        audio_inputs.extend(sfx_labels)
+    if paper_sfx_index >= 0:
+        paper_factor = _db_factor(settings.paper_sfx_gain_db)
         filters.append(
-            f"[sfx{index}]aresample=48000,aformat=channel_layouts=stereo,"
-            f"volume={sfx_factor:.6f},adelay={delay}|{delay}[{label}]"
+            f"[{paper_sfx_index}:a]aresample=48000,"
+            "aformat=channel_layouts=stereo,"
+            f"volume={paper_factor:.6f}[paper]"
         )
-        sfx_labels.append(f"[{label}]")
-    audio_inputs.extend(sfx_labels)
+        audio_inputs.append("[paper]")
+    if shutter_sfx_index >= 0:
+        shutter_start = 2 * image_duration
+        shutter_delay = round(shutter_start * 1000)
+        shutter_factor = _db_factor(settings.shutter_sfx_gain_db)
+        filters.append(
+            f"[{shutter_sfx_index}:a]aresample=48000,"
+            "aformat=channel_layouts=stereo,"
+            f"volume={shutter_factor:.6f},"
+            f"adelay={shutter_delay}|{shutter_delay}[shutter]"
+        )
+        audio_inputs.append("[shutter]")
     filters.append(
         f"{''.join(audio_inputs)}amix=inputs={len(audio_inputs)}:"
         "duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.891[mix]"
@@ -1081,14 +1310,17 @@ def render_reference_proof(
         "narration_file": str(narration_file),
         "music_file": str(music_file),
         "sfx_file": str(sfx_file),
+        "paper_sfx_file": str(paper_sfx_file) if paper_sfx_file else None,
+        "shutter_sfx_file": str(shutter_sfx_file) if shutter_sfx_file else None,
         "tv_frame_file": str(settings.tv_frame_file) if settings.tv_frame_enabled else None,
         "captions_file": str(caption_path),
         "captions_source_file": str(captions_file) if captions_file is not None else None,
         "verified_features": [
             "alternating_image_motion",
             "tv_frame_overlay",
-            "short_glitch_accents",
-            "glitch_sfx",
+            "subtle_animated_tv_overlay",
+            "paper_section_sfx",
+            "shutter_every_third_image_sfx",
             "caption_layer_above_frame",
             "looped_background_music",
             "music_ducking_under_voice",
@@ -1203,12 +1435,18 @@ def render_project_reference_proof(
         if len(generated_images) >= 3
         else _discover_reference_images()
     )
-    return render_reference_proof(
+    report = render_reference_proof(
         output_path=output,
         images=reference_images,
         narration_file=narration_file,
         music_file=music_file,
         sfx_file=generated["sfx"],
+        paper_sfx_file=(
+            settings.paper_sfx_file if settings.paper_sfx_enabled else None
+        ),
+        shutter_sfx_file=(
+            settings.shutter_sfx_file if settings.shutter_sfx_enabled else None
+        ),
         settings=settings,
         duration_seconds=duration_seconds,
         separator_file=separator_file,
@@ -1217,6 +1455,10 @@ def render_project_reference_proof(
         ),
         captions_file=captions_file,
     )
+    effects_plan = video_dir / "07_effects" / "effects_plan.json"
+    report["effects_plan_sha256"] = sha256_file(effects_plan)
+    atomic_write_json(output.with_suffix(".json"), report)
+    return report
 
 
 def build_effects_plan(
@@ -1256,6 +1498,11 @@ def build_effects_plan(
         "gain_db": settings.sfx_gain_db,
         "license_metadata_file": str(_license_sidecar(sfx_file)),
     }
+    visuals = build_visual_events(timing, media, settings)
+    coverage = validate_visual_coverage(visuals, timing)
+    if coverage["status"] != "passed":
+        raise RuntimeError(f"Effects visual coverage failed: {coverage['errors']}")
+    timeline_sfx = build_timeline_sfx(timing, visuals, settings)
     timing_path = video_dir / "story_timing.json"
     media_path = video_dir / "05_visuals" / "media_plan.json"
     captions_path = video_dir / "06_captions" / "captions.json"
@@ -1269,6 +1516,7 @@ def build_effects_plan(
         editing_reference,
         music,
         sfx,
+        timeline_sfx,
     )
     output_dir = video_dir / "07_effects"
     manifest_path = output_dir / "effects_plan.json"
@@ -1283,10 +1531,6 @@ def build_effects_plan(
             _write_state(video_dir, state, manifest_path, cached)
             return cached
 
-    visuals = build_visual_events(timing, media, settings)
-    coverage = validate_visual_coverage(visuals, timing)
-    if coverage["status"] != "passed":
-        raise RuntimeError(f"Effects visual coverage failed: {coverage['errors']}")
     glitches = build_glitch_events(timing, visuals, settings)
     duration = float(timing["duration_seconds"])
     glitch_coverage = sum(item["duration"] for item in glitches) / max(duration, 0.001)
@@ -1310,6 +1554,8 @@ def build_effects_plan(
             **asdict(settings),
             "tv_frame_file": str(settings.tv_frame_file),
             "image_tv_effect_file": str(settings.image_tv_effect_file),
+            "paper_sfx_file": str(settings.paper_sfx_file),
+            "shutter_sfx_file": str(settings.shutter_sfx_file),
             "music_directory": str(settings.music_directory),
             "music_file": str(settings.music_file) if settings.music_file else None,
             "editing_reference_file": str(settings.editing_reference_file),
@@ -1335,9 +1581,12 @@ def build_effects_plan(
                     for item in glitches
                 ],
             },
+            "timeline_sfx": timeline_sfx,
             "mix_order": [
                 "voiceover",
                 "separator_audio",
+                "paper_section_sfx",
+                "shutter_every_third_image_sfx",
                 "glitch_sfx",
                 "ducked_background_music",
             ],
@@ -1386,6 +1635,31 @@ def build_effects_plan(
             "music_ducking_windows_match_narration": not settings.music_enabled or (
                 len(music["ducking"]["speech_windows"]) == len(narrations)
             ),
+            "paper_sfx_covers_every_story_start": (
+                not settings.paper_sfx_enabled
+                or len(
+                    [
+                        event
+                        for event in timeline_sfx["events"]
+                        if event["sound"] == "paper"
+                    ]
+                )
+                == len(narrations)
+            ),
+            "shutter_sfx_uses_every_third_image": all(
+                int(event["visual_sequence_number"]) % 3 == 0
+                for event in timeline_sfx["events"]
+                if event["sound"] == "shutter"
+            ),
+            "shutter_sfx_excludes_separator_intervals": all(
+                not any(
+                    float(separator["start"]) <= float(event["start"])
+                    < float(separator["end"])
+                    for separator in separators
+                )
+                for event in timeline_sfx["events"]
+                if event["sound"] == "shutter"
+            ),
             "all_referenced_files_exist": True,
         },
     }
@@ -1401,6 +1675,7 @@ def build_effects_plan(
 
 def effects_status(video_number: int, settings: EffectsSettings | None = None) -> dict:
     settings = settings or EffectsSettings.from_environment()
+    settings.validate()
     video_dir = project_dir(video_number)
     manifest_path = video_dir / "07_effects" / "effects_plan.json"
     try:
@@ -1429,6 +1704,8 @@ def effects_status(video_number: int, settings: EffectsSettings | None = None) -
             "gain_db": settings.sfx_gain_db,
             "license_metadata_file": str(_license_sidecar(sfx_file)),
         }
+        visuals = build_visual_events(timing, media, settings)
+        timeline_sfx = build_timeline_sfx(timing, visuals, settings)
         expected = _input_fingerprint(
             video_dir / "story_timing.json",
             video_dir / "05_visuals" / "media_plan.json",
@@ -1439,6 +1716,7 @@ def effects_status(video_number: int, settings: EffectsSettings | None = None) -
             editing_reference,
             music,
             sfx,
+            timeline_sfx,
         )
         manifest = load_json(manifest_path, "Effects plan")
         ready = manifest.get("input_fingerprint") == expected and manifest.get("quality", {}).get("status") == "passed"

@@ -455,12 +455,24 @@ def collect_checks() -> list[Check]:
                     or effects_settings.image_tv_effect_file.is_file()
                 )
                 and (not effects_settings.music_enabled or any(path and path.is_file() for path in music_files))
+                and (
+                    not effects_settings.paper_sfx_enabled
+                    or effects_settings.paper_sfx_file.is_file()
+                )
+                and (
+                    not effects_settings.shutter_sfx_enabled
+                    or effects_settings.shutter_sfx_file.is_file()
+                )
                 and effects_settings.editing_reference_file.is_file()
             ),
             (
                 f"motion={effects_settings.motion_scale:.3f}; "
                 f"TV frame={effects_settings.tv_frame_file}; "
-                f"animated TV effect={effects_settings.image_tv_effect_file}; "
+                f"animated TV effect={effects_settings.image_tv_effect_file} "
+                f"at {effects_settings.image_tv_effect_opacity:.0%}; "
+                f"procedural glitch={effects_settings.glitch_enabled}; "
+                f"paper SFX={effects_settings.paper_sfx_file.name}; "
+                f"shutter SFX={effects_settings.shutter_sfx_file.name}; "
                 f"music tracks={len(music_files)}; "
                 f"reference={effects_settings.editing_reference_file.name}"
             ),

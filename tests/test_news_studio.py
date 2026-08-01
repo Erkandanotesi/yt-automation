@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from file_utils import sha256_file
 from news_studio import (
     FLOW_STAGES,
     ProgressDisplay,
@@ -283,6 +284,12 @@ class NewsStudioTests(unittest.TestCase):
             proof = root / "07_effects" / "milestone6_reference_60s.mp4"
             proof.parent.mkdir(parents=True)
             proof.write_bytes(b"preview-v1")
+            effects_plan = proof.parent / "effects_plan.json"
+            effects_plan.write_text('{"quality":{"status":"passed"}}', encoding="utf-8")
+            proof.with_suffix(".json").write_text(
+                json.dumps({"effects_plan_sha256": sha256_file(effects_plan)}),
+                encoding="utf-8",
+            )
             with patch("news_studio.project_dir", return_value=root):
                 approve_preview(6)
             self.assertEqual(_preview_status(root)[0], "COMPLETE")

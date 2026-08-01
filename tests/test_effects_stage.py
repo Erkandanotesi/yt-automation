@@ -11,6 +11,7 @@ from unittest.mock import patch
 from effects_stage import (
     EffectsSettings,
     build_effects_plan,
+    build_timeline_sfx,
     build_visual_events,
     render_reference_proof,
     validate_visual_coverage,
@@ -28,6 +29,8 @@ def fixture_settings(root: Path) -> EffectsSettings:
         hero_motion_scale=1.008,
         tv_frame_file=root / "tv_frame.png",
         image_tv_effect_file=root / "green-screen-tv-effect.mov",
+        paper_sfx_file=root / "paper_sound.MP3",
+        shutter_sfx_file=root / "shutter_sound.MP3",
         music_directory=root / "music",
         proof_width=320,
         proof_height=180,
@@ -53,6 +56,8 @@ def write_plan_fixture(root: Path) -> dict[str, Path]:
     music_directory.mkdir()
     music = music_directory / "bed.wav"
     sfx = root / "glitch.wav"
+    paper = root / "paper_sound.MP3"
+    shutter = root / "shutter_sound.MP3"
     for path in (
         separator,
         narration,
@@ -61,6 +66,8 @@ def write_plan_fixture(root: Path) -> dict[str, Path]:
         reference,
         music,
         sfx,
+        paper,
+        shutter,
     ):
         path.write_bytes(path.name.encode("utf-8"))
     captions = root / "06_captions" / "captions.srt"
@@ -146,10 +153,64 @@ def write_plan_fixture(root: Path) -> dict[str, Path]:
         ),
         encoding="utf-8",
     )
-    return {"music": music, "sfx": sfx}
+    return {"music": music, "sfx": sfx, "paper": paper, "shutter": shutter}
 
 
 class EffectsStageTests(unittest.TestCase):
+    def test_shutter_counts_images_only_and_moves_after_separator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = fixture_settings(root)
+            settings.paper_sfx_file.write_bytes(b"paper")
+            settings.shutter_sfx_file.write_bytes(b"shutter")
+            timing = {
+                "quality": {"manual_separators_skipped": False},
+                "stories": [
+                    {
+                        "story_id": "story_1",
+                        "order": 1,
+                        "narration": {"start": 0},
+                        "separator": {"start": 0, "end": 2},
+                    }
+                ],
+            }
+            visuals = [
+                {
+                    "event_id": f"visual_{index}",
+                    "story_id": "story_1",
+                    "story_order": 1,
+                    "source_type": "hero",
+                    "timeline_start": 0,
+                    "timeline_end": 5,
+                }
+                for index in range(1, 4)
+            ]
+            visuals.append(
+                {
+                    "event_id": "hold",
+                    "story_id": "story_1",
+                    "story_order": 1,
+                    "source_type": "inter_story_hold",
+                    "timeline_start": 5,
+                    "timeline_end": 6,
+                }
+            )
+            with patch(
+                "effects_stage.probe_media",
+                return_value={
+                    "duration_seconds": 1,
+                    "streams": [{"codec_type": "audio"}],
+                },
+            ):
+                plan = build_timeline_sfx(timing, visuals, settings)
+
+            shutter = next(
+                event for event in plan["events"] if event["sound"] == "shutter"
+            )
+            self.assertEqual(plan["image_event_count"], 3)
+            self.assertEqual(shutter["visual_sequence_number"], 3)
+            self.assertEqual(shutter["start"], 2)
+
     def test_visual_global_times_follow_current_story_timing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -217,15 +278,19 @@ class EffectsStageTests(unittest.TestCase):
                 ),
                 patch(
                     "effects_stage.probe_media",
-                    return_value={
-                        "duration_seconds": 7,
-                        "streams": [
-                            {
-                                "codec_type": "video",
-                                "codec_name": "qtrle",
-                                "pix_fmt": "argb",
-                            }
-                        ],
+                    side_effect=lambda path: {
+                        "duration_seconds": 1.0 if Path(path).suffix.lower() == ".mp3" else 7,
+                        "streams": (
+                            [{"codec_type": "audio", "codec_name": "mp3"}]
+                            if Path(path).suffix.lower() == ".mp3"
+                            else [
+                                {
+                                    "codec_type": "video",
+                                    "codec_name": "qtrle",
+                                    "pix_fmt": "argb",
+                                }
+                            ]
+                        ),
                     },
                 ),
             ):
@@ -245,6 +310,17 @@ class EffectsStageTests(unittest.TestCase):
                 len(plan["audio"]["background_music"]["ducking"]["speech_windows"]),
                 1,
             )
+            timeline_sfx = plan["audio"]["timeline_sfx"]
+            self.assertEqual(
+                len([event for event in timeline_sfx["events"] if event["sound"] == "paper"]),
+                1,
+            )
+            shutter_events = [
+                event for event in timeline_sfx["events"] if event["sound"] == "shutter"
+            ]
+            self.assertEqual(len(shutter_events), 1)
+            self.assertEqual(shutter_events[0]["visual_sequence_number"], 3)
+            self.assertTrue(plan["quality"]["shutter_sfx_excludes_separator_intervals"])
             self.assertEqual(
                 plan["ffmpeg_templates"]["layer_order"],
                 [
@@ -334,7 +410,13 @@ class EffectsStageTests(unittest.TestCase):
                     check=True,
                 )
                 audio_files[name] = path
-            settings = replace(fixture_settings(root), tv_frame_file=overlay)
+            settings = replace(
+                fixture_settings(root),
+                tv_frame_file=overlay,
+                image_tv_effect_enabled=False,
+                paper_sfx_enabled=False,
+                shutter_sfx_enabled=False,
+            )
             report = render_reference_proof(
                 output_path=root / "proof.mp4",
                 images=images,

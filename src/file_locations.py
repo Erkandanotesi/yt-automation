@@ -57,6 +57,15 @@ MEDIA_BENCHMARK_FILE = DATA_ROOT / "benchmarks" / "media_retrieval_benchmark.jso
 EDITING_REFERENCE_FILE = REFERENCES_ROOT / "capcut_screenshot.png"
 FFMPEG_ROOT = TOOLS_ROOT / "ffmpeg"
 YOUTUBE_CREDENTIALS_ROOT = AUTOMATION_ROOT / ".youtube_credentials"
+ASSETS_ROOT = PROJECTS_ROOT / "Assets"
+AUDIO_ASSETS_ROOT = ASSETS_ROOT / "Audio"
+BACKGROUND_MUSIC_ROOT = AUDIO_ASSETS_ROOT / "background_music"
+AUDIO_SFX_ROOT = AUDIO_ASSETS_ROOT / "sfx"
+OVERLAYS_ROOT = ASSETS_ROOT / "Overlays"
+TV_FRAME_FILE = OVERLAYS_ROOT / "tv_frame.png"
+IMAGE_TV_EFFECT_FILE = OVERLAYS_ROOT / "green-screen-tv-effect.mov"
+PAPER_SFX_FILE = AUDIO_SFX_ROOT / "paper_sound.MP3"
+SHUTTER_SFX_FILE = AUDIO_SFX_ROOT / "shutter_sound.MP3"
 
 PROJECT_FOLDER_PATTERN = re.compile(r"^Video ([1-9][0-9]*)$")
 

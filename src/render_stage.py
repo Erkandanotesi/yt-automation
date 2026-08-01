@@ -363,6 +363,23 @@ def build_render_plan(
             raise RuntimeError("Animated TV effect must preserve native alpha.")
     music = effects.get("audio", {}).get("background_music")
     sfx = effects.get("audio", {}).get("glitch_sfx", {})
+    timeline_sfx = effects.get("audio", {}).get("timeline_sfx", {})
+    timeline_sfx_assets = timeline_sfx.get("assets", {})
+    for asset_id, asset in timeline_sfx_assets.items():
+        path = Path(asset.get("file", ""))
+        if not path.is_file():
+            raise FileNotFoundError(f"Timeline SFX asset is missing ({asset_id}): {path}")
+        if sha256_file(path) != asset.get("sha256"):
+            raise RuntimeError(f"Timeline SFX asset changed after planning: {path}")
+    for event in timeline_sfx.get("events", []):
+        if event.get("sound") not in timeline_sfx_assets:
+            raise RuntimeError(
+                f"Timeline SFX event references an unknown asset: {event.get('sound')}"
+            )
+        if not 0 <= float(event.get("start", -1)) < duration:
+            raise RuntimeError(
+                f"Timeline SFX event is outside the program: {event.get('event_id')}"
+            )
     payload = {
         "schema_version": SCHEMA_VERSION,
         "video_number": video_number,
@@ -386,6 +403,7 @@ def build_render_plan(
         },
         "background_music": music,
         "glitch_sfx": sfx,
+        "timeline_sfx": timeline_sfx,
         "referenced_visuals": referenced,
         "quality": {
             "status": "passed",
@@ -424,6 +442,7 @@ def build_render_plan(
             "visual_count": len(visuals),
             "persistent_title_count": len(titles),
             "source_attribution_count": len(attributions),
+            "timeline_sfx_event_count": len(timeline_sfx.get("events", [])),
         },
     }
     if not all(
@@ -433,6 +452,7 @@ def build_render_plan(
             "visual_count",
             "persistent_title_count",
             "source_attribution_count",
+            "timeline_sfx_event_count",
         }
     ):
         raise RuntimeError(f"Milestone 8 plan quality failed: {payload['quality']}")
@@ -1032,18 +1052,30 @@ def _mix_audio_track(
     separator_start_index = len(plan["narration"])
     for path in separators:
         command.extend(["-i", str(path)])
+    next_input_index = separator_start_index + len(separators)
     music = plan.get("background_music")
-    music_index = separator_start_index + len(separators)
+    music_index = -1
     if music and music.get("track_file"):
+        music_index = next_input_index
         command.extend(["-stream_loop", "-1", "-i", music["track_file"]])
-    else:
-        music_index = -1
+        next_input_index += 1
     sfx = plan.get("glitch_sfx") or {}
-    sfx_index = music_index + 1 if music_index >= 0 else separator_start_index + len(separators)
+    sfx_index = -1
     if sfx.get("file") and plan.get("glitch_events"):
+        sfx_index = next_input_index
         command.extend(["-i", sfx["file"]])
-    else:
-        sfx_index = -1
+        next_input_index += 1
+    timeline_sfx = plan.get("timeline_sfx") or {}
+    timeline_sfx_indices: dict[str, int] = {}
+    for asset_id, asset in sorted(timeline_sfx.get("assets", {}).items()):
+        if not any(
+            event.get("sound") == asset_id
+            for event in timeline_sfx.get("events", [])
+        ):
+            continue
+        timeline_sfx_indices[asset_id] = next_input_index
+        command.extend(["-i", asset["file"]])
+        next_input_index += 1
     filters = []
     labels = []
     for index, narration in enumerate(plan["narration"]):
@@ -1095,6 +1127,39 @@ def _mix_audio_track(
             filters.append(
                 f"[sfx{index}]aresample=48000,aformat=channel_layouts=stereo,"
                 f"volume={sfx_factor:.6f},adelay={delay}|{delay}[{label}]"
+            )
+            labels.append(f"[{label}]")
+    for asset_id, input_index in timeline_sfx_indices.items():
+        asset = timeline_sfx["assets"][asset_id]
+        events = [
+            event
+            for event in timeline_sfx.get("events", [])
+            if event.get("sound") == asset_id
+        ]
+        source_labels: list[str] = []
+        if len(events) == 1:
+            source_labels = [f"{input_index}:a"]
+        else:
+            source_labels = [
+                f"timeline_{asset_id}_{index}"
+                for index in range(len(events))
+            ]
+            filters.append(
+                f"[{input_index}:a]asplit={len(events)}"
+                + "".join(f"[{label}]" for label in source_labels)
+            )
+        gain_factor = _db_factor(float(asset.get("gain_db", -12)))
+        asset_duration = float(asset.get("duration_seconds", 3.0))
+        for index, (event, source_label) in enumerate(
+            zip(events, source_labels, strict=True)
+        ):
+            delay = round(float(event["start"]) * 1000)
+            label = f"timeline_delayed_{asset_id}_{index}"
+            filters.append(
+                f"[{source_label}]atrim=start=0:end={asset_duration},"
+                "asetpts=PTS-STARTPTS,aresample=48000,"
+                "aformat=channel_layouts=stereo,"
+                f"volume={gain_factor:.6f},adelay={delay}|{delay}[{label}]"
             )
             labels.append(f"[{label}]")
     filters.append(
