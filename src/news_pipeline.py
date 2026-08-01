@@ -60,6 +60,7 @@ SCRIPT_DIR = SOURCE_ROOT.parent
 load_dotenv(SCRIPT_DIR / ".env")
 
 from file_locations import (  # noqa: E402 - .env must be loaded first
+    AUTOMATION_ROOT,
     GAMING_FEEDS_FILE,
     GAMING_PROFILE_FILE,
     PROCESSED_URLS_FILE,
@@ -198,7 +199,7 @@ DEFAULT_GAMING_KEYWORDS = {
 # KOMUT SATIRI
 # =========================================================
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Scan RSS/Atom feeds, select the best stories, and save "
@@ -248,32 +249,65 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Confirm paid summary calls required by --repair-existing.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-ARGS = parse_arguments()
+def configure_run(args: argparse.Namespace) -> None:
+    global ARGS
+    global VIDEO_NAME, PROJECT_DIR, OUTPUT_DIR, LOG_PATH
+    global PROJECT_INFO_PATH, CANDIDATES_PATH, COMBINED_SCRIPT_PATH
+    global PROVIDER, TOP_N, CONTENT_CATEGORY, IS_GAMING, CONTENT_LABEL
+    global OPML_PATH, CHANNEL_PROFILE_PATH
 
-if ARGS.video < 1:
-    raise ValueError("Video numarası 1 veya daha büyük olmalıdır.")
+    if args.video < 1:
+        raise ValueError("Video number must be 1 or greater.")
+    if args.top is not None and args.top < 1:
+        raise ValueError("--top must be 1 or greater.")
 
-if ARGS.top is not None and ARGS.top < 1:
-    raise ValueError("--top değeri 1 veya daha büyük olmalıdır.")
+    ARGS = args
+    VIDEO_NAME = project_name(args.video)
+    PROJECT_DIR = project_dir(args.video)
+    OUTPUT_DIR = PROJECT_DIR / "Haberler"
+    LOG_PATH = PROJECT_DIR / "pipeline.log"
+    PROJECT_INFO_PATH = PROJECT_DIR / "project_info.json"
+    CANDIDATES_PATH = PROJECT_DIR / "aday_haberler.json"
+    COMBINED_SCRIPT_PATH = PROJECT_DIR / "video_script.txt"
+    PROVIDER = args.provider or AI_PROVIDER
+    TOP_N = args.top or TOP_N_DEFAULT
+    CONTENT_CATEGORY = args.category
+    IS_GAMING = CONTENT_CATEGORY == "gaming"
+    CONTENT_LABEL = "gaming news" if IS_GAMING else "technology news"
+    OPML_PATH = GAMING_OPML_PATH if IS_GAMING else TECH_OPML_PATH
+    CHANNEL_PROFILE_PATH = GAMING_PROFILE_PATH if IS_GAMING else TECH_PROFILE_PATH
 
-VIDEO_NAME = project_name(ARGS.video)
-PROJECT_DIR = project_dir(ARGS.video)
-OUTPUT_DIR = PROJECT_DIR / "Haberler"
-LOG_PATH = PROJECT_DIR / "pipeline.log"
-PROJECT_INFO_PATH = PROJECT_DIR / "project_info.json"
-CANDIDATES_PATH = PROJECT_DIR / "aday_haberler.json"
-COMBINED_SCRIPT_PATH = PROJECT_DIR / "video_script.txt"
 
-PROVIDER = ARGS.provider or AI_PROVIDER
-TOP_N = ARGS.top or TOP_N_DEFAULT
-CONTENT_CATEGORY = ARGS.category
-IS_GAMING = CONTENT_CATEGORY == "gaming"
-CONTENT_LABEL = "gaming news" if IS_GAMING else "technology news"
-OPML_PATH = GAMING_OPML_PATH if IS_GAMING else TECH_OPML_PATH
-CHANNEL_PROFILE_PATH = GAMING_PROFILE_PATH if IS_GAMING else TECH_PROFILE_PATH
+ARGS: argparse.Namespace
+VIDEO_NAME: str
+PROJECT_DIR: Path
+OUTPUT_DIR: Path
+LOG_PATH: Path
+PROJECT_INFO_PATH: Path
+CANDIDATES_PATH: Path
+COMBINED_SCRIPT_PATH: Path
+PROVIDER: str
+TOP_N: int
+CONTENT_CATEGORY: str
+IS_GAMING: bool
+CONTENT_LABEL: str
+OPML_PATH: Path
+CHANNEL_PROFILE_PATH: Path
+
+configure_run(
+    argparse.Namespace(
+        video=1,
+        provider=None,
+        category="tech",
+        top=None,
+        reset=False,
+        repair_existing=False,
+        confirm_ai_cost=False,
+    )
+)
 
 
 # =========================================================
@@ -304,7 +338,8 @@ def configure_logging() -> logging.Logger:
     return logger
 
 
-LOGGER = configure_logging()
+LOGGER = logging.getLogger("rss_news_pipeline")
+LOGGER.addHandler(logging.NullHandler())
 
 
 # =========================================================
@@ -1542,8 +1577,11 @@ def validate_configuration() -> None:
 # ANA İŞLEM
 # =========================================================
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    global LOGGER
     try:
+        configure_run(parse_arguments(argv))
+        LOGGER = configure_logging()
         validate_configuration()
 
         LOGGER.info("=" * 68)

@@ -1099,7 +1099,22 @@ def upload_project(video_number: int) -> dict:
     return result
 
 
+def run_preflight() -> bool:
+    print("Running no-cost production preflight...")
+    result = subprocess.run(
+        [sys.executable, str(source_file("preflight.py"))],
+        cwd=AUTOMATION_ROOT,
+        check=False,
+    )
+    if result.returncode != 0:
+        print("Preflight failed. No project or provider request was started.")
+        return False
+    return True
+
+
 def interactive() -> int:
+    if not run_preflight():
+        return 1
     latest = latest_project_number()
     decision_timeout = float(os.getenv("AUTOMATION_DECISION_TIMEOUT_SECONDS", "15"))
     upload_timeout = float(os.getenv("AUTOMATION_UPLOAD_TIMEOUT_SECONDS", "30"))

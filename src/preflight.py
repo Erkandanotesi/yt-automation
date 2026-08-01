@@ -48,6 +48,7 @@ from render_stage import RenderSettings  # noqa: E402
 from publish_stage import PublishSettings  # noqa: E402
 from youtube_upload import YouTubeUploadSettings  # noqa: E402
 from news_archive import ArchiveSettings  # noqa: E402
+from news_pipeline import validate_configuration as validate_news_configuration  # noqa: E402
 from env_doctor import inspect_env  # noqa: E402
 
 
@@ -298,6 +299,17 @@ def collect_checks() -> list[Check]:
                 f"AI candidates={news_archive_settings.candidate_limit}; "
                 f"local threshold={news_archive_settings.local_similarity_threshold:g}"
             ),
+        )
+
+    try:
+        validate_news_configuration()
+    except Exception as exc:  # noqa: BLE001 - preflight must report any startup defect.
+        add("News pipeline startup", False, f"{type(exc).__name__}: {exc}")
+    else:
+        add(
+            "News pipeline startup",
+            True,
+            "Configuration validation passed without RSS or provider requests.",
         )
 
     provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()

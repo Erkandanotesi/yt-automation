@@ -29,6 +29,18 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_interactive_preflight_failure_stops_before_project_creation(self) -> None:
+        with (
+            patch("news_studio.run_preflight", return_value=False),
+            patch("news_studio.next_project_number") as next_project,
+            patch("news_studio.run_flow") as run,
+        ):
+            exit_code = interactive()
+
+        self.assertEqual(exit_code, 1)
+        next_project.assert_not_called()
+        run.assert_not_called()
+
     def test_progress_bar_uses_green_filled_rectangles(self) -> None:
         display = ProgressDisplay(6, stream=io.StringIO(), live=False, color=False)
         display.color = True
@@ -68,6 +80,7 @@ class NewsStudioTests(unittest.TestCase):
             {"status": "COMPLETE", "video_number": 6},
         ]
         with (
+            patch("news_studio.run_preflight", return_value=True),
             patch("news_studio.latest_project_number", return_value=5),
             patch("news_studio.next_project_number", return_value=6),
             patch("news_studio.api_cost_plan", return_value={}),

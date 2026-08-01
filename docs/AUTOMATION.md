@@ -149,10 +149,14 @@ Completed rectangles are green, the active stage segment turns red if it fails, 
 remaining rectangles stay dim. The panel shows the current stage, percentage, and
 completed/total stage count. Headless scheduled runs emit the same information as
 plain progress snapshots for log files.
+Successful autonomous runs exit normally. If the launcher returns an error, its console
+stays open indefinitely at a failure prompt so the red stage and traceback can be
+inspected; press any key only when ready to close it.
 
 ## Milestone 10 lifecycle
 
-1. Preflight validates the modular layout, configuration, assets, and tools.
+1. The one-button launcher runs a no-cost preflight before project creation. It validates
+   the modular layout, configuration, news-pipeline startup, assets, and tools.
 2. `new` creates the next numbered project and runs news, TTS, and alignment.
 3. At the separator choice, the default is `skip`. Skip records a durable `SKIPPED`
    checkpoint, uses no separator files, and starts narration, captions, and relevant
