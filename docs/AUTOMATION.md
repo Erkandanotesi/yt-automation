@@ -167,7 +167,7 @@ news-studio.bat render "Video N"
 stages do not begin without `--confirm-api-costs`. Individual story-image and publishing
 generators retain their own confirmation gates as a second safety layer.
 
-`create_video.bat` is the autonomous launcher. Each ordinary choice waits 15 seconds
+`create_video.bat` is the autonomous launcher. Each ordinary choice waits 30 seconds
 before taking its displayed default:
 create a new Tech News project, allow the shown provider-cost plan, skip manual
 separators, and approve the checksum-bound preview. The final upload choice waits 120

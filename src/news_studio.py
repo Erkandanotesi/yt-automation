@@ -1189,7 +1189,7 @@ def timed_choice(
     options: dict[str, str],
     *,
     default: str,
-    timeout_seconds: float = 15.0,
+    timeout_seconds: float = 30.0,
 ) -> str:
     """Read one menu key, falling back predictably when nobody is present."""
     if default not in options:
@@ -1351,7 +1351,7 @@ def interactive() -> int:
     if not run_preflight():
         return 1
     latest = latest_project_number()
-    decision_timeout = float(os.getenv("AUTOMATION_DECISION_TIMEOUT_SECONDS", "15"))
+    decision_timeout = float(os.getenv("AUTOMATION_DECISION_TIMEOUT_SECONDS", "30"))
     upload_timeout = float(os.getenv("AUTOMATION_UPLOAD_TIMEOUT_SECONDS", "120"))
     start_options = {"1": "Create a new Tech News video"}
     if latest is not None:
