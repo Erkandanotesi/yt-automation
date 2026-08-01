@@ -144,6 +144,11 @@ seconds and defaults to uploading the MP4 plus its thumbnail, title, description
 chapter metadata. Press the alternative key during the countdown to override any
 default. The timeout values can be changed with
 `AUTOMATION_DECISION_TIMEOUT_SECONDS` and `AUTOMATION_UPLOAD_TIMEOUT_SECONDS`.
+During production, a persistent overall progress panel stays below live stage output.
+Completed rectangles are green, the active stage segment turns red if it fails, and
+remaining rectangles stay dim. The panel shows the current stage, percentage, and
+completed/total stage count. Headless scheduled runs emit the same information as
+plain progress snapshots for log files.
 
 ## Milestone 10 lifecycle
 

@@ -58,6 +58,20 @@ COST_STAGES = {
 TERMINAL_COMPLETE = "COMPLETE"
 TERMINAL_WAITING = "WAITING"
 TERMINAL_FAILED = "FAILED"
+PROGRESS_WIDTH = 36
+STAGE_LABELS = {
+    "news": "Collecting and writing news",
+    "tts": "Creating ElevenLabs voiceovers",
+    "alignment": "Aligning narration timestamps",
+    "manual_separators": "Resolving news separators",
+    "storyboard": "Planning and generating AI images",
+    "archive_visuals": "Selecting contextual archive images",
+    "captions": "Creating timed captions",
+    "effects": "Planning frames, effects, and music",
+    "preview_approval": "Preparing and approving the preview",
+    "render": "Encoding the final video",
+    "publish": "Creating thumbnail and YouTube metadata",
+}
 
 
 def utc_now() -> str:
@@ -411,6 +425,128 @@ class StageResult:
     detail: str
 
 
+class ProgressDisplay:
+    """Keep an overall production bar below live subprocess output."""
+
+    def __init__(
+        self,
+        video_number: int,
+        *,
+        stream=None,
+        live: bool | None = None,
+        color: bool | None = None,
+        width: int = PROGRESS_WIDTH,
+    ) -> None:
+        self.video_number = video_number
+        self.stream = stream or sys.stdout
+        self.live = bool(self.stream.isatty()) if live is None else live
+        self.color = self.live if color is None else color
+        self.width = max(10, width)
+        self.total = len(FLOW_STAGES)
+        self._active = False
+        self._completed = 0
+        self._state = "QUEUED"
+        self._stage_label = "Production queued"
+        if self.color and os.name == "nt":
+            self.color = self._enable_windows_ansi()
+
+    @staticmethod
+    def _enable_windows_ansi() -> bool:
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.GetStdHandle(-11)
+            mode = ctypes.c_uint32()
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                return False
+            return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+        except (AttributeError, OSError):
+            return False
+
+    def _bar_line(self, completed: int, state: str) -> str:
+        completed = min(self.total, max(0, completed))
+        filled_count = round(self.width * completed / self.total)
+        failed_count = 0
+        if state == "FAILED" and completed < self.total:
+            failed_stage_end = round(self.width * (completed + 1) / self.total)
+            failed_count = min(
+                self.width - filled_count,
+                max(1, failed_stage_end - filled_count),
+            )
+        filled = "█" * filled_count
+        failed = "█" * failed_count if self.color else "▓" * failed_count
+        remaining = "░" * (self.width - filled_count - failed_count)
+        if self.color and filled:
+            filled = f"\x1b[32m{filled}\x1b[0m"
+        if self.color and failed:
+            failed = f"\x1b[31m{failed}\x1b[0m"
+        percentage = round(completed * 100 / self.total)
+        return (
+            f"[{filled}{failed}{remaining}] {percentage:3d}%  "
+            f"{completed:02d}/{self.total:02d}  {state} - {self._stage_label}"
+        )
+
+    def _clear_live_line(self) -> None:
+        if self.live and self._active:
+            self.stream.write("\r\x1b[2K")
+
+    def _draw(self, completed: int, state: str) -> None:
+        self._completed = completed
+        self._state = state
+        line = self._bar_line(completed, state)
+        if self.live:
+            self.stream.write(f"\r\x1b[2K{line}")
+            self.stream.flush()
+            self._active = True
+        else:
+            self.stream.write(line + "\n")
+            self.stream.flush()
+
+    def start_stage(self, stage: str, completed: int) -> None:
+        self._clear_live_line()
+        if self._active:
+            self.stream.write("\n")
+        label = STAGE_LABELS.get(stage, stage.replace("_", " ").title())
+        self._stage_label = label
+        self.stream.write(f"\n⚙ {label}...\n")
+        self._active = False
+        self._draw(completed, "RUNNING")
+
+    def write_subprocess_line(self, line: str) -> None:
+        if not self.live:
+            self.stream.write(line)
+            self.stream.flush()
+            return
+        self._clear_live_line()
+        self.stream.write(line)
+        if line and not line.endswith("\n"):
+            self.stream.write("\n")
+        self._active = False
+        self._draw(self._completed, self._state)
+
+    def complete_stage(self, completed: int) -> None:
+        self._draw(completed, "COMPLETE")
+        if self.live:
+            self.stream.write("\n")
+            self.stream.flush()
+            self._active = False
+
+    def waiting(self, completed: int) -> None:
+        self._draw(completed, "WAITING")
+        if self.live:
+            self.stream.write("\n")
+            self.stream.flush()
+            self._active = False
+
+    def failed(self, completed: int) -> None:
+        self._draw(completed, "FAILED")
+        if self.live:
+            self.stream.write("\n")
+            self.stream.flush()
+            self._active = False
+
+
 class ProjectLock:
     def __init__(self, video_dir: Path, *, recover_stale: bool = False) -> None:
         self.video_dir = video_dir
@@ -471,7 +607,13 @@ def _event(video_dir: Path, event: dict[str, Any]) -> None:
         output.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _run_subprocess(video_dir: Path, stage: str, arguments: list[str]) -> None:
+def _run_subprocess(
+    video_dir: Path,
+    stage: str,
+    arguments: list[str],
+    *,
+    progress: ProgressDisplay | None = None,
+) -> None:
     directory = video_dir / "orchestration" / "logs"
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -492,7 +634,10 @@ def _run_subprocess(video_dir: Path, stage: str, arguments: list[str]) -> None:
         assert process.stdout is not None
         try:
             for line in process.stdout:
-                print(line, end="")
+                if progress is not None:
+                    progress.write_subprocess_line(line)
+                else:
+                    print(line, end="")
                 log.write(line)
                 log.flush()
             return_code = process.wait()
@@ -552,6 +697,7 @@ def execute_stage(
     confirm_api_costs: bool,
     approve_current_preview: bool,
     manual_separator_mode: Literal["manual", "skip", "defer"] = "manual",
+    progress: ProgressDisplay | None = None,
 ) -> StageResult:
     video_dir = project_dir(video_number)
     if stage in COST_STAGES and not confirm_api_costs:
@@ -566,15 +712,22 @@ def execute_stage(
             video_dir,
             stage,
             ["news_pipeline.py", "--video", str(video_number), "--category", category],
+            progress=progress,
         )
     elif stage == "tts":
         _run_subprocess(
             video_dir,
             stage,
             ["elevenlabs_tts.py", "--video", str(video_number), "--compact"],
+            progress=progress,
         )
     elif stage == "alignment":
-        _run_subprocess(video_dir, stage, ["alignment_stage.py", "--video", str(video_number)])
+        _run_subprocess(
+            video_dir,
+            stage,
+            ["alignment_stage.py", "--video", str(video_number)],
+            progress=progress,
+        )
     elif stage == "manual_separators":
         if manual_separator_mode == "defer":
             return StageResult(
@@ -593,6 +746,7 @@ def execute_stage(
                     "--action",
                     "skip",
                 ],
+                progress=progress,
             )
             return StageResult(
                 TERMINAL_COMPLETE,
@@ -610,7 +764,17 @@ def execute_stage(
             ],
             cwd=AUTOMATION_ROOT,
             check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
+        for line in result.stdout.splitlines(keepends=True):
+            if progress is not None:
+                progress.write_subprocess_line(line)
+            else:
+                print(line, end="")
         if result.returncode != 0:
             _run_subprocess(
                 video_dir,
@@ -622,6 +786,7 @@ def execute_stage(
                     "--action",
                     "prepare",
                 ],
+                progress=progress,
             )
             return StageResult(
                 TERMINAL_WAITING,
@@ -640,6 +805,7 @@ def execute_stage(
                 "all",
                 "--confirm-cost",
             ],
+            progress=progress,
         )
     elif stage == "archive_visuals":
         _run_subprocess(
@@ -651,18 +817,21 @@ def execute_stage(
                 str(video_number),
                 "--confirm-ai-cost",
             ],
+            progress=progress,
         )
     elif stage == "captions":
         _run_subprocess(
             video_dir,
             stage,
             ["caption_stage.py", "--video", str(video_number), "--action", "generate"],
+            progress=progress,
         )
     elif stage == "effects":
         _run_subprocess(
             video_dir,
             stage,
             ["effects_stage.py", "--video", str(video_number), "--action", "generate"],
+            progress=progress,
         )
     elif stage == "preview_approval":
         proof = video_dir / "07_effects" / "milestone6_reference_60s.mp4"
@@ -679,6 +848,7 @@ def execute_stage(
                     "--proof-seconds",
                     "60",
                 ],
+                progress=progress,
             )
         if not approve_current_preview:
             return StageResult(
@@ -700,6 +870,7 @@ def execute_stage(
             video_dir,
             stage,
             ["render_stage.py", "--video", str(video_number), "--action", "render"],
+            progress=progress,
         )
     elif stage == "publish":
         _run_subprocess(
@@ -713,6 +884,7 @@ def execute_stage(
                 "--confirm-ai-cost",
                 "--confirm-thumbnail-cost",
             ],
+            progress=progress,
         )
     else:
         raise ValueError(f"Unknown stage: {stage}")
@@ -728,6 +900,7 @@ def run_flow(
     recover_stale_lock: bool,
     dry_run: bool,
     manual_separator_mode: Literal["manual", "skip", "defer"] = "manual",
+    progress: ProgressDisplay | None = None,
 ) -> dict:
     before = collect_project_status(video_number)
     planned = [
@@ -755,19 +928,35 @@ def run_flow(
     video_dir = project_dir(video_number)
     with ProjectLock(video_dir, recover_stale=recover_stale_lock):
         _event(video_dir, {"type": "flow_started", "planned_stages": planned})
+        if not planned and progress is not None:
+            progress.complete_stage(len(FLOW_STAGES))
         for stage in FLOW_STAGES:
             current = collect_project_status(video_number)
             if current["stages"][stage]["status"] == TERMINAL_COMPLETE:
                 continue
-            result = execute_stage(
-                video_number,
-                stage,
-                category=category,
-                confirm_api_costs=confirm_api_costs,
-                approve_current_preview=approve_current_preview,
-                manual_separator_mode=manual_separator_mode,
+            completed_before = sum(
+                item["status"] == TERMINAL_COMPLETE
+                for item in current["stages"].values()
             )
+            if progress is not None:
+                progress.start_stage(stage, completed_before)
+            try:
+                result = execute_stage(
+                    video_number,
+                    stage,
+                    category=category,
+                    confirm_api_costs=confirm_api_costs,
+                    approve_current_preview=approve_current_preview,
+                    manual_separator_mode=manual_separator_mode,
+                    progress=progress,
+                )
+            except Exception:
+                if progress is not None:
+                    progress.failed(completed_before)
+                raise
             if result.status == TERMINAL_WAITING:
+                if progress is not None:
+                    progress.waiting(completed_before)
                 _event(
                     video_dir,
                     {"type": "flow_waiting", "stage": stage, "detail": result.detail},
@@ -778,6 +967,13 @@ def run_flow(
                     "stage": stage,
                     "detail": result.detail,
                 }
+            if progress is not None:
+                after_stage = collect_project_status(video_number)
+                completed_after = sum(
+                    item["status"] == TERMINAL_COMPLETE
+                    for item in after_stage["stages"].values()
+                )
+                progress.complete_stage(max(completed_before + 1, completed_after))
         final = collect_project_status(video_number)
         _event(video_dir, {"type": "flow_completed", "complete": final["complete"]})
         return {
@@ -937,6 +1133,7 @@ def interactive() -> int:
         print("Cancelled before any provider request.")
         return 0
 
+    progress_display = ProgressDisplay(video_number)
     separator_mode: Literal["manual", "skip", "defer"] = "defer"
     preview_approved = False
     while True:
@@ -948,6 +1145,7 @@ def interactive() -> int:
             recover_stale_lock=False,
             dry_run=False,
             manual_separator_mode=separator_mode,
+            progress=progress_display,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if result.get("stage") == "manual_separators":
@@ -970,6 +1168,7 @@ def interactive() -> int:
                     recover_stale_lock=False,
                     dry_run=False,
                     manual_separator_mode="manual",
+                    progress=progress_display,
                 )
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 if result.get("stage") == "manual_separators":

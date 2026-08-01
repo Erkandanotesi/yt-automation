@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 from news_studio import (
     FLOW_STAGES,
+    ProgressDisplay,
     ProjectLock,
     _preview_status,
     approve_preview,
@@ -27,6 +29,38 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_progress_bar_uses_green_filled_rectangles(self) -> None:
+        display = ProgressDisplay(6, stream=io.StringIO(), live=False, color=False)
+        display.color = True
+        line = display._bar_line(3, "RUNNING")
+
+        self.assertIn("\x1b[32m", line)
+        self.assertIn("█", line)
+        self.assertIn("░", line)
+        self.assertIn("27%", line)
+
+    def test_failed_stage_segment_uses_red_rectangles(self) -> None:
+        display = ProgressDisplay(6, stream=io.StringIO(), live=False, color=False)
+        display.color = True
+        line = display._bar_line(3, "FAILED")
+
+        self.assertIn("\x1b[32m", line)
+        self.assertIn("\x1b[31m", line)
+        self.assertIn("FAILED", line)
+
+    def test_headless_progress_emits_stage_snapshots(self) -> None:
+        stream = io.StringIO()
+        display = ProgressDisplay(6, stream=stream, live=False, color=False, width=11)
+
+        display.start_stage("render", 9)
+        display.complete_stage(10)
+
+        output = stream.getvalue()
+        self.assertIn("Encoding the final video", output)
+        self.assertIn("82%", output)
+        self.assertIn("91%", output)
+        self.assertIn("COMPLETE", output)
+
     def test_autonomous_defaults_skip_separators_then_upload(self) -> None:
         results = [
             {"status": "WAITING", "video_number": 6, "stage": "manual_separators"},

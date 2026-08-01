@@ -834,6 +834,10 @@ news-studio render "Video N"
   separator skipping, preview approval, and final YouTube upload. Manual choices wait
   15 seconds; upload waits 30 seconds. The skipped mode keeps visual order tied to
   narration and excludes manual-separator-covered beats from paid hero generation.
+- The one-button terminal keeps a stage-level progress bar underneath live output;
+  completed blocks are green and a failed stage segment is red, while
+  scheduled/headless runs receive plain percentage snapshots suitable for captured
+  logs.
 - Final publishing automatically generates or reuses one medium-quality, series-aligned
   AI thumbnail and the complete Milestone 9 package.
 - Video 5 is recognized as complete by the new orchestrator without provider calls.
