@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -161,20 +161,63 @@ class PublishingCopy(BaseModel):
 
     @model_validator(mode="after")
     def validate_recommendations(self) -> "PublishingCopy":
-        titles = {item.title for item in self.title_candidates}
+        titles = {item.title: item for item in self.title_candidates}
         if self.recommended_title not in titles:
-            raise ValueError("Recommended title must be one of the title candidates.")
+            normalized_recommendation = self.recommended_title.strip().casefold()
+            normalized_match = next(
+                (
+                    title
+                    for title in titles
+                    if title.strip().casefold() == normalized_recommendation
+                ),
+                None,
+            )
+            self.recommended_title = normalized_match or max(
+                self.title_candidates,
+                key=lambda item: (
+                    item.clarity + item.curiosity + item.specificity
+                    - item.factual_risk
+                ),
+            ).title
         concepts = {item.concept_id: item for item in self.thumbnail_concepts}
         if self.recommended_concept_id not in concepts:
-            raise ValueError("Recommended thumbnail concept is missing.")
+            self.recommended_concept_id = self.thumbnail_concepts[0].concept_id
         options = concepts[self.recommended_concept_id].text_options
         if self.recommended_thumbnail_text not in options:
-            raise ValueError(
-                "Recommended thumbnail text must belong to the selected concept."
+            normalized_text = self.recommended_thumbnail_text.strip().casefold()
+            normalized_match = next(
+                (
+                    option
+                    for option in options
+                    if option.strip().casefold() == normalized_text
+                ),
+                None,
             )
-        normalized_tags = [item.strip().casefold() for item in self.tags]
-        if len(normalized_tags) != len(set(normalized_tags)):
-            raise ValueError("Publishing tags must be unique.")
+            self.recommended_thumbnail_text = normalized_match or options[0]
+        unique_tags: list[str] = []
+        seen_tags: set[str] = set()
+        for tag in self.tags:
+            normalized = tag.strip().casefold()
+            if normalized and normalized not in seen_tags:
+                seen_tags.add(normalized)
+                unique_tags.append(tag.strip())
+        for fallback_tag in (
+            "technology news",
+            "tech reports",
+            "technology update",
+            "tech industry",
+            "digital technology",
+            "latest tech news",
+            "AI news",
+            "cybersecurity news",
+        ):
+            if len(unique_tags) >= 8:
+                break
+            normalized = fallback_tag.casefold()
+            if normalized not in seen_tags:
+                seen_tags.add(normalized)
+                unique_tags.append(fallback_tag)
+        self.tags = unique_tags
         return self
 
 
@@ -275,6 +318,8 @@ STRICT RULES
 - No fabricated quotation, number, victim, country, or attribution.
 - Thumbnail concepts must use only supported lead-story facts.
 - Thumbnail text must be 2 to 4 short words, at most 24 characters.
+- recommended_thumbnail_text must exactly equal one text_options entry from the
+  recommended_concept_id. Do not paraphrase it into a separate value.
 - Thumbnail text must name the lead product, company, or concrete topic; reject
   generic clickbait such as NO CLICK NEEDED unless a named topic is also present.
 - Recommended thumbnail text must complement, not fully repeat, the title.
@@ -300,6 +345,159 @@ APPROVED LEAD VISUAL CONCEPTS
 FULL EPISODE STORY LIST
 {json.dumps(episode_stories, ensure_ascii=False, indent=2)}
 """.strip()
+
+
+def _trim_words(text: str, limit: int) -> str:
+    compact = re.sub(r"\s+", " ", text).strip(" -|:;,.")
+    if len(compact) <= limit:
+        return compact
+    shortened = compact[: limit + 1].rsplit(" ", 1)[0].strip(" -|:;,.")
+    return shortened or compact[:limit].strip()
+
+
+def _local_publishing_fallback(
+    project: dict,
+    lead: dict,
+    narration: str,
+) -> PublishingCopy:
+    """Build conservative, grounded copy when structured provider output is invalid."""
+
+    base = _trim_words(
+        str(lead.get("title") or lead.get("source_title") or "Technology News Update"),
+        YOUTUBE_TITLE_LIMIT,
+    )
+    subject = _trim_words(base, 62)
+    title_texts = [
+        base,
+        _trim_words(f"{subject}: What We Know", YOUTUBE_TITLE_LIMIT),
+        _trim_words(f"{subject} Explained | Tech Reports", YOUTUBE_TITLE_LIMIT),
+        _trim_words(f"Why {subject} Matters Now", YOUTUBE_TITLE_LIMIT),
+        _trim_words(f"Inside {subject} | Tech Reports", YOUTUBE_TITLE_LIMIT),
+    ]
+    unique_titles: list[str] = []
+    for title in title_texts:
+        if len(title) < 15:
+            title = _trim_words(f"{title} | Technology News", YOUTUBE_TITLE_LIMIT)
+        if title not in unique_titles:
+            unique_titles.append(title)
+    while len(unique_titles) < 5:
+        suffix = len(unique_titles) + 1
+        unique_titles.append(
+            _trim_words(f"{subject} | Tech News Report {suffix}", YOUTUBE_TITLE_LIMIT)
+        )
+
+    meaningful = [
+        token.upper()
+        for token in re.findall(r"[A-Za-z0-9]+", base)
+        if token.casefold()
+        not in {"a", "an", "and", "for", "from", "in", "of", "on", "the", "to"}
+    ]
+    thumbnail_words: list[str] = []
+    for token in meaningful:
+        candidate = " ".join([*thumbnail_words, token])
+        if len(candidate) > 24 or len(thumbnail_words) >= 3:
+            break
+        thumbnail_words.append(token)
+    thumbnail_text = " ".join(thumbnail_words) or "TECH NEWS"
+    alternative_text = _trim_words(f"{thumbnail_words[0]} ALERT", 24) if thumbnail_words else "TECH ALERT"
+
+    narration_summary = _trim_words(narration, 560)
+    lead_description = (
+        narration_summary
+        if len(narration_summary) >= 80
+        else _trim_words(
+            f"This report examines {base} and summarizes the verified details "
+            "available in the original reporting.",
+            650,
+        )
+    )
+    other_titles = [
+        str(item.get("title") or item.get("source_title") or "").strip()
+        for item in sorted(project.get("stories", []), key=lambda item: int(item["order"]))
+        if int(item.get("order", 0)) != int(lead.get("order", 1))
+    ]
+    episode_description = _trim_words(
+        "Also in this technology-news episode: " + "; ".join(other_titles),
+        650,
+    )
+    if len(episode_description) < 80:
+        episode_description += (
+            " The episode covers the most important context, consequences, and "
+            "developments from each report."
+        )
+
+    tag_seeds = [
+        "technology news",
+        "tech reports",
+        "latest technology",
+        "technology update",
+        "AI news",
+        "cybersecurity news",
+        "digital technology",
+        "tech industry",
+        *[word.casefold() for word in meaningful[:6]],
+    ]
+    tags: list[str] = []
+    for tag in tag_seeds:
+        if tag and tag.casefold() not in {item.casefold() for item in tags}:
+            tags.append(tag)
+        if len(tags) == 12:
+            break
+
+    candidate_models = [
+        TitleCandidate(
+            title=title,
+            rationale=(
+                "This conservative fallback title stays anchored to the supplied "
+                "lead-story headline after structured metadata repair failed."
+            ),
+            clarity=8,
+            curiosity=7,
+            specificity=8,
+            factual_risk=1,
+        )
+        for title in unique_titles[:5]
+    ]
+    return PublishingCopy(
+        title_candidates=candidate_models,
+        recommended_title=candidate_models[0].title,
+        recommended_title_reason=(
+            "The original lead-story wording is the most factual and specific safe "
+            "choice available without another provider request."
+        ),
+        thumbnail_concepts=[
+            ThumbnailConcept(
+                concept_id="concept_1",
+                visual=(
+                    "A bright, high-contrast editorial depiction of the lead story "
+                    "with one clear subject on the right and clean headline space."
+                ),
+                text_options=[thumbnail_text, alternative_text],
+                rationale=(
+                    "The words come directly from the lead headline and remain "
+                    "readable in the fixed series layout."
+                ),
+            ),
+            ThumbnailConcept(
+                concept_id="concept_2",
+                visual=(
+                    "A bright newsroom-style close-up centered on the named lead "
+                    "topic with restrained warning graphics and uncluttered framing."
+                ),
+                text_options=[alternative_text, thumbnail_text],
+                rationale=(
+                    "This alternate arrangement preserves the same grounded subject "
+                    "while offering a stronger alert treatment."
+                ),
+            ),
+        ],
+        recommended_concept_id="concept_1",
+        recommended_thumbnail_text=thumbnail_text,
+        lead_description=lead_description,
+        episode_description=episode_description[:650],
+        tags=tags,
+        hashtags=["#TechNews", "#Technology", "#TechReports"],
+    )
 
 
 def generate_copy_with_openai(
@@ -343,6 +541,13 @@ def generate_copy_with_openai(
             return response.output_parsed
         except Exception as exc:  # noqa: BLE001
             last_error = exc
+            if isinstance(exc, ValidationError):
+                print(
+                    "[PUBLISH WARNING] Structured publishing copy was inconsistent; "
+                    "using a grounded local fallback without another text request.",
+                    file=sys.stderr,
+                )
+                return _local_publishing_fallback(project, lead, narration)
             status = getattr(exc, "status_code", None)
             if (
                 isinstance(status, int)
@@ -845,6 +1050,39 @@ def _copy_grounding_quality(copy: PublishingCopy, lead: dict, narration: str) ->
     }
 
 
+def _ensure_grounded_publishing_copy(
+    copy: PublishingCopy,
+    project: dict,
+    lead: dict,
+    narration: str,
+) -> PublishingCopy:
+    if _copy_grounding_quality(copy, lead, narration)["minimum_supported_terms"]:
+        return copy
+    grounded_candidates = [
+        item
+        for item in copy.title_candidates
+        if _copy_grounding_quality(
+            copy.model_copy(update={"recommended_title": item.title}),
+            lead,
+            narration,
+        )["minimum_supported_terms"]
+    ]
+    if grounded_candidates:
+        copy.recommended_title = max(
+            grounded_candidates,
+            key=lambda item: (
+                item.clarity + item.curiosity + item.specificity - item.factual_risk
+            ),
+        ).title
+        return copy
+    print(
+        "[PUBLISH WARNING] No suggested title passed local grounding; using a "
+        "conservative lead-story fallback before thumbnail generation.",
+        file=sys.stderr,
+    )
+    return _local_publishing_fallback(project, lead, narration)
+
+
 def build_publish_package(
     *,
     video_number: int,
@@ -890,6 +1128,12 @@ def build_publish_package(
         publishing_copy = generate_copy_with_openai(
             project, lead, planned, narration, original, settings
         )
+        publishing_copy = _ensure_grounded_publishing_copy(
+            publishing_copy,
+            project,
+            lead,
+            narration,
+        )
         atomic_write_json(
             copy_path,
             {
@@ -901,6 +1145,13 @@ def build_publish_package(
                 "reasoning_effort": settings.reasoning_effort,
                 "copy": publishing_copy.model_dump(mode="json"),
             },
+        )
+    else:
+        publishing_copy = _ensure_grounded_publishing_copy(
+            publishing_copy,
+            project,
+            lead,
+            narration,
         )
     thumbnail_headline = (
         rendered_headline.strip()

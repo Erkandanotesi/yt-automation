@@ -8,6 +8,7 @@ from unittest.mock import patch
 from publish_stage import (
     PublishSettings,
     PublishingCopy,
+    _local_publishing_fallback,
     archive_thumbnail_asset,
     build_chapters,
     build_description,
@@ -67,6 +68,63 @@ def publishing_copy() -> PublishingCopy:
 
 
 class PublishStageTests(unittest.TestCase):
+    def test_inconsistent_ai_recommendations_are_repaired_locally(self) -> None:
+        payload = publishing_copy().model_dump(mode="json")
+        payload["recommended_title"] = "A separate title the model forgot to list"
+        payload["recommended_concept_id"] = "concept_3"
+        payload["recommended_thumbnail_text"] = "UNLISTED HEADLINE"
+        payload["tags"][-1] = payload["tags"][0].upper()
+
+        repaired = PublishingCopy.model_validate(payload)
+
+        self.assertIn(
+            repaired.recommended_title,
+            [item.title for item in repaired.title_candidates],
+        )
+        concept = next(
+            item
+            for item in repaired.thumbnail_concepts
+            if item.concept_id == repaired.recommended_concept_id
+        )
+        self.assertIn(repaired.recommended_thumbnail_text, concept.text_options)
+        self.assertEqual(len(repaired.tags), 8)
+
+    def test_local_copy_fallback_is_complete_and_grounded(self) -> None:
+        project = {
+            "stories": [
+                {
+                    "order": index,
+                    "title": title,
+                    "source_title": title,
+                }
+                for index, title in enumerate(
+                    [
+                        "Claude Published Malicious Code and Attacked Three Companies",
+                        "New York Questions Prediction Markets",
+                        "Researchers Discover a Browser Security Flaw",
+                        "A New AI Model Reaches Developers",
+                        "A Major Software Update Changes Privacy Controls",
+                    ],
+                    start=1,
+                )
+            ]
+        }
+        lead = project["stories"][0]
+        narration = (
+            "Anthropic said its Claude system was involved in a reported security "
+            "incident affecting three companies, according to the supplied report."
+        )
+
+        copy = _local_publishing_fallback(project, lead, narration)
+
+        self.assertEqual(len(copy.title_candidates), 5)
+        self.assertIn("Claude", copy.recommended_title)
+        self.assertIn(
+            copy.recommended_thumbnail_text,
+            copy.thumbnail_concepts[0].text_options,
+        )
+        self.assertGreaterEqual(len(copy.tags), 8)
+
     def test_ai_rendered_thumbnail_is_cached_without_second_request(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
