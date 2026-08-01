@@ -83,7 +83,7 @@ def utc_now() -> str:
 @dataclass(frozen=True)
 class PublishSettings:
     model: str = "gpt-5.6-luna"
-    reasoning_effort: str = "low"
+    reasoning_effort: str = "medium"
     timeout_seconds: float = 120.0
     api_retries: int = 2
     width: int = 1280
@@ -101,7 +101,7 @@ class PublishSettings:
         return cls(
             model=os.getenv("PUBLISH_MODEL", "gpt-5.6-luna").strip(),
             reasoning_effort=os.getenv(
-                "PUBLISH_REASONING_EFFORT", "low"
+                "PUBLISH_REASONING_EFFORT", "medium"
             ).strip().lower(),
             timeout_seconds=float(os.getenv("PUBLISH_TIMEOUT", "120")),
             api_retries=int(os.getenv("PUBLISH_API_RETRIES", "2")),

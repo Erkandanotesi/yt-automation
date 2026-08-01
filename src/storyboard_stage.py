@@ -80,7 +80,7 @@ def _env_float(name: str, default: float) -> float:
 @dataclass(frozen=True)
 class StoryboardSettings:
     planner_model: str = "gpt-5.6-luna"
-    planner_reasoning_effort: str = "low"
+    planner_reasoning_effort: str = "medium"
     image_model: str = "gpt-image-2"
     image_quality: str = "medium"
     image_size: str = "1280x720"
@@ -112,7 +112,7 @@ class StoryboardSettings:
             ).strip(),
             planner_reasoning_effort=os.getenv(
                 "STORYBOARD_REASONING_EFFORT",
-                "low",
+                "medium",
             ).strip().lower(),
             image_model=os.getenv(
                 "OPENAI_IMAGE_MODEL",

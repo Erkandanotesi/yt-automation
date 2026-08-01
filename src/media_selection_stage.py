@@ -56,7 +56,7 @@ def utc_now() -> str:
 @dataclass(frozen=True)
 class MediaSelectionSettings:
     model: str = "gpt-5.6-luna"
-    reasoning_effort: str = "low"
+    reasoning_effort: str = "medium"
     shortlist_size: int = 8
     minimum_window_seconds: float = 3.0
     target_window_seconds: float = 5.0
@@ -78,7 +78,7 @@ class MediaSelectionSettings:
             ).strip(),
             reasoning_effort=os.getenv(
                 "MEDIA_SELECTION_REASONING_EFFORT",
-                "low",
+                "medium",
             ).strip().lower(),
             shortlist_size=int(os.getenv("MEDIA_SHORTLIST_SIZE", "8")),
             minimum_window_seconds=float(

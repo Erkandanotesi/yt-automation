@@ -118,6 +118,15 @@ checks.
 `RSS_FEED_TIME_INTERVAL_HOURS` in `.env` controls the RSS publication-age window in
 whole hours. For example, `24` accepts feed entries published during the preceding
 24 hours and rejects older entries before article extraction or paid AI processing.
+`MIN_SCORE` is the primary editorial threshold (currently `50`). If primary stories
+are rejected and fewer than `TOP_N` remain, the pipeline attempts the best lower-ranked
+RSS reserves in order; those reserves still must pass every source, duplicate, and
+factual-quality gate. A rerun restores the validated prefix of an incomplete project.
+News ranking uses `OPENAI_NEWS_SELECTION_MODEL=gpt-5.6-luna` with
+`OPENAI_NEWS_SELECTION_REASONING_EFFORT=medium` and receives up to
+`NEWS_SELECTION_CANDIDATE_COUNT=40` candidates in its single selection request. The
+all Luna-backed text stages use `medium` reasoning effort, including summaries,
+duplicate review, storyboard planning, archive selection, and publishing copy.
 Rejected sources never occupy a video slot. The news stage immediately tries the
 next ranked RSS candidate from a 15-story reserve prepared in the same ranking call.
 If the feeds still cannot supply the requested number of valid articles, the project

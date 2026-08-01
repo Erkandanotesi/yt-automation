@@ -79,7 +79,13 @@ GAMING_PROFILE_PATH = GAMING_PROFILE_FILE
 
 AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6").strip()
-OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "low").strip().lower()
+OPENAI_NEWS_SELECTION_MODEL = os.getenv(
+    "OPENAI_NEWS_SELECTION_MODEL", "gpt-5.6-luna"
+).strip()
+OPENAI_NEWS_SELECTION_REASONING_EFFORT = os.getenv(
+    "OPENAI_NEWS_SELECTION_REASONING_EFFORT", "medium"
+).strip().lower()
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "medium").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
 
 RSS_FEED_TIME_INTERVAL_HOURS = int(
@@ -91,6 +97,9 @@ RSS_FEED_TIME_INTERVAL_HOURS = int(
 if RSS_FEED_TIME_INTERVAL_HOURS < 1:
     raise ValueError("RSS_FEED_TIME_INTERVAL_HOURS must be at least 1 hour.")
 MAX_CANDIDATES = int(os.getenv("MAX_CANDIDATES", "25"))
+NEWS_SELECTION_CANDIDATE_COUNT = int(
+    os.getenv("NEWS_SELECTION_CANDIDATE_COUNT", "40")
+)
 MAX_FEED_ITEMS = int(os.getenv("MAX_FEED_ITEMS", "30"))
 TOP_N_DEFAULT = int(os.getenv("TOP_N", "5"))
 RANKING_RESERVE = int(os.getenv("RANKING_RESERVE", "15"))
@@ -748,7 +757,13 @@ def save_candidates(candidates: list[dict]) -> None:
 # AI SAĞLAYICILARI
 # =========================================================
 
-def structured_ai_call(prompt: str, schema_type: type[SchemaT]) -> SchemaT:
+def structured_ai_call(
+    prompt: str,
+    schema_type: type[SchemaT],
+    *,
+    openai_model: str | None = None,
+    openai_reasoning_effort: str | None = None,
+) -> SchemaT:
     def operation() -> SchemaT:
         if PROVIDER == "openai":
             from openai import OpenAI
@@ -758,8 +773,10 @@ def structured_ai_call(prompt: str, schema_type: type[SchemaT]) -> SchemaT:
 
             client = OpenAI()
             response = client.responses.parse(
-                model=OPENAI_MODEL,
-                reasoning={"effort": OPENAI_REASONING_EFFORT},
+                model=openai_model or OPENAI_MODEL,
+                reasoning={
+                    "effort": openai_reasoning_effort or OPENAI_REASONING_EFFORT
+                },
                 input=[
                     {
                         "role": "system",
@@ -846,7 +863,10 @@ def rank_candidates(candidates: list[dict], channel_profile: str) -> list[Ranked
     # invalid article is replaced by another RSS candidate without paying for
     # a second ranking request.
     target_count = min(len(candidates), TOP_N + max(0, RANKING_RESERVE))
-    ranking_pool_size = min(len(candidates), max(12, target_count * 2))
+    ranking_pool_size = min(
+        len(candidates),
+        max(target_count, NEWS_SELECTION_CANDIDATE_COUNT),
+    )
     ranking_pool = candidates[:ranking_pool_size]
 
     article_list = []
@@ -880,7 +900,12 @@ CANDIDATES:
 """
 
     try:
-        result = structured_ai_call(prompt, RankingResult)
+        result = structured_ai_call(
+            prompt,
+            RankingResult,
+            openai_model=OPENAI_NEWS_SELECTION_MODEL,
+            openai_reasoning_effort=OPENAI_NEWS_SELECTION_REASONING_EFFORT,
+        )
         valid: list[RankedNews] = []
         used_indexes: set[int] = set()
 
@@ -891,6 +916,27 @@ CANDIDATES:
                 continue
             used_indexes.add(item.index)
             valid.append(item)
+
+        # The model may deliberately return fewer than the requested reserve count.
+        # Keep the remaining RSS candidates as lower-priority local reserves so a
+        # duplicate or unreadable primary does not leave an otherwise valid project
+        # one story short. All normal source, duplicate, and factual gates still run.
+        for index, candidate in enumerate(ranking_pool):
+            if len(valid) >= target_count:
+                break
+            if index in used_indexes:
+                continue
+            used_indexes.add(index)
+            valid.append(
+                RankedNews(
+                    index=index,
+                    score=min(100, max(0, round(candidate["rough_score"]))),
+                    reason=(
+                        "Local ranked reserve added because the AI returned fewer "
+                        "backup candidates than requested."
+                    ),
+                )
+            )
 
         return sorted(valid, key=lambda item: item.score, reverse=True)[:target_count]
 
@@ -1242,6 +1288,9 @@ def save_project_info(
         "feed_file": OPML_PATH.name,
         "provider": PROVIDER,
         "model": OPENAI_MODEL if PROVIDER == "openai" else GEMINI_MODEL,
+        "news_selection_model": (
+            OPENAI_NEWS_SELECTION_MODEL if PROVIDER == "openai" else GEMINI_MODEL
+        ),
         "project_directory": str(PROJECT_DIR),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "candidate_count": candidate_count,
@@ -1315,6 +1364,77 @@ def _existing_summary(story: dict, text_path: Path) -> NewsSummary:
         summary_en=text_path.read_text(encoding="utf-8").strip(),
         factual_review=FactualReview.model_validate(factual_review),
     )
+
+
+def load_incomplete_created_items(candidates: list[dict]) -> list[dict]:
+    """Reuse the contiguous validated prefix from an interrupted news stage."""
+    if not PROJECT_INFO_PATH.is_file():
+        return []
+    try:
+        project = json.loads(PROJECT_INFO_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if project.get("status") != "incomplete":
+        return []
+
+    by_url = {canonical_url(item["url"]): index for index, item in enumerate(candidates)}
+    restored: list[dict] = []
+    for story in sorted(project.get("stories", []), key=lambda item: int(item["order"])):
+        order = int(story["order"])
+        if order != len(restored) + 1:
+            break
+        text_path = Path(str(story.get("text", "")))
+        original_path = Path(str(story.get("original", "")))
+        if not text_path.is_file() or not original_path.is_file():
+            break
+        if (
+            story.get("narration_sha256") != sha256_file(text_path)
+            or story.get("source_sha256") != sha256_file(original_path)
+        ):
+            break
+        url = canonical_url(str(story["source_url"]))
+        candidate_index = by_url.get(url)
+        if candidate_index is None:
+            candidate = _repair_candidate({
+                "url": url,
+                "title": story.get("source_title") or story["title"],
+                "source": story.get("source", ""),
+                "published_utc": story.get("published_utc", ""),
+                "rough_score": story.get("score", 0),
+            })
+            candidates.append(candidate)
+            candidate_index = len(candidates) - 1
+            by_url[url] = candidate_index
+        candidate = candidates[candidate_index]
+        candidate["extraction"] = story.get("source_extraction", {})
+        restored.append({
+            "order": order,
+            "story_id": str(story["story_id"]),
+            "candidate": candidate,
+            "ranking": RankedNews(
+                index=candidate_index,
+                score=int(story["score"]),
+                reason=str(story.get("ranking_reason", "")),
+            ),
+            "summary": _existing_summary(story, text_path),
+            "article_text": original_path.read_text(encoding="utf-8").strip(),
+            "text_path": text_path,
+            "original_path": original_path,
+            "validation": story.get("validation", {}),
+            "archive_record": {
+                "archive_id": story.get("news_archive_id", ""),
+                "source_file": story.get("news_archive_source_file", ""),
+                "content_sha256": story.get("news_archive_content_sha256", ""),
+            },
+            "duplicate_decision": story.get("duplicate_check", {}),
+        })
+    if restored:
+        LOGGER.info(
+            "Recovered %s validated story file(s) from the incomplete project; "
+            "no new summary request will be made for them.",
+            len(restored),
+        )
+    return restored
 
 
 def _repair_backup_path() -> Path:
@@ -1566,6 +1686,19 @@ def validate_configuration() -> None:
         raise ValueError("RANKING_RESERVE cannot be negative.")
     if MAX_CANDIDATES < TOP_N:
         raise ValueError("MAX_CANDIDATES must be at least TOP_N.")
+    if NEWS_SELECTION_CANDIDATE_COUNT < TOP_N:
+        raise ValueError("NEWS_SELECTION_CANDIDATE_COUNT must be at least TOP_N.")
+    if PROVIDER == "openai" and not OPENAI_NEWS_SELECTION_MODEL:
+        raise ValueError("OPENAI_NEWS_SELECTION_MODEL cannot be empty.")
+    if (
+        PROVIDER == "openai"
+        and OPENAI_NEWS_SELECTION_REASONING_EFFORT
+        not in {"none", "low", "medium", "high", "xhigh", "max"}
+    ):
+        raise ValueError(
+            "OPENAI_NEWS_SELECTION_REASONING_EFFORT must be none, low, medium, "
+            "high, xhigh, or max."
+        )
 
     if PROVIDER == "gemini" and not os.getenv("GEMINI_API_KEY"):
         raise RuntimeError(
@@ -1600,6 +1733,12 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info(
             "Model: %s",
             OPENAI_MODEL if PROVIDER == "openai" else GEMINI_MODEL,
+        )
+        LOGGER.info(
+            "News-selection model: %s | reasoning: %s | candidates sent: up to %s",
+            OPENAI_NEWS_SELECTION_MODEL if PROVIDER == "openai" else GEMINI_MODEL,
+            OPENAI_NEWS_SELECTION_REASONING_EFFORT if PROVIDER == "openai" else "provider default",
+            min(MAX_CANDIDATES, NEWS_SELECTION_CANDIDATE_COUNT),
         )
         LOGGER.info("Seçilecek azami haber: %s", TOP_N)
         LOGGER.info(
@@ -1642,6 +1781,7 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("Önceki videolarda kullanılan URL sayısı: %s", len(used_urls))
 
         candidates = collect_candidates(feed_urls, used_urls)
+        created_items = load_incomplete_created_items(candidates)
         save_candidates(candidates)
 
         if not candidates:
@@ -1669,20 +1809,26 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-        created_items: list[dict] = []
+        restored_urls = {
+            canonical_url(item["candidate"]["url"]) for item in created_items
+        }
 
         for ranking in rankings:
             if len(created_items) >= TOP_N:
                 break
             if ranking.score < MIN_SCORE:
-                LOGGER.info(
-                    "Düşük puan nedeniyle atlandı: %s/100 | %s",
+                LOGGER.warning(
+                    "Strict-score stories produced only %s/%s valid items; trying "
+                    "the best lower-ranked reserve: %s/100 | %s",
+                    len(created_items),
+                    TOP_N,
                     ranking.score,
                     candidates[ranking.index]["title"],
                 )
-                continue
 
             candidate = candidates[ranking.index]
+            if canonical_url(candidate["url"]) in restored_urls:
+                continue
             LOGGER.info(
                 "İşleniyor: %s | %s/100",
                 candidate["title"],
