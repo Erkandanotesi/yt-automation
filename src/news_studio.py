@@ -472,7 +472,8 @@ def collect_project_status(video_number: int) -> dict:
 
 def api_cost_plan(video_number: int | None = None) -> dict:
     top_n = int(os.getenv("TOP_N", "5"))
-    missing_images = top_n * 2
+    images_per_story = int(os.getenv("AI_GENERATED_IMAGES_PER_STORY", "2"))
+    missing_images = top_n * images_per_story
     if video_number is not None:
         storyboard = _read_json(
             project_dir(video_number) / "04_storyboard" / "storyboard.json"
@@ -480,7 +481,12 @@ def api_cost_plan(video_number: int | None = None) -> dict:
         if storyboard:
             missing_images = max(
                 0,
-                int(storyboard.get("planned_image_count", top_n * 2))
+                int(
+                    storyboard.get(
+                        "planned_image_count",
+                        top_n * images_per_story,
+                    )
+                )
                 - int(storyboard.get("generated_image_count", 0)),
             )
     return {

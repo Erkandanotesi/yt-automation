@@ -88,6 +88,7 @@ class StoryboardSettings:
     timeout_seconds: float = 180.0
     planner_retries: int = 2
     maximum_source_characters: int = 12000
+    images_per_story: int = 2
     maximum_image_requests_per_run: int = 10
     duplicate_hamming_threshold: int = 6
     archive_directory: Path | None = (
@@ -135,6 +136,7 @@ class StoryboardSettings:
                 "STORYBOARD_MAX_SOURCE_CHARACTERS",
                 12000,
             ),
+            images_per_story=_env_int("AI_GENERATED_IMAGES_PER_STORY", 2),
             maximum_image_requests_per_run=_env_int(
                 "MAX_IMAGE_REQUESTS_PER_RUN",
                 10,
@@ -188,6 +190,10 @@ class StoryboardSettings:
             raise ValueError("API timeout/retry settings must be positive.")
         if self.maximum_source_characters < 1000:
             raise ValueError("STORYBOARD_MAX_SOURCE_CHARACTERS is too small.")
+        if not 1 <= self.images_per_story <= 4:
+            raise ValueError(
+                "AI_GENERATED_IMAGES_PER_STORY must be between 1 and 4."
+            )
         if self.maximum_image_requests_per_run < 1:
             raise ValueError("MAX_IMAGE_REQUESTS_PER_RUN must be positive.")
         if not 0 <= self.duplicate_hamming_threshold <= 64:
@@ -258,7 +264,7 @@ class SelectedBeat(BaseModel):
 class StoryBeatSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    images: list[SelectedBeat] = Field(min_length=2, max_length=2)
+    images: list[SelectedBeat] = Field(min_length=1, max_length=4)
 
 
 Planner = Callable[[dict, StoryboardSettings], StoryBeatSelection]
@@ -373,7 +379,7 @@ def load_story_contexts(
     return state, timing, contexts
 
 
-def candidate_beats(context: dict) -> list[dict]:
+def candidate_beats(context: dict, minimum_count: int = 2) -> list[dict]:
     timing = context["timing"]
     raw_candidates = timing.get("visual_beats", [])
     separator_hidden_seconds = (
@@ -386,13 +392,13 @@ def candidate_beats(context: dict) -> list[dict]:
         for beat in raw_candidates
         if float(beat.get("start", 0)) >= separator_hidden_seconds - 0.001
     ]
-    if len(eligible) < 2:
+    if len(eligible) < minimum_count:
         eligible = [
             beat
             for beat in timing.get("sentences", [])
             if float(beat.get("start", 0)) >= separator_hidden_seconds - 0.001
         ]
-    if len(eligible) < 2:
+    if len(eligible) < minimum_count:
         # A beat crossing the separator boundary still has visible screen time.
         combined = [*raw_candidates, *timing.get("sentences", [])]
         eligible = [
@@ -441,9 +447,9 @@ def candidate_beats(context: dict) -> list[dict]:
                 "visible_after_seconds": round(separator_hidden_seconds, 6),
             }
         )
-    if len(candidates) < 2:
+    if len(candidates) < minimum_count:
         raise RuntimeError(
-            f"{context['story_id']} has fewer than two visible timed visual "
+            f"{context['story_id']} has fewer than {minimum_count} visible timed visual "
             f"candidates after {separator_hidden_seconds:.3f}s of separator coverage."
         )
     return candidates
@@ -464,25 +470,31 @@ def story_planner_fingerprint(
             "reasoning_effort": settings.planner_reasoning_effort,
             "image_model": settings.image_model,
             "image_size": settings.image_size,
+            "images_per_story": settings.images_per_story,
             "style": DEFAULT_STYLE,
             "negative_constraints": DEFAULT_NEGATIVE_CONSTRAINTS,
         }
     )
 
 
-def planning_prompt(context: dict, candidates: list[dict]) -> str:
+def planning_prompt(
+    context: dict,
+    candidates: list[dict],
+    images_per_story: int,
+) -> str:
+    selection_word = "image" if images_per_story == 1 else "images"
     first_story_instruction = (
-        "This is story 01, the highest-ranked story. Select the pair with the "
+        f"This is story 01, the highest-ranked story. Select the {selection_word} with the "
         "strongest thumbnail-grade visual hook while remaining strictly factual."
         if context["order"] == 1
-        else "Keep the pair visually strong but subordinate to story 01."
+        else f"Keep the selected {selection_word} visually strong but subordinate to story 01."
     )
     return f"""
-Create the two-image storyboard for one technology-news narration.
+Create a {images_per_story}-image storyboard for one technology-news narration.
 
-Return exactly two different candidate IDs from the supplied timed candidates.
-The two images must communicate different moments or consequences, not two camera
-angles of the same idea. Prefer concrete events, products, actions, infrastructure,
+Return exactly {images_per_story} different candidate IDs from the supplied timed candidates.
+The selected images must communicate different moments or consequences, not different
+camera angles of the same idea. Prefer concrete events, products, actions, infrastructure,
 or consequences. Avoid moments that require an exact logo, exact app/UI screenshot,
 exact document, chart, factual diagram, or a real person's exact likeness; those are
 better served by archive media later. Do not add facts that are absent from the
@@ -522,7 +534,7 @@ def plan_story_with_openai(
         raise RuntimeError("OPENAI_API_KEY is required for AI storyboarding.")
     from openai import OpenAI
 
-    candidates = candidate_beats(context)
+    candidates = candidate_beats(context, settings.images_per_story)
     client = OpenAI(timeout=settings.timeout_seconds)
     last_error: Exception | None = None
     for attempt in range(1, settings.planner_retries + 1):
@@ -539,12 +551,24 @@ def plan_story_with_openai(
                             "Never invent a person, product, event, number, or claim."
                         ),
                     },
-                    {"role": "user", "content": planning_prompt(context, candidates)},
+                    {
+                        "role": "user",
+                        "content": planning_prompt(
+                            context,
+                            candidates,
+                            settings.images_per_story,
+                        ),
+                    },
                 ],
                 text_format=StoryBeatSelection,
             )
             if response.output_parsed is None:
                 raise RuntimeError("OpenAI returned no structured storyboard.")
+            _validate_selection(
+                response.output_parsed,
+                candidates,
+                settings.images_per_story,
+            )
             return response.output_parsed
         except Exception as exc:  # noqa: BLE001
             last_error = exc
@@ -571,13 +595,16 @@ def _normalized_words(value: str) -> set[str]:
 def _validate_selection(
     selection: StoryBeatSelection,
     candidates: list[dict],
+    expected_count: int,
 ) -> list[tuple[SelectedBeat, dict]]:
     by_id = {item["candidate_id"]: item for item in candidates}
-    if len(selection.images) != 2:
-        raise RuntimeError("The planner must return exactly two images.")
+    if len(selection.images) != expected_count:
+        raise RuntimeError(
+            f"The planner must return exactly {expected_count} images."
+        )
     ids = [item.candidate_id for item in selection.images]
-    if len(set(ids)) != 2:
-        raise RuntimeError("The planner selected the same timed beat twice.")
+    if len(set(ids)) != expected_count:
+        raise RuntimeError("The planner selected the same timed beat more than once.")
     selected: list[tuple[SelectedBeat, dict]] = []
     for item in selection.images:
         candidate = by_id.get(item.candidate_id)
@@ -587,12 +614,16 @@ def _validate_selection(
             )
         selected.append((item, candidate))
 
-    first_words = _normalized_words(selection.images[0].visual_concept)
-    second_words = _normalized_words(selection.images[1].visual_concept)
-    union = first_words | second_words
-    similarity = len(first_words & second_words) / max(1, len(union))
-    if similarity > 0.72:
-        raise RuntimeError("The two visual concepts are not distinct enough.")
+    for first_index, first in enumerate(selection.images):
+        first_words = _normalized_words(first.visual_concept)
+        for second in selection.images[first_index + 1 :]:
+            second_words = _normalized_words(second.visual_concept)
+            union = first_words | second_words
+            similarity = len(first_words & second_words) / max(1, len(union))
+            if similarity > 0.72:
+                raise RuntimeError(
+                    "The selected visual concepts are not distinct enough."
+                )
     return selected
 
 
@@ -664,20 +695,24 @@ def build_storyboard(
     planned_by_id: dict[str, dict] = dict(existing_by_id)
 
     for context in selected_contexts:
-        candidates = candidate_beats(context)
+        candidates = candidate_beats(context, settings.images_per_story)
         fingerprint = story_planner_fingerprint(context, candidates, settings)
         cached = existing_by_id.get(context["story_id"])
         if (
             not force
             and cached
             and cached.get("input_fingerprint") == fingerprint
-            and len(cached.get("images", [])) == 2
+            and len(cached.get("images", [])) == settings.images_per_story
         ):
             planned_by_id[context["story_id"]] = cached
             continue
 
         selection = planner(context, settings)
-        selected = _validate_selection(selection, candidates)
+        selected = _validate_selection(
+            selection,
+            candidates,
+            settings.images_per_story,
+        )
         images = []
         for image_index, (chosen, candidate) in enumerate(selected, start=1):
             prompt = api_image_prompt(
@@ -751,7 +786,7 @@ def build_storyboard(
         if context["story_id"] in planned_by_id
     ]
     complete = len(ordered) == len(contexts) and all(
-        len(item.get("images", [])) == 2 for item in ordered
+        len(item.get("images", [])) == settings.images_per_story for item in ordered
     )
     payload = {
         "schema_version": STORYBOARD_SCHEMA_VERSION,
@@ -769,9 +804,11 @@ def build_storyboard(
         "stories": ordered,
         "quality": {
             "status": "passed" if complete else "partial",
-            "exactly_two_images_per_planned_story": all(
-                len(item.get("images", [])) == 2 for item in ordered
+            "configured_image_count_per_planned_story": all(
+                len(item.get("images", [])) == settings.images_per_story
+                for item in ordered
             ),
+            "images_per_story": settings.images_per_story,
             "all_stories_planned": complete,
             "storyboard_saved_before_generation": True,
         },
@@ -783,7 +820,7 @@ def build_storyboard(
         {
             "status": "STORYBOARD_READY" if complete else "PARTIAL",
             "reason": (
-                "Every story has exactly two planned hero images."
+                f"Every story has exactly {settings.images_per_story} planned hero images."
                 if complete
                 else "A pilot subset is storyboarded."
             ),
@@ -1041,9 +1078,10 @@ def generate_storyboard_images(
     if not selected_stories:
         raise RuntimeError("No planned stories are available for image generation.")
     for story in selected_stories:
-        if len(story.get("images", [])) != 2:
+        if len(story.get("images", [])) != settings.images_per_story:
             raise RuntimeError(
-                f"{story.get('story_id')} does not have exactly two planned images."
+                f"{story.get('story_id')} does not have exactly "
+                f"{settings.images_per_story} planned images."
             )
 
     request_limit = (
@@ -1168,7 +1206,7 @@ def generate_storyboard_images(
                 raise
 
     all_ready = bool(stories) and all(
-        len(story.get("images", [])) == 2
+        len(story.get("images", [])) == settings.images_per_story
         and all(
             image.get("validation", {}).get("status") == "passed"
             and Path(image["output_file"]).is_file()
@@ -1195,7 +1233,7 @@ def generate_storyboard_images(
         {
             "status": "VISUALS_READY" if all_ready else "PARTIAL",
             "reason": (
-                "Every story has two approved hero images."
+                f"Every story has {settings.images_per_story} approved hero images."
                 if all_ready
                 else "The requested pilot images are approved; other stories remain."
             ),
@@ -1337,12 +1375,15 @@ def render_storyboard_proof(
         raise ValueError(f"--story must be between 1 and {len(stories)}.")
     story = stories[story_number - 1]
     images = story.get("images", [])
-    if len(images) != 2 or not all(
+    if len(images) != settings.images_per_story or not all(
         image.get("validation", {}).get("status") == "passed"
         and Path(image.get("output_file", "")).is_file()
         for image in images
     ):
-        raise RuntimeError("The selected story needs two approved hero images.")
+        raise RuntimeError(
+            f"The selected story needs {settings.images_per_story} approved hero images."
+        )
+    proof_images = (images + [images[-1]])[:2]
 
     timing = load_json(video_dir / "story_timing.json", "Story timing manifest")
     timed_story = next(
@@ -1500,13 +1541,13 @@ def render_storyboard_proof(
             "-framerate",
             str(fps),
             "-i",
-            str(images[0]["output_file"]),
+            str(proof_images[0]["output_file"]),
             "-loop",
             "1",
             "-framerate",
             str(fps),
             "-i",
-            str(images[1]["output_file"]),
+            str(proof_images[1]["output_file"]),
         ]
         first_start = body_duration * 0.20
         split = body_duration * 0.58
@@ -1688,7 +1729,9 @@ def run_live_image_smoke(
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plan and generate exactly two timed AI hero images per story."
+        description=(
+            "Plan and generate the configured number of timed AI hero images per story."
+        )
     )
     parser.add_argument("--video", type=int)
     parser.add_argument(

@@ -343,6 +343,7 @@ def collect_checks() -> list[Check]:
                 f"image={storyboard_settings.image_model}; "
                 f"quality={storyboard_settings.image_quality}; "
                 f"size={storyboard_settings.image_size}; "
+                f"images/story={storyboard_settings.images_per_story}; "
                 "max paid requests/run="
                 f"{storyboard_settings.maximum_image_requests_per_run}"
             ),
@@ -491,6 +492,8 @@ def collect_checks() -> list[Check]:
                 f"final={render_settings.width}x{render_settings.height}; "
                 f"preview={render_settings.preview_width}x{render_settings.preview_height}; "
                 f"fps={render_settings.fps}; preset={render_settings.preset}; "
+                f"page flip={render_settings.page_flip_enabled} "
+                f"({render_settings.page_flip_duration_seconds:g}s, skipped separators only); "
                 "attribution=bottom-right inside TV frame"
             ),
         )

@@ -8,7 +8,7 @@ YouTube package:
 - source articles and faithful narration scripts;
 - ElevenLabs voiceovers with word/character timing;
 - a deliberate manual checkpoint for the creator-made “Tech News” separator animations;
-- two AI-generated hero images for each news story;
+- a configurable 1-4 AI-generated hero images for each news story;
 - context-matched archive images for the rest of every narration;
 - restrained image motion, TV frame, glitch accents, sound effects, and repeated background music;
 - synchronized subtitles;
@@ -358,7 +358,7 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
 
 - The project can wait indefinitely and resume safely after a restart.
 
-## Milestone 4 — Storyboard and two AI images per news story
+## Milestone 4 — Storyboard and configurable AI images per news story
 
 **Status: complete (2026-07-30).**
 
@@ -416,7 +416,7 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
 
 ### Done when
 
-- Every story has two approved hero images assigned to exact narration ranges.
+- Every story has the configured number of approved hero images assigned to exact narration ranges.
 
 ## Milestone 5 — Index and select archive imagery
 
@@ -795,7 +795,7 @@ news-studio render "Video N"
 4. Produce TTS and alignment.
 5. Offer the manual checkpoint, defaulting to separator-free continuation after 15 seconds.
 6. Resume after separator validation, or persist `SKIPPED` and continue immediately.
-7. Storyboard and generate two AI images per story.
+7. Storyboard and generate the configured AI-image count per story.
 8. Select archive images.
 9. Generate captions and timeline.
 10. Mix effects/music and render preview.
@@ -904,7 +904,7 @@ A final render is blocked unless:
 
 - every story has source text, approved narration, audio, timing, and visuals;
 - every expected separator exists and passes FFprobe;
-- exactly two AI hero images are assigned per story unless explicitly overridden;
+- `AI_GENERATED_IMAGES_PER_STORY` assigns 1-4 AI hero images per story (default 2);
 - every narration interval is visually covered;
 - media licensing/attribution status is recorded;
 - captions match the canonical narration;

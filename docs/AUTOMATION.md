@@ -163,6 +163,13 @@ color progress panel shows the current stage, percentage, and completed/total co
 Completed rectangles are green, a failed stage segment is red, waiting states are
 yellow, and remaining rectangles stay dim. Headless scheduled runs emit plain progress
 snapshots without destructive screen clearing.
+
+`AI_GENERATED_IMAGES_PER_STORY` controls the paid hero-image count for every story
+(1-4, default 2). Keep `MAX_IMAGE_REQUESTS_PER_RUN` at least as high as `TOP_N`
+multiplied by that value for a fresh complete production. When manual separators are
+skipped, a short page-flip reveal is applied at the beginning of every chapter,
+including chapter 1. `PAGE_FLIP_ENABLED` and `PAGE_FLIP_DURATION_SECONDS` control it;
+manual separators disable the transition automatically.
 Successful autonomous runs exit normally. If the launcher returns an error, its console
 stays open indefinitely at a failure prompt so the red stage and traceback can be
 inspected; press any key only when ready to close it.

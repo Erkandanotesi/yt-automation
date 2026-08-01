@@ -400,9 +400,9 @@ def build_archive_windows(
         for image in storyboard_story.get("images", [])
         if image.get("validation", {}).get("status") == "passed"
     ]
-    if len(hero_ranges) != 2:
+    if not hero_ranges:
         raise RuntimeError(
-            f"{story.get('story_id')} needs two approved hero image ranges."
+            f"{story.get('story_id')} needs at least one approved hero image range."
         )
     uncovered = subtract_intervals(duration, hero_ranges)
     windows: list[dict] = []

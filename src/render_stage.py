@@ -46,6 +46,18 @@ STAGE_NAME = "render"
 SCHEMA_VERSION = 1
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false.")
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -83,6 +95,8 @@ class RenderSettings:
     attribution_font_size: int = 20
     attribution_margin_right: int = 115
     attribution_margin_bottom: int = 135
+    page_flip_enabled: bool = True
+    page_flip_duration_seconds: float = 0.7
 
     @classmethod
     def from_environment(cls) -> "RenderSettings":
@@ -116,6 +130,10 @@ class RenderSettings:
             attribution_margin_bottom=int(
                 os.getenv("ATTRIBUTION_MARGIN_BOTTOM", "135")
             ),
+            page_flip_enabled=_env_bool("PAGE_FLIP_ENABLED", True),
+            page_flip_duration_seconds=float(
+                os.getenv("PAGE_FLIP_DURATION_SECONDS", "0.7")
+            ),
         )
 
     def validate(self) -> None:
@@ -141,6 +159,10 @@ class RenderSettings:
             raise ValueError("ATTRIBUTION_FONT_SIZE must be between 12 and 48.")
         if self.attribution_margin_right < 0 or self.attribution_margin_bottom < 0:
             raise ValueError("Attribution margins cannot be negative.")
+        if not 0.25 <= self.page_flip_duration_seconds <= 1.5:
+            raise ValueError(
+                "PAGE_FLIP_DURATION_SECONDS must be between 0.25 and 1.5."
+            )
 
 
 def _run(command: list[str], label: str) -> subprocess.CompletedProcess[str]:
@@ -384,6 +406,27 @@ def build_render_plan(
             raise RuntimeError(
                 f"Timeline SFX event is outside the program: {event.get('event_id')}"
             )
+    separators_skipped = timing.get("quality", {}).get(
+        "manual_separators_skipped", False
+    )
+    page_flip_events = []
+    if settings.page_flip_enabled and separators_skipped:
+        for story in timing.get("stories", []):
+            start = float(story["narration"]["start"])
+            event_duration = min(
+                settings.page_flip_duration_seconds,
+                max(0.0, duration - start),
+            )
+            if event_duration >= 0.05:
+                page_flip_events.append(
+                    {
+                        "story_id": story["story_id"],
+                        "order": int(story["order"]),
+                        "start": round(start, 6),
+                        "end": round(start + event_duration, 6),
+                        "duration": round(event_duration, 6),
+                    }
+                )
     payload = {
         "schema_version": SCHEMA_VERSION,
         "video_number": video_number,
@@ -408,6 +451,12 @@ def build_render_plan(
         "background_music": music,
         "glitch_sfx": sfx,
         "timeline_sfx": timeline_sfx,
+        "page_flip": {
+            "enabled": bool(page_flip_events),
+            "mode": "chapter_open" if page_flip_events else "disabled",
+            "only_when_separators_skipped": True,
+            "events": page_flip_events,
+        },
         "referenced_visuals": referenced,
         "quality": {
             "status": "passed",
@@ -447,6 +496,9 @@ def build_render_plan(
             "persistent_title_count": len(titles),
             "source_attribution_count": len(attributions),
             "timeline_sfx_event_count": len(timeline_sfx.get("events", [])),
+            "page_flip_matches_separator_mode": (
+                not page_flip_events or (separators_skipped and not separators)
+            ),
         },
     }
     if not all(
@@ -687,6 +739,81 @@ def _normalize_separators(
         )
         outputs.append(output)
     return outputs
+
+
+def _ensure_page_flip_overlay(
+    video_dir: Path,
+    settings: RenderSettings,
+) -> Path:
+    directory = video_dir / "08_render" / "intermediates" / "transitions"
+    directory.mkdir(parents=True, exist_ok=True)
+    output = directory / "page_flip_alpha.mov"
+    sidecar = output.with_suffix(".json")
+    fingerprint = json_fingerprint(
+        {
+            "renderer_version": 1,
+            "width": settings.width,
+            "height": settings.height,
+            "fps": settings.fps,
+            "duration": settings.page_flip_duration_seconds,
+            "page_color": "0xF2EBDD",
+            "fold_width": 48,
+        }
+    )
+    if output.is_file() and sidecar.is_file():
+        cached = load_json(sidecar, "Page-flip cache")
+        if cached.get("input_fingerprint") == fingerprint:
+            return output
+
+    duration = settings.page_flip_duration_seconds
+    edge = f"W*(1-T/{duration:.6f})"
+    distance = f"({edge}-X)"
+    red = (
+        f"if(lte(X,{edge}),"
+        f"if(lt({distance},48),160+82*{distance}/48,242),0)"
+    )
+    green = (
+        f"if(lte(X,{edge}),"
+        f"if(lt({distance},48),150+85*{distance}/48,235),0)"
+    )
+    blue = (
+        f"if(lte(X,{edge}),"
+        f"if(lt({distance},48),145+76*{distance}/48,221),0)"
+    )
+    alpha = f"if(lte(X,{edge}),255,0)"
+    _run(
+        [
+            str(_ffmpeg()),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            (
+                f"color=c=black@0:s={settings.width}x{settings.height}:"
+                f"r={settings.fps}:d={duration:.6f}"
+            ),
+            "-vf",
+            f"format=rgba,geq=r='{red}':g='{green}':b='{blue}':a='{alpha}'",
+            "-c:v",
+            "qtrle",
+            "-pix_fmt",
+            "argb",
+            "-y",
+            str(output),
+        ],
+        "Generate transparent page-flip transition",
+    )
+    atomic_write_json(
+        sidecar,
+        {
+            "input_fingerprint": fingerprint,
+            "output_sha256": sha256_file(output),
+            "duration_seconds": duration,
+        },
+    )
+    return output
 
 
 def _compose_final(
@@ -934,6 +1061,13 @@ def _compose_video_track(
             ["-stream_loop", "-1", "-i", str(image_tv_effect["file"])]
         )
         next_input_index += 1
+    page_flip_events = plan.get("page_flip", {}).get("events", [])
+    page_flip_index = -1
+    if page_flip_events:
+        page_flip_index = next_input_index
+        page_flip_file = _ensure_page_flip_overlay(video_dir, settings)
+        command.extend(["-i", str(page_flip_file)])
+        next_input_index += 1
     frame_index = next_input_index
     frame = plan.get("tv_frame") or {}
     if frame.get("file"):
@@ -982,6 +1116,31 @@ def _compose_video_track(
             f"enable='between(t,{start:.6f},{start + duration:.6f})'[{next_label}]"
         )
         current = next_label
+    if page_flip_index >= 0:
+        if len(page_flip_events) == 1:
+            page_sources = [f"{page_flip_index}:v"]
+        else:
+            page_sources = [f"pageflipsource{index}" for index in range(1, len(page_flip_events) + 1)]
+            filters.append(
+                f"[{page_flip_index}:v]split={len(page_flip_events)}"
+                + "".join(f"[{label}]" for label in page_sources)
+            )
+        for index, (event, source) in enumerate(
+            zip(page_flip_events, page_sources),
+            start=1,
+        ):
+            start = float(event["start"])
+            duration = float(event["duration"])
+            filters.append(
+                f"[{source}]trim=start=0:end={duration:.6f},"
+                f"setpts=PTS-STARTPTS+{start:.6f}/TB[pageflip{index}]"
+            )
+            next_label = f"vpageflip{index}"
+            filters.append(
+                f"[{current}][pageflip{index}]overlay=0:0:eof_action=pass:"
+                f"repeatlast=0:shortest=0:format=auto[{next_label}]"
+            )
+            current = next_label
     if frame_index >= 0:
         opacity = float(frame.get("opacity", 1.0))
         filters.append(

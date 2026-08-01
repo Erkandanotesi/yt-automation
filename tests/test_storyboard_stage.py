@@ -386,6 +386,34 @@ class StoryboardStageTests(unittest.TestCase):
                 str(root / "archive"),
             )
 
+    def test_configured_ai_image_count_controls_storyboard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_project(root)
+            configured = replace(
+                settings(),
+                images_per_story=1,
+                archive_directory=root / "archive",
+            )
+
+            def one_image_planner(
+                context: dict,
+                planner_settings: StoryboardSettings,
+            ) -> StoryBeatSelection:
+                planned = planner(context, planner_settings)
+                return StoryBeatSelection(images=planned.images[:1])
+
+            with patch("storyboard_stage.project_dir", return_value=root):
+                result = build_storyboard(
+                    video_number=5,
+                    settings=configured,
+                    planner=one_image_planner,
+                )
+
+        self.assertEqual(result["planned_image_count"], 1)
+        self.assertEqual(result["quality"]["images_per_story"], 1)
+        self.assertEqual(len(result["stories"][0]["images"]), 1)
+
     def test_generation_requires_explicit_cost_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -211,6 +211,54 @@ class RenderStageTests(unittest.TestCase):
 
             self.assertEqual(plan["separators"], [])
             self.assertTrue(plan["quality"]["images_start_at_chapter_start"])
+            self.assertTrue(plan["page_flip"]["enabled"])
+            self.assertEqual(len(plan["page_flip"]["events"]), 1)
+            self.assertEqual(plan["page_flip"]["events"][0]["start"], 0)
+
+    def test_page_flip_overlay_is_used_only_for_planned_chapter_events(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = {
+                "duration_seconds": 4,
+                "separators": [],
+                "glitch_events": [],
+                "image_tv_effect": {"enabled": False},
+                "tv_frame": {},
+                "page_flip": {
+                    "enabled": True,
+                    "events": [
+                        {"start": 0, "end": 0.7, "duration": 0.7},
+                        {"start": 2, "end": 2.7, "duration": 0.7},
+                    ],
+                },
+                "story_titles": [],
+                "source_attributions": [],
+                "captions": {"file": str(root / "captions.srt")},
+            }
+            with (
+                patch("render_stage._ffmpeg", return_value=Path("ffmpeg")),
+                patch(
+                    "render_stage._ensure_page_flip_overlay",
+                    return_value=root / "page_flip.mov",
+                ),
+                patch("render_stage._run") as run,
+            ):
+                _compose_video_track(
+                    root,
+                    plan,
+                    root / "base.mp4",
+                    [],
+                    RenderSettings(width=320, height=180),
+                )
+
+            command = run.call_args.args[0]
+            filters = command[command.index("-filter_complex") + 1]
+
+        self.assertIn("page_flip.mov", " ".join(str(item) for item in command))
+        self.assertIn("split=2[pageflipsource1][pageflipsource2]", filters)
+        self.assertIn("setpts=PTS-STARTPTS+0.000000/TB[pageflip1]", filters)
+        self.assertIn("setpts=PTS-STARTPTS+2.000000/TB[pageflip2]", filters)
+        self.assertIn("repeatlast=0", filters)
 
     def test_preview_encode_limits_aac_peak_overshoot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -330,6 +378,8 @@ class RenderStageTests(unittest.TestCase):
             with patch("render_stage.project_dir", return_value=root):
                 plan = build_render_plan(5, settings)
             self.assertEqual(plan["quality"]["status"], "passed")
+            self.assertFalse(plan["page_flip"]["enabled"])
+            self.assertEqual(plan["page_flip"]["events"], [])
             self.assertTrue(
                 plan["quality"]["separator_and_narration_start_together"]
             )
