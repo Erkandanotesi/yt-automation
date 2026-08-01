@@ -247,10 +247,14 @@ online entities are repaired deterministically from that window's own shortlist 
 the complete story context. These recoverable model mistakes do not abort production.
 The selector sends no local image pixels. Candidate metadata must now pass a local
 context-grounding gate before Luna may select it: an exact company/product/person match
-or at least two distinctive non-generic context terms are required. Entity context is
+or at least one distinctive non-generic context term is required. Entity context is
 carried across pronouns and split sentences, while choices below
-`MEDIA_MIN_AI_CONFIDENCE=0.70` are rejected in favor of the existing Wikimedia path.
+`MEDIA_MIN_AI_CONFIDENCE=0.45` are rejected in favor of the existing Wikimedia path.
 This improves precision without adding a vision request or another paid AI call.
+If no acceptable local or Wikimedia result exists, FFmpeg creates a unique dark,
+context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
+chapter title remains visible, production continues without an API request, and no
+unrelated person, company, product, or event is implied.
 Each raw per-story selector response is saved before validation under
 `05_visuals/selector_cache/`. A matching fingerprint lets a resumed run reuse that
 response without paying for the same selector request again.

@@ -6,6 +6,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -32,6 +33,7 @@ from file_utils import (  # noqa: E402
     json_fingerprint,
     report_cli_error,
     sha256_file,
+    sha256_text,
 )
 from media_index import (  # noqa: E402
     MediaIndexSettings,
@@ -42,6 +44,7 @@ from media_index import (  # noqa: E402
 )
 from file_locations import project_dir, project_name  # noqa: E402
 from separator_policy import require_separator_checkpoint  # noqa: E402
+from tooling import find_executable  # noqa: E402
 
 
 MEDIA_PLAN_SCHEMA_VERSION = 1
@@ -75,7 +78,7 @@ class MediaSelectionSettings:
     wikimedia_max_downloads_per_video: int = 10
     wikimedia_max_searches_per_video: int = 6
     maximum_uses_per_video: int = 2
-    minimum_ai_confidence: float = 0.70
+    minimum_ai_confidence: float = 0.45
 
     @classmethod
     def from_environment(cls) -> "MediaSelectionSettings":
@@ -125,7 +128,7 @@ class MediaSelectionSettings:
                 os.getenv("MEDIA_MAX_USES_PER_VIDEO", "2")
             ),
             minimum_ai_confidence=float(
-                os.getenv("MEDIA_MIN_AI_CONFIDENCE", "0.70")
+                os.getenv("MEDIA_MIN_AI_CONFIDENCE", "0.45")
             ),
         )
 
@@ -720,7 +723,7 @@ def shortlist_assets(
             if token not in GENERIC_CONTEXT_TOKENS and len(token) >= 3
         ]
         entity_hits = components.get("entity_hits", [])
-        context_grounded = bool(entity_hits) or len(distinctive_overlap) >= 2
+        context_grounded = bool(entity_hits) or len(distinctive_overlap) >= 1
         grounding_basis = (
             "exact_entity"
             if entity_hits
@@ -784,8 +787,8 @@ Rules:
 - Prefer `grounding_basis=exact_entity`. A distinctive-context match is acceptable
   only when the visible subject described by its metadata accurately represents the
   spoken claim without implying the wrong company, person, product, or event.
-- confidence measures exact contextual relevance, not image quality. Use less than
-  0.70 whenever visible entity/event support is uncertain.
+- confidence measures contextual relevance, not image quality. Use less than 0.45
+  only when the candidate is effectively unrelated or visually misleading.
 - Do not use the same image twice in this story unless no reasonable alternative exists.
 - Never use the same image in adjacent windows.
 - Prefer crop-safe 16:9 assets without low-resolution or crop-risk flags.
@@ -1344,6 +1347,141 @@ def resolve_wikimedia_fallbacks(
     return updated, refreshed, downloads_used, searches_used
 
 
+def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict:
+    """Create a unique neutral card when no honest photographic match exists."""
+    ffmpeg = find_executable("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("FFmpeg is required for the context-safe image fallback.")
+    output_dir = project_dir(video_number) / "05_visuals" / "safe_fallbacks"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / f"{window['window_id']}_context_safe.png"
+    identity = "|".join(
+        [
+            window["window_id"],
+            window.get("text", ""),
+            " ".join(window.get("entities", [])),
+        ]
+    )
+    digest = sha256_text(identity)
+    # Dark, restrained, and unique per window. The persistent chapter title remains
+    # visible above it, so this does not invent a person, product, logo, or event.
+    red = 14 + int(digest[0:2], 16) % 18
+    green = 25 + int(digest[2:4], 16) % 22
+    blue = 42 + int(digest[4:6], 16) % 30
+    color = f"0x{red:02x}{green:02x}{blue:02x}"
+    if not output.is_file():
+        completed = subprocess.run(
+            [
+                str(ffmpeg),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={color}:s=1280x720:d=0.04",
+                "-frames:v",
+                "1",
+                "-y",
+                str(output),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+        if completed.returncode != 0 or not output.is_file():
+            raise RuntimeError(
+                "Context-safe fallback rendering failed: "
+                + (completed.stderr.strip() or window["window_id"])
+            )
+    checksum = sha256_file(output)
+    return {
+        "asset_id": f"safe_fallback_{checksum[:16]}",
+        "absolute_path": str(output),
+        "workspace_relative_path": str(output),
+        "filename": output.name,
+        "sha256": checksum,
+        "width": 1280,
+        "height": 720,
+        "aspect_ratio": round(16 / 9, 6),
+        "crop_retention_16_9": 1.0,
+        "source_url": "",
+        "creator": "Tech Reports local renderer",
+        "license": {
+            "status": "user_confirmed_no_copyright",
+            "name": "Locally generated",
+            "url": "",
+            "attribution_required": False,
+        },
+        "quality_flags": [],
+        "context_safe_fallback": True,
+    }
+
+
+def _resolve_context_safe_fallbacks(
+    video_number: int,
+    windows: list[dict],
+    decisions: dict[str, WindowDecision],
+) -> dict[str, WindowDecision]:
+    updated = dict(decisions)
+    for window in windows:
+        current = updated[window["window_id"]]
+        if (
+            current.relevance_status != "images_are_irrelevant"
+            and current.selected_asset_id
+        ):
+            continue
+        asset = _create_context_safe_fallback_asset(video_number, window)
+        candidate = {
+            "asset_id": asset["asset_id"],
+            "workspace_relative_path": asset["workspace_relative_path"],
+            "filename": asset["filename"],
+            "folder": str(Path(asset["absolute_path"]).parent),
+            "local_caption": "Context-safe neutral chapter background",
+            "keywords": ["neutral", "chapter", "background"],
+            "width": asset["width"],
+            "height": asset["height"],
+            "aspect_ratio": asset["aspect_ratio"],
+            "crop_retention_16_9": 1.0,
+            "quality_flags": [],
+            "license_status": "user_confirmed_no_copyright",
+            "prior_use_count": 0,
+            "sha256": asset["sha256"],
+            "local_score": 0.0,
+            "score_components": {},
+            "context_grounded": False,
+            "grounding_basis": "context_safe_neutral",
+            "distinctive_overlap_tokens": [],
+            "neutral_fallback": True,
+            "context_safe_fallback": True,
+        }
+        window["shortlist"] = [
+            candidate,
+            *[
+                item
+                for item in window["shortlist"]
+                if item["asset_id"] != asset["asset_id"]
+            ],
+        ]
+        window.setdefault("_transient_assets", []).append(asset)
+        updated[window["window_id"]] = WindowDecision(
+            window_id=window["window_id"],
+            relevance_status="relevant",
+            selected_asset_id=asset["asset_id"],
+            confidence=1.0,
+            selection_reason=(
+                "No sufficiently grounded local or Wikimedia image was available. "
+                "Used a locally generated neutral chapter background rather than "
+                "showing misleading visual evidence."
+            ),
+            alternative_asset_ids=[],
+        )
+    return updated
+
+
 def _enforce_selection_constraints(
     windows: list[dict],
     decisions: dict[str, WindowDecision],
@@ -1462,7 +1600,11 @@ def _enforce_selection_constraints(
         asset = assets_by_id[chosen_id]
         selected.append(
             {
-                **{key: value for key, value in window.items() if key != "shortlist"},
+                **{
+                    key: value
+                    for key, value in window.items()
+                    if key not in {"shortlist", "_transient_assets"}
+                },
                 "selected_asset": {
                     "asset_id": asset["asset_id"],
                     "absolute_path": asset["absolute_path"],
@@ -1476,6 +1618,9 @@ def _enforce_selection_constraints(
                     "creator": asset.get("creator", ""),
                     "license": asset.get("license", {}),
                     "quality_flags": asset.get("quality_flags", []),
+                    "context_safe_fallback": bool(
+                        asset.get("context_safe_fallback", False)
+                    ),
                 },
                 "confidence": round(float(decision.confidence), 4),
                 "selection_reason": decision.selection_reason,
@@ -1748,12 +1893,20 @@ def run_media_selection(
                 - wikimedia_search_count,
             ),
         )
+        decision_by_window = _resolve_context_safe_fallbacks(
+            video_number,
+            windows,
+            decision_by_window,
+        )
         wikimedia_download_count += downloads_used
         wikimedia_search_count += searches_used
         assets_by_id = {
             item["asset_id"]: item
             for item in media_index.get("assets", [])
         }
+        for window in windows:
+            for asset in window.get("_transient_assets", []):
+                assets_by_id[asset["asset_id"]] = asset
         selected_windows = _enforce_selection_constraints(
             windows,
             decision_by_window,
@@ -1853,6 +2006,12 @@ def run_media_selection(
                     in window["selected_asset"].get("quality_flags", [])
                     for window in selected_windows
                 ),
+                "context_safe_fallback_count": sum(
+                    window["selected_asset"].get(
+                        "context_safe_fallback", False
+                    )
+                    for window in selected_windows
+                ),
             },
         }
         ordered_partial = [
@@ -1932,6 +2091,10 @@ def run_media_selection(
             ),
             "crop_risk_count": sum(
                 item.get("quality", {}).get("crop_risk_count", 0)
+                for item in ordered
+            ),
+            "context_safe_fallback_count": sum(
+                item.get("quality", {}).get("context_safe_fallback_count", 0)
                 for item in ordered
             ),
             "maximum_uses_per_image": settings.maximum_uses_per_video,

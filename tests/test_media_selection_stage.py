@@ -14,8 +14,10 @@ from media_selection_stage import (
     MediaSelectionSettings,
     StoryMediaDecisions,
     WindowDecision,
+    _create_context_safe_fallback_asset,
     _enforce_selection_constraints,
     _load_selector_cache,
+    _resolve_context_safe_fallbacks,
     _save_selector_cache,
     _validate_decisions,
     _window_entities,
@@ -25,6 +27,7 @@ from media_selection_stage import (
     run_media_selection,
     shortlist_assets,
 )
+from tooling import find_executable
 
 
 def selection_settings() -> MediaSelectionSettings:
@@ -140,6 +143,100 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    @unittest.skipUnless(find_executable("ffmpeg"), "FFmpeg is not available")
+    def test_real_context_safe_fallback_is_rendered_locally(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 5"
+            root.mkdir()
+            window = {
+                "window_id": "story_01_archive_010",
+                "text": "A claim without an honest matching photograph.",
+                "entities": ["Example Platform"],
+            }
+            with patch("media_selection_stage.project_dir", return_value=root):
+                asset = _create_context_safe_fallback_asset(5, window)
+
+            self.assertTrue(Path(asset["absolute_path"]).is_file())
+            self.assertEqual(asset["width"], 1280)
+            self.assertEqual(asset["height"], 720)
+            self.assertTrue(asset["context_safe_fallback"])
+
+    def test_one_distinctive_context_term_is_relevant_enough(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            asset = make_asset(
+                root,
+                "Media/urban_transport.png",
+                ["robotaxi", "transport"],
+                "user_confirmed_no_copyright",
+            )
+            result = shortlist_assets(
+                {"assets": [asset]},
+                {
+                    "text": "The robotaxi service expanded into another city.",
+                    "entities": [],
+                    "scene_intent": "vehicle_or_factory",
+                    "visual_queries": [],
+                },
+                selection_settings(),
+            )
+
+            self.assertTrue(result[0]["context_grounded"])
+            self.assertEqual(
+                result[0]["grounding_basis"],
+                "distinctive_context",
+            )
+
+    def test_missing_related_image_uses_context_safe_card_without_failure(self) -> None:
+        window = {
+            "window_id": "story_01_archive_009",
+            "text": "The claim has no honest photographic match.",
+            "entities": ["Example Platform"],
+            "visual_queries": ["Example Platform policy"],
+            "shortlist": [],
+        }
+        decision = WindowDecision(
+            window_id=window["window_id"],
+            relevance_status="images_are_irrelevant",
+            confidence=0.9,
+            selection_reason="No local or Wikimedia image represents this exact claim.",
+            online_search_query="Example Platform policy",
+            required_entity="Example Platform",
+        )
+        asset = {
+            "asset_id": "safe_fallback_unique",
+            "absolute_path": "safe.png",
+            "workspace_relative_path": "safe.png",
+            "filename": "safe.png",
+            "sha256": "abc123",
+            "width": 1280,
+            "height": 720,
+            "aspect_ratio": 16 / 9,
+            "crop_retention_16_9": 1.0,
+            "source_url": "",
+            "creator": "Tech Reports local renderer",
+            "license": {"status": "user_confirmed_no_copyright"},
+            "quality_flags": [],
+            "context_safe_fallback": True,
+        }
+
+        with patch(
+            "media_selection_stage._create_context_safe_fallback_asset",
+            return_value=asset,
+        ):
+            resolved = _resolve_context_safe_fallbacks(
+                5,
+                [window],
+                {window["window_id"]: decision},
+            )
+
+        self.assertEqual(
+            resolved[window["window_id"]].selected_asset_id,
+            "safe_fallback_unique",
+        )
+        self.assertTrue(window["shortlist"][0]["context_safe_fallback"])
+        self.assertEqual(window["_transient_assets"], [asset])
+
     def test_entity_context_is_carried_into_pronoun_window(self) -> None:
         story = {
             "title": "OpenAI prepares a new developer platform",
