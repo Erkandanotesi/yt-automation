@@ -267,6 +267,9 @@ Video N/
 The upload manifest checksum-locks the final MP4 and thumbnail. Uploads are scheduled
 for the next free 12:00 or 20:00 GMT+3 Turkey slot. YouTube requires scheduled videos
 to be inserted as private; `publishAt` automatically makes them public at that slot.
+After the video upload succeeds, `data/youtube_schedule_state.json` stores its scheduled
+release. The next project advances from that saved release (20:00 advances to the next
+day at 12:00) and also avoids times reserved by pending upload manifests.
 The title always ends in ` | Tech Reports`, descriptions omit a SOURCES section, and
 both metadata and original-audio language are set to English. YouTube then generates
 and publishes automatic English captions when the video is eligible; the Data API has

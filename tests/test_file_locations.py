@@ -10,6 +10,7 @@ from file_locations import (
     PROCESSED_URLS_FILE,
     NEWS_ARCHIVE_ROOT,
     SOURCE_ROOT,
+    YOUTUBE_SCHEDULE_STATE_FILE,
     parse_video_number,
 )
 
@@ -21,6 +22,9 @@ class FileLocationTests(unittest.TestCase):
         self.assertEqual(DATA_ROOT, AUTOMATION_ROOT / "data")
         self.assertEqual(PROCESSED_URLS_FILE, DATA_ROOT / "processed_urls.json")
         self.assertEqual(NEWS_ARCHIVE_ROOT, DATA_ROOT / "news_archive")
+        self.assertEqual(
+            YOUTUBE_SCHEDULE_STATE_FILE, DATA_ROOT / "youtube_schedule_state.json"
+        )
         self.assertEqual(
             EDITING_REFERENCE_FILE,
             AUTOMATION_ROOT / "references" / "capcut_screenshot.png",

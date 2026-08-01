@@ -30,7 +30,12 @@ from file_utils import (  # noqa: E402
     report_cli_error,
     sha256_file,
 )
-from file_locations import PROJECTS_ROOT, YOUTUBE_CREDENTIALS_ROOT, project_dir  # noqa: E402
+from file_locations import (  # noqa: E402
+    PROJECTS_ROOT,
+    YOUTUBE_CREDENTIALS_ROOT,
+    YOUTUBE_SCHEDULE_STATE_FILE,
+    project_dir,
+)
 
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
@@ -105,13 +110,56 @@ def _reserved_publish_times(exclude_manifest: Path | None = None) -> set[datetim
     return reserved
 
 
+def _last_uploaded_publish_time(state_file: Path) -> datetime | None:
+    if not state_file.is_file():
+        return None
+    try:
+        payload = json.loads(state_file.read_text(encoding="utf-8"))
+        raw = payload.get("last_scheduled_publish_at")
+        if not raw:
+            return None
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else None
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def save_schedule_state(
+    state_file: Path,
+    *,
+    video_number: int | None,
+    video_id: str,
+    scheduled_publish_at: str,
+) -> None:
+    scheduled = datetime.fromisoformat(scheduled_publish_at.replace("Z", "+00:00"))
+    if scheduled.tzinfo is None:
+        raise ValueError("Scheduled publication time must include a timezone.")
+    current = _last_uploaded_publish_time(state_file)
+    if current is not None and current > scheduled:
+        return
+    atomic_write_json(state_file, {
+        "schema_version": 1,
+        "last_video_number": video_number,
+        "last_youtube_video_id": video_id,
+        "last_scheduled_publish_at": scheduled.astimezone(TURKEY_TIMEZONE).isoformat(),
+        "last_scheduled_publish_at_utc": scheduled.astimezone(timezone.utc).isoformat(),
+        "updated_at_utc": utc_now(),
+    })
+
+
 def next_publish_slot(
-    now: datetime | None = None, *, exclude_manifest: Path | None = None
+    now: datetime | None = None,
+    *,
+    exclude_manifest: Path | None = None,
+    state_file: Path = YOUTUBE_SCHEDULE_STATE_FILE,
 ) -> datetime:
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         raise ValueError("Schedule time must include a timezone.")
     candidate = _next_slot_after(current)
+    last_uploaded = _last_uploaded_publish_time(state_file)
+    if last_uploaded is not None and last_uploaded >= candidate:
+        candidate = _next_slot_after(last_uploaded)
     reserved = _reserved_publish_times(exclude_manifest)
     while any(candidate == item.astimezone(TURKEY_TIMEZONE) for item in reserved):
         candidate = _next_slot_after(candidate)
@@ -141,6 +189,7 @@ def _env_path(name: str, default: str) -> Path:
 class YouTubeUploadSettings:
     client_secrets_file: Path
     token_file: Path
+    schedule_state_file: Path = YOUTUBE_SCHEDULE_STATE_FILE
     privacy_status: str = "private"
     category_id: str = "28"
     default_language: str = "en"
@@ -158,6 +207,10 @@ class YouTubeUploadSettings:
             token_file=_env_path(
                 "YOUTUBE_TOKEN_FILE",
                 str(YOUTUBE_CREDENTIALS_ROOT / "youtube_token.json"),
+            ),
+            schedule_state_file=_env_path(
+                "YOUTUBE_SCHEDULE_STATE_FILE",
+                str(YOUTUBE_SCHEDULE_STATE_FILE),
             ),
             privacy_status=os.getenv("YOUTUBE_PRIVACY_STATUS", "private").strip(),
             category_id=os.getenv("YOUTUBE_CATEGORY_ID", "28").strip(),
@@ -301,15 +354,17 @@ def validate_upload_manifest(
         try:
             parsed = datetime.fromisoformat(str(scheduled_raw).replace("Z", "+00:00"))
             local = parsed.astimezone(TURKEY_TIMEZONE)
+            last_uploaded = _last_uploaded_publish_time(settings.schedule_state_file)
             if (
                 parsed > datetime.now(timezone.utc)
+                and (last_uploaded is None or parsed > last_uploaded)
                 and local.hour in PUBLISH_HOURS
                 and local.minute == local.second == 0
             ):
                 scheduled = local
         except ValueError:
             scheduled = None
-    scheduled = scheduled or next_publish_slot()
+    scheduled = scheduled or next_publish_slot(state_file=settings.schedule_state_file)
     status["privacyStatus"] = "private"
     status["publishAt"] = scheduled.isoformat()
     status["selfDeclaredMadeForKids"] = False
@@ -500,6 +555,13 @@ def upload_from_manifest(
             and previous.get("video_sha256") == validation["video_sha256"]
         ):
             if previous.get("status") == "UPLOAD_COMPLETE":
+                if previous.get("scheduled_publish_at"):
+                    save_schedule_state(
+                        settings.schedule_state_file,
+                        video_number=manifest.get("video_number"),
+                        video_id=str(previous["video_id"]),
+                        scheduled_publish_at=str(previous["scheduled_publish_at"]),
+                    )
                 return previous
             if previous.get("status") != "VIDEO_UPLOADED_THUMBNAIL_PENDING":
                 raise RuntimeError(
@@ -567,6 +629,12 @@ def upload_from_manifest(
             "automatic_captions": validation["automatic_captions"],
         }
         atomic_write_json(result_path, partial_result)
+        save_schedule_state(
+            settings.schedule_state_file,
+            video_number=manifest.get("video_number"),
+            video_id=str(video_id),
+            scheduled_publish_at=validation["scheduled_publish_at"],
+        )
 
     thumbnail_path = Path(validation["thumbnail_file"])
     thumbnail_response = _upload_thumbnail(

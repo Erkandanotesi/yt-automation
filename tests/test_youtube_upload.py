@@ -21,6 +21,7 @@ def settings(root: Path) -> YouTubeUploadSettings:
     return YouTubeUploadSettings(
         client_secrets_file=root / "client_secret.json",
         token_file=root / "token.json",
+        schedule_state_file=root / "youtube_schedule_state.json",
     )
 
 
@@ -204,9 +205,17 @@ class YouTubeUploadTests(unittest.TestCase):
 
             insert = youtube.videos.return_value.insert
             insert_kwargs = insert.call_args.kwargs
+            schedule_state = json.loads(
+                (root / "youtube_schedule_state.json").read_text(encoding="utf-8")
+            )
 
         self.assertEqual(result["status"], "UPLOAD_COMPLETE")
         self.assertEqual(result["video_id"], "new123")
+        self.assertEqual(schedule_state["last_youtube_video_id"], "new123")
+        self.assertEqual(
+            schedule_state["last_scheduled_publish_at"],
+            result["scheduled_publish_at"],
+        )
         self.assertEqual(insert_kwargs["part"], "snippet,status")
         self.assertEqual(
             insert_kwargs["body"]["snippet"]["title"],
@@ -229,6 +238,20 @@ class YouTubeUploadTests(unittest.TestCase):
         self.assertEqual(before_noon.isoformat(), "2026-08-01T12:00:00+03:00")
         self.assertEqual(afternoon.isoformat(), "2026-08-01T20:00:00+03:00")
         self.assertEqual(evening.isoformat(), "2026-08-02T12:00:00+03:00")
+
+    def test_last_uploaded_schedule_advances_to_following_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "youtube_schedule_state.json"
+            state.write_text(json.dumps({
+                "last_scheduled_publish_at": "2026-08-01T20:00:00+03:00",
+            }), encoding="utf-8")
+            turkey = timezone(timedelta(hours=3))
+            with patch("youtube_upload._reserved_publish_times", return_value=set()):
+                scheduled = next_publish_slot(
+                    datetime(2026, 8, 1, 11, 0, tzinfo=turkey),
+                    state_file=state,
+                )
+        self.assertEqual(scheduled.isoformat(), "2026-08-02T12:00:00+03:00")
 
 
 if __name__ == "__main__":

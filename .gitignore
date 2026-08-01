@@ -21,6 +21,7 @@ __pycache__/
 
 # Runtime state and regenerable local indexes
 data/processed_urls.json
+data/youtube_schedule_state.json
 data/news_archive/*
 !data/news_archive/.gitkeep
 data/indexes/media_index.json
