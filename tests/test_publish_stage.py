@@ -103,10 +103,13 @@ class PublishStageTests(unittest.TestCase):
             if item.concept_id == repaired.recommended_concept_id
         )
 
-        self.assertEqual(repaired.recommended_thumbnail_text, "Claude Reached")
-        self.assertLessEqual(len(repaired.recommended_thumbnail_text), 24)
+        self.assertEqual(
+            repaired.recommended_thumbnail_text,
+            "Claude Reached Production",
+        )
+        self.assertLessEqual(len(repaired.recommended_thumbnail_text), 42)
         self.assertIn(repaired.recommended_thumbnail_text, concept.text_options)
-        self.assertTrue(all(len(option) <= 24 for option in concept.text_options))
+        self.assertTrue(all(len(option) <= 42 for option in concept.text_options))
 
     def test_local_copy_fallback_is_complete_and_grounded(self) -> None:
         project = {

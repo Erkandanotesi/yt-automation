@@ -54,6 +54,7 @@ STAGE_NAME = "publish"
 YOUTUBE_TITLE_LIMIT = 100
 YOUTUBE_MINIMUM_CHAPTERS = 3
 YOUTUBE_MINIMUM_CHAPTER_SECONDS = 10
+THUMBNAIL_TEXT_LIMIT = 42
 
 
 def _normalize_thumbnail_text(value: object) -> str:
@@ -63,14 +64,14 @@ def _normalize_thumbnail_text(value: object) -> str:
     selected: list[str] = []
     for word in compact.split():
         candidate = " ".join([*selected, word])
-        if len(selected) >= 4 or len(candidate) > 24:
+        if len(selected) >= 6 or len(candidate) > THUMBNAIL_TEXT_LIMIT:
             break
         selected.append(word)
     result = " ".join(selected)
     if not result:
-        result = compact[:24].strip(" -|:;,.")
+        result = compact[:THUMBNAIL_TEXT_LIMIT].strip(" -|:;,.")
     if len(result) < 4:
-        result = f"{result} NEWS".strip()[:24]
+        result = f"{result} NEWS".strip()[:THUMBNAIL_TEXT_LIMIT]
     return result
 
 
@@ -196,7 +197,10 @@ class PublishingCopy(BaseModel):
     recommended_title_reason: str = Field(min_length=20, max_length=500)
     thumbnail_concepts: list[ThumbnailConcept] = Field(min_length=2, max_length=3)
     recommended_concept_id: str
-    recommended_thumbnail_text: str = Field(min_length=4, max_length=24)
+    recommended_thumbnail_text: str = Field(
+        min_length=4,
+        max_length=THUMBNAIL_TEXT_LIMIT,
+    )
     lead_description: str = Field(min_length=80, max_length=650)
     episode_description: str = Field(min_length=80, max_length=650)
     tags: list[str] = Field(min_length=8, max_length=25)
@@ -365,7 +369,7 @@ STRICT RULES
 - Put the important company/product/security subject early.
 - No fabricated quotation, number, victim, country, or attribution.
 - Thumbnail concepts must use only supported lead-story facts.
-- Thumbnail text must be 2 to 4 short words, at most 24 characters.
+- Thumbnail text must be 2 to 6 short words, at most 42 characters.
 - recommended_thumbnail_text must exactly equal one text_options entry from the
   recommended_concept_id. Do not paraphrase it into a separate value.
 - Thumbnail text must name the lead product, company, or concrete topic; reject
@@ -443,11 +447,15 @@ def _local_publishing_fallback(
     thumbnail_words: list[str] = []
     for token in meaningful:
         candidate = " ".join([*thumbnail_words, token])
-        if len(candidate) > 24 or len(thumbnail_words) >= 3:
+        if len(candidate) > THUMBNAIL_TEXT_LIMIT or len(thumbnail_words) >= 4:
             break
         thumbnail_words.append(token)
     thumbnail_text = " ".join(thumbnail_words) or "TECH NEWS"
-    alternative_text = _trim_words(f"{thumbnail_words[0]} ALERT", 24) if thumbnail_words else "TECH ALERT"
+    alternative_text = (
+        _trim_words(f"{thumbnail_words[0]} ALERT", THUMBNAIL_TEXT_LIMIT)
+        if thumbnail_words
+        else "TECH ALERT"
+    )
 
     narration_summary = _trim_words(narration, 560)
     lead_description = (
