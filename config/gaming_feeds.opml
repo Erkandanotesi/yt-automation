@@ -13,7 +13,6 @@
     <outline text="Tech and Gaming" title="Tech and Gaming">
       <outline type="rss" text="Ars Technica - All content" title="Ars Technica - All content" xmlUrl="https://feeds.arstechnica.com/arstechnica/index" htmlUrl="https://feeds.arstechnica.com/arstechnica/index"/>
       <outline type="rss" text="CNET" title="CNET" xmlUrl="https://www.cnet.com/rss/news/" htmlUrl="https://www.cnet.com/rss/news/"/>
-      <outline type="rss" text="Engadget - Technology News &amp; Expert Reviews" title="Engadget - Technology News &amp; Expert Reviews" xmlUrl="https://www.engadget.com/rss.xml" htmlUrl="https://www.engadget.com/rss.xml"/>
     </outline>
   </body>
 </opml>
