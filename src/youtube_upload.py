@@ -153,13 +153,16 @@ def next_publish_slot(
     exclude_manifest: Path | None = None,
     state_file: Path = YOUTUBE_SCHEDULE_STATE_FILE,
 ) -> datetime:
+    last_uploaded = _last_uploaded_publish_time(state_file)
+    if last_uploaded is None:
+        raise RuntimeError(
+            "YouTube schedule history is missing. Set last_scheduled_publish_at in "
+            f"{state_file}; a saved scheduling baseline is required."
+        )
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
-        raise ValueError("Schedule time must include a timezone.")
-    candidate = _next_slot_after(current)
-    last_uploaded = _last_uploaded_publish_time(state_file)
-    if last_uploaded is not None and last_uploaded >= candidate:
-        candidate = _next_slot_after(last_uploaded)
+        raise ValueError("Current scheduling time must include a timezone.")
+    candidate = _next_slot_after(max(last_uploaded, current))
     reserved = _reserved_publish_times(exclude_manifest)
     while any(candidate == item.astimezone(TURKEY_TIMEZONE) for item in reserved):
         candidate = _next_slot_after(candidate)
@@ -356,8 +359,9 @@ def validate_upload_manifest(
             local = parsed.astimezone(TURKEY_TIMEZONE)
             last_uploaded = _last_uploaded_publish_time(settings.schedule_state_file)
             if (
-                parsed > datetime.now(timezone.utc)
-                and (last_uploaded is None or parsed > last_uploaded)
+                last_uploaded is not None
+                and parsed > last_uploaded
+                and parsed > datetime.now(timezone.utc)
                 and local.hour in PUBLISH_HOURS
                 and local.minute == local.second == 0
             ):

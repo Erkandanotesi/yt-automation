@@ -18,10 +18,15 @@ from youtube_upload import (
 
 
 def settings(root: Path) -> YouTubeUploadSettings:
+    schedule_state = root / "youtube_schedule_state.json"
+    if not schedule_state.exists():
+        schedule_state.write_text(json.dumps({
+            "last_scheduled_publish_at": "2026-08-01T20:00:00+03:00",
+        }), encoding="utf-8")
     return YouTubeUploadSettings(
         client_secrets_file=root / "client_secret.json",
         token_file=root / "token.json",
-        schedule_state_file=root / "youtube_schedule_state.json",
+        schedule_state_file=schedule_state,
     )
 
 
@@ -229,16 +234,6 @@ class YouTubeUploadTests(unittest.TestCase):
         self.assertFalse(insert_kwargs["notifySubscribers"])
         youtube.thumbnails.return_value.set.assert_called_once()
 
-    def test_turkey_schedule_uses_noon_then_twenty_hundred(self) -> None:
-        turkey = timezone(timedelta(hours=3))
-        with patch("youtube_upload._reserved_publish_times", return_value=set()):
-            before_noon = next_publish_slot(datetime(2026, 8, 1, 11, 0, tzinfo=turkey))
-            afternoon = next_publish_slot(datetime(2026, 8, 1, 18, 0, tzinfo=turkey))
-            evening = next_publish_slot(datetime(2026, 8, 1, 21, 0, tzinfo=turkey))
-        self.assertEqual(before_noon.isoformat(), "2026-08-01T12:00:00+03:00")
-        self.assertEqual(afternoon.isoformat(), "2026-08-01T20:00:00+03:00")
-        self.assertEqual(evening.isoformat(), "2026-08-02T12:00:00+03:00")
-
     def test_last_uploaded_schedule_advances_to_following_slot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "youtube_schedule_state.json"
@@ -248,7 +243,27 @@ class YouTubeUploadTests(unittest.TestCase):
             turkey = timezone(timedelta(hours=3))
             with patch("youtube_upload._reserved_publish_times", return_value=set()):
                 scheduled = next_publish_slot(
-                    datetime(2026, 8, 1, 11, 0, tzinfo=turkey),
+                    now=datetime(2026, 8, 1, 11, 0, tzinfo=turkey),
+                    state_file=state,
+                )
+        self.assertEqual(scheduled.isoformat(), "2026-08-02T12:00:00+03:00")
+
+    def test_schedule_requires_a_saved_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing_schedule_state.json"
+            with self.assertRaisesRegex(RuntimeError, "saved scheduling baseline is required"):
+                next_publish_slot(state_file=missing)
+
+    def test_past_saved_schedule_advances_from_current_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "youtube_schedule_state.json"
+            state.write_text(json.dumps({
+                "last_scheduled_publish_at": "2026-08-01T20:00:00+03:00",
+            }), encoding="utf-8")
+            turkey = timezone(timedelta(hours=3))
+            with patch("youtube_upload._reserved_publish_times", return_value=set()):
+                scheduled = next_publish_slot(
+                    now=datetime(2026, 8, 2, 11, 0, tzinfo=turkey),
                     state_file=state,
                 )
         self.assertEqual(scheduled.isoformat(), "2026-08-02T12:00:00+03:00")
