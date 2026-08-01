@@ -19,9 +19,11 @@ __pycache__/
 *.part
 *.tmp
 
-# Regenerable local media indexes and evaluation reports
-indexes/media_index.json
-indexes/media_index_report.json
+# Runtime state and regenerable local indexes
+data/processed_urls.json
+data/indexes/media_index.json
+data/indexes/media_index_report.json
+data/indexes/online_searches/
 
 # Legacy/generated video projects do not belong in the code repository
 Video*/

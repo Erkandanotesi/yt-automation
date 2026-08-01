@@ -1,0 +1,975 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
+
+from file_locations import (
+    AUTOMATION_ROOT,
+    PROJECTS_ROOT,
+    existing_project_numbers,
+    latest_project_number,
+    next_project_number,
+    parse_video_number,
+    project_dir,
+    project_name,
+    source_file,
+)
+from file_utils import atomic_write_json, sha256_file
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
+SCHEMA_VERSION = 1
+FLOW_STAGES = (
+    "news",
+    "tts",
+    "alignment",
+    "manual_separators",
+    "storyboard",
+    "archive_visuals",
+    "captions",
+    "effects",
+    "preview_approval",
+    "render",
+    "publish",
+)
+COST_STAGES = {
+    "news",
+    "tts",
+    "alignment",
+    "storyboard",
+    "archive_visuals",
+    "publish",
+}
+TERMINAL_COMPLETE = "COMPLETE"
+TERMINAL_WAITING = "WAITING"
+TERMINAL_FAILED = "FAILED"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().casefold()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false.")
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _quality_passed(path: Path) -> bool:
+    return _read_json(path).get("quality", {}).get("status") == "passed"
+
+
+def _file_matches(path_value: Any, expected_sha256: Any = None) -> bool:
+    path = Path(str(path_value or ""))
+    if not path.is_file():
+        return False
+    return not expected_sha256 or sha256_file(path) == str(expected_sha256)
+
+
+def _stage_state(video_dir: Path) -> dict:
+    return _read_json(video_dir / "state.json").get("stages", {})
+
+
+def _tts_complete(video_dir: Path) -> bool:
+    project = _read_json(video_dir / "project_info.json")
+    manifest = _read_json(video_dir / "Sesler" / "tts_info.json")
+    stories = project.get("stories", [])
+    files = manifest.get("files", [])
+    if not stories or len(files) != len(stories):
+        return False
+    for item in files:
+        path = Path(str(item.get("audio_file", "")))
+        if item.get("status") not in {"generated", "regenerated", "cached"} or not path.is_file():
+            return False
+        expected = item.get("audio_sha256")
+        if expected and sha256_file(path) != expected:
+            return False
+    return True
+
+
+def _news_complete(video_dir: Path) -> bool:
+    project = _read_json(video_dir / "project_info.json")
+    stories = project.get("stories", [])
+    if project.get("status") != "complete" or not stories:
+        return False
+    return all(
+        _file_matches(item.get("text"), item.get("narration_sha256"))
+        and _file_matches(item.get("original"), item.get("source_sha256"))
+        for item in stories
+    )
+
+
+def _alignment_complete(video_dir: Path) -> bool:
+    project = _read_json(video_dir / "project_info.json")
+    timing = _read_json(video_dir / "story_timing.json")
+    stories = timing.get("stories", [])
+    if not project.get("stories") or len(stories) != len(project["stories"]):
+        return False
+    tts = _read_json(video_dir / "Sesler" / "tts_info.json")
+    return all(
+        _file_matches(item.get("alignment_file"), item.get("alignment_sha256"))
+        for item in tts.get("files", [])
+    )
+
+
+def _storyboard_complete(video_dir: Path) -> bool:
+    manifest = _read_json(video_dir / "04_storyboard" / "storyboard.json")
+    quality = manifest.get("quality", {})
+    if quality.get("status") != "passed" or not quality.get(
+        "all_images_generated_and_validated"
+    ):
+        return False
+    images = [
+        image
+        for story in manifest.get("stories", [])
+        for image in story.get("images", [])
+    ]
+    return bool(images) and all(
+        image.get("validation", {}).get("status") == "passed"
+        and _file_matches(
+            image.get("output_file"), image.get("generation", {}).get("file_sha256")
+        )
+        for image in images
+    )
+
+
+def _archive_visuals_complete(video_dir: Path) -> bool:
+    manifest = _read_json(video_dir / "05_visuals" / "media_plan.json")
+    if manifest.get("quality", {}).get("status") != "passed":
+        return False
+    assets = [
+        window.get("selected_asset", {})
+        for story in manifest.get("stories", [])
+        for window in story.get("windows", [])
+    ]
+    return bool(assets) and all(
+        _file_matches(asset.get("absolute_path"), asset.get("sha256"))
+        for asset in assets
+    )
+
+
+def _captions_complete(video_dir: Path, state: dict) -> bool:
+    manifest = _read_json(video_dir / "06_captions" / "captions.json")
+    if (
+        state.get("captions", {}).get("status") != "CAPTIONS_READY"
+        or manifest.get("quality", {}).get("status") != "passed"
+    ):
+        return False
+    if not _file_matches(
+        manifest.get("combined_srt_file"), manifest.get("combined_srt_sha256")
+    ):
+        return False
+    return all(
+        _file_matches(item.get("srt_file"), item.get("srt_sha256"))
+        and _file_matches(item.get("text_file"), item.get("text_sha256"))
+        and _file_matches(item.get("alignment_file"), item.get("alignment_sha256"))
+        for item in manifest.get("stories", [])
+    )
+
+
+def _effects_complete(video_dir: Path, state: dict) -> bool:
+    manifest = _read_json(video_dir / "07_effects" / "effects_plan.json")
+    if (
+        state.get("effects", {}).get("status") != "EFFECTS_READY"
+        or manifest.get("quality", {}).get("status") != "passed"
+    ):
+        return False
+    assets = [item.get("asset", {}) for item in manifest.get("visual_events", [])]
+    return bool(assets) and all(
+        _file_matches(asset.get("file"), asset.get("sha256")) for asset in assets
+    )
+
+
+def _render_complete(video_dir: Path, state: dict) -> bool:
+    report = _read_json(video_dir / "08_render" / "render_report.json")
+    if (
+        state.get("render", {}).get("status") != "RENDER_READY"
+        or report.get("quality", {}).get("status") != "passed"
+    ):
+        return False
+    return all(
+        _file_matches(item.get("file"), item.get("qa", {}).get("sha256"))
+        and item.get("qa", {}).get("status") == "passed"
+        for item in (report.get("final", {}), report.get("preview", {}))
+    )
+
+
+def _publish_complete(video_dir: Path, state: dict) -> bool:
+    if state.get("publish", {}).get("status") != "PUBLISH_READY":
+        return False
+    package = video_dir / "09_publish" / "publish_package.json"
+    manifest = _read_json(video_dir / "09_publish" / "youtube_upload_manifest.json")
+    return (
+        package.is_file()
+        and manifest.get("chapters_embedded_in_description") is True
+        and _file_matches(manifest.get("video_file"), manifest.get("video_sha256"))
+        and _file_matches(
+            manifest.get("thumbnail_file"), manifest.get("thumbnail_sha256")
+        )
+    )
+
+
+def _preview_status(video_dir: Path) -> tuple[str, str]:
+    proof = video_dir / "07_effects" / "milestone6_reference_60s.mp4"
+    approval_path = video_dir / "orchestration" / "preview_approval.json"
+    if not proof.is_file():
+        return "NOT_STARTED", "The 60-second review preview has not been rendered."
+    approval = _read_json(approval_path)
+    if (
+        approval.get("status") == "APPROVED"
+        and approval.get("preview_sha256") == sha256_file(proof)
+    ):
+        return TERMINAL_COMPLETE, "The current review preview is approved."
+    stages = _stage_state(video_dir)
+    if (
+        stages.get("render", {}).get("status") == "RENDER_READY"
+        and stages.get("publish", {}).get("status") == "PUBLISH_READY"
+    ):
+        return (
+            TERMINAL_COMPLETE,
+            "Legacy project already has a reviewed final render and publish package.",
+        )
+    return TERMINAL_WAITING, f"Review and approve: {proof}"
+
+
+def collect_project_status(video_number: int) -> dict:
+    video_dir = project_dir(video_number)
+    state = _stage_state(video_dir)
+    project = _read_json(video_dir / "project_info.json")
+    preview_status, preview_detail = _preview_status(video_dir)
+    checks = {
+        "news": {
+            "status": TERMINAL_COMPLETE
+            if _news_complete(video_dir)
+            else "NOT_STARTED",
+            "detail": str(video_dir / "project_info.json"),
+        },
+        "tts": {
+            "status": TERMINAL_COMPLETE if _tts_complete(video_dir) else "NOT_STARTED",
+            "detail": str(video_dir / "Sesler" / "tts_info.json"),
+        },
+        "alignment": {
+            "status": TERMINAL_COMPLETE
+            if _alignment_complete(video_dir)
+            else "NOT_STARTED",
+            "detail": str(video_dir / "story_timing.json"),
+        },
+        "manual_separators": {
+            "status": TERMINAL_COMPLETE
+            if state.get("manual_separators", {}).get("status") == "READY"
+            else TERMINAL_WAITING
+            if (video_dir / "03_manual_separators").is_dir()
+            else "NOT_STARTED",
+            "detail": str(video_dir / "03_manual_separators"),
+        },
+        "storyboard": {
+            "status": TERMINAL_COMPLETE
+            if _storyboard_complete(video_dir)
+            else "NOT_STARTED",
+            "detail": str(video_dir / "04_storyboard" / "storyboard.json"),
+        },
+        "archive_visuals": {
+            "status": TERMINAL_COMPLETE
+            if _archive_visuals_complete(video_dir)
+            else "NOT_STARTED",
+            "detail": str(video_dir / "05_visuals" / "media_plan.json"),
+        },
+        "captions": {
+            "status": TERMINAL_COMPLETE
+            if _captions_complete(video_dir, state)
+            else "NOT_STARTED",
+            "detail": str(video_dir / "06_captions" / "captions.srt"),
+        },
+        "effects": {
+            "status": TERMINAL_COMPLETE
+            if _effects_complete(video_dir, state)
+            else "NOT_STARTED",
+            "detail": str(video_dir / "07_effects" / "effects_plan.json"),
+        },
+        "preview_approval": {
+            "status": preview_status,
+            "detail": preview_detail,
+        },
+        "render": {
+            "status": TERMINAL_COMPLETE
+            if _render_complete(video_dir, state)
+            else "NOT_STARTED",
+            "detail": str(video_dir / "08_render"),
+        },
+        "publish": {
+            "status": TERMINAL_COMPLETE
+            if _publish_complete(video_dir, state)
+            else "NOT_STARTED",
+            "detail": str(video_dir / "09_publish"),
+        },
+    }
+    rebuild_warnings: list[str] = []
+    if (
+        checks["render"]["status"] == TERMINAL_COMPLETE
+        and checks["publish"]["status"] == TERMINAL_COMPLETE
+    ):
+        for stage in FLOW_STAGES[:-3]:
+            if checks[stage]["status"] == TERMINAL_COMPLETE:
+                continue
+            rebuild_warnings.append(
+                f"{stage}: one or more original inputs moved or changed"
+            )
+            checks[stage] = {
+                "status": TERMINAL_COMPLETE,
+                "detail": (
+                    "Satisfied by the checksum-verified final render and publish "
+                    "package; source repair is needed only for a rebuild."
+                ),
+            }
+    next_stage = next(
+        (name for name in FLOW_STAGES if checks[name]["status"] != TERMINAL_COMPLETE),
+        None,
+    )
+    lock = _read_json(video_dir / ".news_studio.lock")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "video_number": video_number,
+        "video_name": project_name(video_number),
+        "project_directory": str(video_dir),
+        "exists": video_dir.is_dir(),
+        "stages": checks,
+        "next_stage": next_stage,
+        "complete": next_stage is None,
+        "rebuild_warnings": rebuild_warnings,
+        "locked": bool(lock),
+        "lock": lock or None,
+    }
+
+
+def api_cost_plan(video_number: int | None = None) -> dict:
+    top_n = int(os.getenv("TOP_N", "5"))
+    missing_images = top_n * 2
+    if video_number is not None:
+        storyboard = _read_json(
+            project_dir(video_number) / "04_storyboard" / "storyboard.json"
+        )
+        if storyboard:
+            missing_images = max(
+                0,
+                int(storyboard.get("planned_image_count", top_n * 2))
+                - int(storyboard.get("generated_image_count", 0)),
+            )
+    return {
+        "news_text_requests": f"up to {top_n + 1}",
+        "elevenlabs_tts_stories": f"up to {top_n}",
+        "forced_alignment_requests": "0 normally; only missing timestamp alignments",
+        "storyboard_planning_requests": 1,
+        "story_image_requests_remaining": missing_images,
+        "archive_selection_requests": "bounded and cached; depends on uncovered windows",
+        "publishing_copy_requests": 1,
+        "thumbnail_image_requests": 1,
+        "live_test_requests": 0,
+    }
+
+
+@dataclass
+class StageResult:
+    status: Literal["COMPLETE", "WAITING"]
+    stage: str
+    detail: str
+
+
+class ProjectLock:
+    def __init__(self, video_dir: Path, *, recover_stale: bool = False) -> None:
+        self.video_dir = video_dir
+        self.path = video_dir / ".news_studio.lock"
+        self.token = uuid.uuid4().hex
+        self.recover_stale = recover_stale
+
+    @staticmethod
+    def _pid_running(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def __enter__(self) -> "ProjectLock":
+        self.video_dir.mkdir(parents=True, exist_ok=True)
+        if self.path.exists() and self.recover_stale:
+            existing = _read_json(self.path)
+            if not self._pid_running(int(existing.get("pid", 0))):
+                self.path.unlink(missing_ok=True)
+        payload = {
+            "schema_version": 1,
+            "pid": os.getpid(),
+            "token": self.token,
+            "created_at_utc": utc_now(),
+            "command": sys.argv,
+        }
+        try:
+            descriptor = os.open(
+                self.path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+        except FileExistsError as exc:
+            owner = _read_json(self.path)
+            raise RuntimeError(
+                f"Project is locked by PID {owner.get('pid', 'unknown')}. "
+                "Use --recover-stale-lock only after confirming that process stopped."
+            ) from exc
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(payload, output, ensure_ascii=False, indent=2)
+            output.write("\n")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        current = _read_json(self.path)
+        if current.get("token") == self.token:
+            self.path.unlink(missing_ok=True)
+
+
+def _event(video_dir: Path, event: dict[str, Any]) -> None:
+    directory = video_dir / "orchestration"
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = {"at_utc": utc_now(), **event}
+    with (directory / "events.jsonl").open("a", encoding="utf-8") as output:
+        output.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _run_subprocess(video_dir: Path, stage: str, arguments: list[str]) -> None:
+    directory = video_dir / "orchestration" / "logs"
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = directory / f"{stamp}_{stage}.log"
+    command = [sys.executable, str(source_file(arguments[0])), *arguments[1:]]
+    _event(video_dir, {"type": "stage_started", "stage": stage, "command": command})
+    started = time.monotonic()
+    with log_path.open("w", encoding="utf-8") as log:
+        process = subprocess.Popen(
+            command,
+            cwd=AUTOMATION_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        assert process.stdout is not None
+        try:
+            for line in process.stdout:
+                print(line, end="")
+                log.write(line)
+                log.flush()
+            return_code = process.wait()
+        except KeyboardInterrupt:
+            process.terminate()
+            process.wait(timeout=10)
+            _event(video_dir, {"type": "stage_interrupted", "stage": stage})
+            raise
+    elapsed = round(time.monotonic() - started, 3)
+    if return_code != 0:
+        _event(
+            video_dir,
+            {
+                "type": "stage_failed",
+                "stage": stage,
+                "exit_code": return_code,
+                "elapsed_seconds": elapsed,
+                "log_file": str(log_path),
+            },
+        )
+        raise RuntimeError(f"Stage {stage} failed. Log: {log_path}")
+    _event(
+        video_dir,
+        {
+            "type": "stage_completed",
+            "stage": stage,
+            "elapsed_seconds": elapsed,
+            "log_file": str(log_path),
+        },
+    )
+
+
+def approve_preview(video_number: int) -> dict:
+    video_dir = project_dir(video_number)
+    proof = video_dir / "07_effects" / "milestone6_reference_60s.mp4"
+    if not proof.is_file():
+        raise FileNotFoundError(f"Review preview is missing: {proof}")
+    approval = {
+        "schema_version": 1,
+        "status": "APPROVED",
+        "video_number": video_number,
+        "preview_file": str(proof),
+        "preview_sha256": sha256_file(proof),
+        "approved_at_utc": utc_now(),
+    }
+    path = video_dir / "orchestration" / "preview_approval.json"
+    atomic_write_json(path, approval)
+    _event(video_dir, {"type": "preview_approved", "preview_file": str(proof)})
+    return approval
+
+
+def execute_stage(
+    video_number: int,
+    stage: str,
+    *,
+    category: str,
+    confirm_api_costs: bool,
+    approve_current_preview: bool,
+) -> StageResult:
+    video_dir = project_dir(video_number)
+    if stage in COST_STAGES and not confirm_api_costs:
+        return StageResult(
+            TERMINAL_WAITING,
+            stage,
+            "API cost confirmation required. Review the dry-run and pass "
+            "--confirm-api-costs.",
+        )
+    if stage == "news":
+        _run_subprocess(
+            video_dir,
+            stage,
+            ["news_pipeline.py", "--video", str(video_number), "--category", category],
+        )
+    elif stage == "tts":
+        _run_subprocess(
+            video_dir,
+            stage,
+            ["elevenlabs_tts.py", "--video", str(video_number), "--compact"],
+        )
+    elif stage == "alignment":
+        _run_subprocess(video_dir, stage, ["alignment_stage.py", "--video", str(video_number)])
+    elif stage == "manual_separators":
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(source_file("manual_checkpoint.py")),
+                "--video",
+                str(video_number),
+                "--action",
+                "validate",
+            ],
+            cwd=AUTOMATION_ROOT,
+            check=False,
+        )
+        if result.returncode != 0:
+            _run_subprocess(
+                video_dir,
+                stage,
+                [
+                    "manual_checkpoint.py",
+                    "--video",
+                    str(video_number),
+                    "--action",
+                    "prepare",
+                ],
+            )
+            return StageResult(
+                TERMINAL_WAITING,
+                stage,
+                f"Add the separator files to {video_dir / '03_manual_separators'}, then resume.",
+            )
+    elif stage == "storyboard":
+        _run_subprocess(
+            video_dir,
+            stage,
+            [
+                "storyboard_stage.py",
+                "--video",
+                str(video_number),
+                "--action",
+                "all",
+                "--confirm-cost",
+            ],
+        )
+    elif stage == "archive_visuals":
+        _run_subprocess(
+            video_dir,
+            stage,
+            [
+                "media_selection_stage.py",
+                "--video",
+                str(video_number),
+                "--confirm-ai-cost",
+            ],
+        )
+    elif stage == "captions":
+        _run_subprocess(
+            video_dir,
+            stage,
+            ["caption_stage.py", "--video", str(video_number), "--action", "generate"],
+        )
+    elif stage == "effects":
+        _run_subprocess(
+            video_dir,
+            stage,
+            ["effects_stage.py", "--video", str(video_number), "--action", "generate"],
+        )
+    elif stage == "preview_approval":
+        proof = video_dir / "07_effects" / "milestone6_reference_60s.mp4"
+        if not proof.is_file():
+            _run_subprocess(
+                video_dir,
+                "preview",
+                [
+                    "effects_stage.py",
+                    "--video",
+                    str(video_number),
+                    "--action",
+                    "reference-proof",
+                    "--proof-seconds",
+                    "60",
+                ],
+            )
+        if not approve_current_preview:
+            return StageResult(
+                TERMINAL_WAITING,
+                stage,
+                f"Review {proof}, then resume with --approve-preview.",
+            )
+        approve_preview(video_number)
+    elif stage == "render":
+        if _bool_env("REQUIRE_PREVIEW_APPROVAL", True):
+            preview_status, _ = _preview_status(video_dir)
+            if preview_status != TERMINAL_COMPLETE:
+                return StageResult(
+                    TERMINAL_WAITING,
+                    stage,
+                    "The current preview must be approved before the final render.",
+                )
+        _run_subprocess(
+            video_dir,
+            stage,
+            ["render_stage.py", "--video", str(video_number), "--action", "render"],
+        )
+    elif stage == "publish":
+        _run_subprocess(
+            video_dir,
+            stage,
+            [
+                "publish_stage.py",
+                "--video",
+                str(video_number),
+                "--generate-thumbnail",
+                "--confirm-ai-cost",
+                "--confirm-thumbnail-cost",
+            ],
+        )
+    else:
+        raise ValueError(f"Unknown stage: {stage}")
+    return StageResult(TERMINAL_COMPLETE, stage, f"{stage} completed.")
+
+
+def run_flow(
+    video_number: int,
+    *,
+    category: str,
+    confirm_api_costs: bool,
+    approve_current_preview: bool,
+    recover_stale_lock: bool,
+    dry_run: bool,
+) -> dict:
+    before = collect_project_status(video_number)
+    planned = [
+        stage
+        for stage in FLOW_STAGES
+        if before["stages"][stage]["status"] != TERMINAL_COMPLETE
+    ]
+    if dry_run:
+        return {
+            "status": "DRY_RUN",
+            "video_number": video_number,
+            "planned_stages": planned,
+            "api_cost_plan": api_cost_plan(video_number if before["exists"] else None),
+            "writes_performed": False,
+            "api_requests_performed": False,
+        }
+    if planned and any(stage in COST_STAGES for stage in planned) and not confirm_api_costs:
+        first_cost = next(stage for stage in planned if stage in COST_STAGES)
+        return {
+            "status": "COST_CONFIRMATION_REQUIRED",
+            "video_number": video_number,
+            "next_stage": first_cost,
+            "api_cost_plan": api_cost_plan(video_number if before["exists"] else None),
+        }
+    video_dir = project_dir(video_number)
+    with ProjectLock(video_dir, recover_stale=recover_stale_lock):
+        _event(video_dir, {"type": "flow_started", "planned_stages": planned})
+        for stage in FLOW_STAGES:
+            current = collect_project_status(video_number)
+            if current["stages"][stage]["status"] == TERMINAL_COMPLETE:
+                continue
+            result = execute_stage(
+                video_number,
+                stage,
+                category=category,
+                confirm_api_costs=confirm_api_costs,
+                approve_current_preview=approve_current_preview,
+            )
+            if result.status == TERMINAL_WAITING:
+                _event(
+                    video_dir,
+                    {"type": "flow_waiting", "stage": stage, "detail": result.detail},
+                )
+                return {
+                    "status": "WAITING",
+                    "video_number": video_number,
+                    "stage": stage,
+                    "detail": result.detail,
+                }
+        final = collect_project_status(video_number)
+        _event(video_dir, {"type": "flow_completed", "complete": final["complete"]})
+        return {
+            "status": "COMPLETE" if final["complete"] else "INCOMPLETE",
+            "video_number": video_number,
+            "project_directory": str(video_dir),
+            "publish_directory": str(video_dir / "09_publish"),
+        }
+
+
+def validate_project(video_number: int) -> dict:
+    preflight = subprocess.run(
+        [sys.executable, str(source_file("preflight.py")), "--json"],
+        cwd=AUTOMATION_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    status = collect_project_status(video_number)
+    failures = [
+        name
+        for name, value in status["stages"].items()
+        if value["status"] not in {TERMINAL_COMPLETE, TERMINAL_WAITING}
+    ]
+    return {
+        "status": "VALID" if preflight.returncode == 0 and not failures else "INVALID",
+        "preflight_passed": preflight.returncode == 0,
+        "video_number": video_number,
+        "incomplete_or_invalid_stages": failures,
+        "project": status,
+    }
+
+
+def _print_stage_table(status: dict) -> None:
+    print(f"{status['video_name']} — {status['project_directory']}")
+    print("-" * 72)
+    for stage in FLOW_STAGES:
+        value = status["stages"][stage]
+        print(f"{stage:22} {value['status']:12} {value['detail']}")
+    print("-" * 72)
+    print(f"Next stage: {status['next_stage'] or 'none — production complete'}")
+    if status.get("rebuild_warnings"):
+        print("Rebuild warnings:")
+        for warning in status["rebuild_warnings"]:
+            print(f"  - {warning}")
+
+
+def interactive() -> int:
+    latest = latest_project_number()
+    print("NEWS STUDIO — ONE-BUTTON PRODUCTION")
+    print("1. Start a new Tech News video")
+    if latest is not None:
+        print(f"2. Resume {project_name(latest)}")
+    choice = input("Selection: ").strip()
+    if choice == "1":
+        video_number = next_project_number()
+        category = "tech"
+    elif choice == "2" and latest is not None:
+        video_number = latest
+        category = _read_json(project_dir(video_number) / "project_info.json").get(
+            "category", "tech"
+        )
+    else:
+        print("Invalid selection.")
+        return 1
+    print(json.dumps(api_cost_plan(video_number), ensure_ascii=False, indent=2))
+    confirmation = input("Type COST to allow required provider requests: ").strip()
+    if confirmation != "COST":
+        print("Cancelled before any provider request.")
+        return 0
+    result = run_flow(
+        video_number,
+        category=category,
+        confirm_api_costs=True,
+        approve_current_preview=False,
+        recover_stale_lock=False,
+        dry_run=False,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if result.get("stage") == "preview_approval":
+        proof = project_dir(video_number) / "07_effects" / "milestone6_reference_60s.mp4"
+        if hasattr(os, "startfile"):
+            os.startfile(proof)  # type: ignore[attr-defined]
+        approved = input("Type 1 after reviewing and approving this preview: ").strip()
+        if approved == "1":
+            result = run_flow(
+                video_number,
+                category=category,
+                confirm_api_costs=True,
+                approve_current_preview=True,
+                recover_stale_lock=False,
+                dry_run=False,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="news-studio")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    for command in ("new", "resume"):
+        sub = subparsers.add_parser(command)
+        if command == "new":
+            sub.add_argument("--category", choices=("tech", "gaming"), default="tech")
+        else:
+            sub.add_argument("video")
+        sub.add_argument("--confirm-api-costs", action="store_true")
+        sub.add_argument("--approve-preview", action="store_true")
+        sub.add_argument("--recover-stale-lock", action="store_true")
+        sub.add_argument("--dry-run", action="store_true")
+        sub.add_argument("--json", action="store_true")
+
+    status_parser = subparsers.add_parser("status")
+    status_parser.add_argument("video")
+    status_parser.add_argument("--json", action="store_true")
+
+    stage_parser = subparsers.add_parser("run-stage")
+    stage_parser.add_argument("video")
+    stage_parser.add_argument("stage", choices=FLOW_STAGES)
+    stage_parser.add_argument("--category", choices=("tech", "gaming"), default="tech")
+    stage_parser.add_argument("--confirm-api-costs", action="store_true")
+    stage_parser.add_argument("--approve-preview", action="store_true")
+
+    validate_parser = subparsers.add_parser("validate")
+    validate_parser.add_argument("video")
+    validate_parser.add_argument("--json", action="store_true")
+
+    preview_parser = subparsers.add_parser("preview")
+    preview_parser.add_argument("video")
+
+    approve_parser = subparsers.add_parser("approve-preview")
+    approve_parser.add_argument("video")
+
+    render_parser = subparsers.add_parser("render")
+    render_parser.add_argument("video")
+
+    subparsers.add_parser("interactive")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        if args.command == "interactive":
+            return interactive()
+        if args.command == "new":
+            number = next_project_number()
+            result = run_flow(
+                number,
+                category=args.category,
+                confirm_api_costs=args.confirm_api_costs,
+                approve_current_preview=args.approve_preview,
+                recover_stale_lock=args.recover_stale_lock,
+                dry_run=args.dry_run,
+            )
+        else:
+            number = parse_video_number(args.video)
+            if args.command == "resume":
+                category = _read_json(project_dir(number) / "project_info.json").get(
+                    "category", "tech"
+                )
+                result = run_flow(
+                    number,
+                    category=category,
+                    confirm_api_costs=args.confirm_api_costs,
+                    approve_current_preview=args.approve_preview,
+                    recover_stale_lock=args.recover_stale_lock,
+                    dry_run=args.dry_run,
+                )
+            elif args.command == "status":
+                result = collect_project_status(number)
+                if not args.json:
+                    _print_stage_table(result)
+                    return 0
+            elif args.command == "run-stage":
+                status = collect_project_status(number)
+                if status["stages"][args.stage]["status"] == TERMINAL_COMPLETE:
+                    result = {
+                        "status": "CACHED",
+                        "video_number": number,
+                        "stage": args.stage,
+                    }
+                else:
+                    with ProjectLock(project_dir(number)):
+                        stage_result = execute_stage(
+                            number,
+                            args.stage,
+                            category=args.category,
+                            confirm_api_costs=args.confirm_api_costs,
+                            approve_current_preview=args.approve_preview,
+                        )
+                    result = stage_result.__dict__
+            elif args.command == "validate":
+                result = validate_project(number)
+            elif args.command == "preview":
+                with ProjectLock(project_dir(number)):
+                    result = execute_stage(
+                        number,
+                        "preview_approval",
+                        category="tech",
+                        confirm_api_costs=False,
+                        approve_current_preview=False,
+                    ).__dict__
+            elif args.command == "approve-preview":
+                result = approve_preview(number)
+            elif args.command == "render":
+                with ProjectLock(project_dir(number)):
+                    result = execute_stage(
+                        number,
+                        "render",
+                        category="tech",
+                        confirm_api_costs=False,
+                        approve_current_preview=False,
+                    ).__dict__
+            else:
+                raise ValueError(f"Unsupported command: {args.command}")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("status") not in {"INVALID", TERMINAL_FAILED} else 1
+    except KeyboardInterrupt:
+        print("\nInterrupted safely. Completed artifacts were preserved.", file=sys.stderr)
+        return 130
+    except Exception as exc:  # noqa: BLE001
+        print(f"[NEWS STUDIO ERROR] {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

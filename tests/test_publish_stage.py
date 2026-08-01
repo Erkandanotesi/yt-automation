@@ -6,11 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from publish_stage import (
+    PublishSettings,
     PublishingCopy,
     archive_thumbnail_asset,
     build_chapters,
     build_description,
     chapter_block,
+    prepare_ai_rendered_thumbnail,
 )
 
 
@@ -65,6 +67,52 @@ def publishing_copy() -> PublishingCopy:
 
 
 class PublishStageTests(unittest.TestCase):
+    def test_ai_rendered_thumbnail_is_cached_without_second_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lead = {
+                "title": "Outlook email attack",
+                "source_title": "Outlook Web Access email attack",
+            }
+            planned = {"images": [{"visual_concept": "Opened malicious email"}]}
+            calls = []
+
+            def generator(prompt, settings):
+                calls.append(prompt)
+                return b"fake-1280x720-png", {"request_id": "request_1", "usage": {}}
+
+            with patch(
+                "publish_stage.probe_image",
+                return_value={"width": 1280, "height": 720},
+            ):
+                first = prepare_ai_rendered_thumbnail(
+                    output_dir=root,
+                    lead=lead,
+                    planned=planned,
+                    narration="Opening the message may run attacker JavaScript.",
+                    publishing_copy=publishing_copy(),
+                    headline="OUTLOOK EMAIL TRAP",
+                    settings=PublishSettings(),
+                    confirm_cost=True,
+                    generator=generator,
+                )
+                second = prepare_ai_rendered_thumbnail(
+                    output_dir=root,
+                    lead=lead,
+                    planned=planned,
+                    narration="Opening the message may run attacker JavaScript.",
+                    publishing_copy=publishing_copy(),
+                    headline="OUTLOOK EMAIL TRAP",
+                    settings=PublishSettings(),
+                    confirm_cost=False,
+                    generator=lambda *_: self.fail("cache should prevent generation"),
+                )
+
+            self.assertEqual(first, second)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("OUTLOOK EMAIL TRAP", calls[0])
+            self.assertIn("LEFT 46%", calls[0])
+
     def test_chapters_are_embedded_verbatim_in_description(self) -> None:
         project = {
             "stories": [
