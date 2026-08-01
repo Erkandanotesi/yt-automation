@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from media_selection_stage import (
     MediaSelectionSettings,
     StoryMediaDecisions,
     WindowDecision,
+    _enforce_selection_constraints,
     _load_selector_cache,
     _save_selector_cache,
     _validate_decisions,
@@ -137,6 +139,56 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_image_usage_is_capped_twice_across_stories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            assets = [
+                make_asset(
+                    root,
+                    f"Media/asset_{index}.png",
+                    ["technology"],
+                    "cleared",
+                )
+                for index in range(3)
+            ]
+            assets_by_id = {asset["asset_id"]: asset for asset in assets}
+            shortlist = [
+                {
+                    **asset,
+                    "local_score": 10 - index,
+                }
+                for index, asset in enumerate(assets)
+            ]
+            usage: Counter[str] = Counter()
+
+            for story_number in range(2):
+                windows = [
+                    {
+                        "window_id": f"story_{story_number}_window_{index}",
+                        "shortlist": shortlist,
+                    }
+                    for index in range(3)
+                ]
+                decisions = {
+                    window["window_id"]: WindowDecision(
+                        window_id=window["window_id"],
+                        selected_asset_id=assets[0]["asset_id"],
+                        confidence=0.8,
+                        selection_reason="The preferred image matches this test window.",
+                    )
+                    for window in windows
+                }
+                _enforce_selection_constraints(
+                    windows,
+                    decisions,
+                    assets_by_id,
+                    usage,
+                    2,
+                )
+
+            self.assertEqual(sum(usage.values()), 6)
+            self.assertTrue(all(count <= 2 for count in usage.values()))
+
     def test_raw_selector_decisions_are_cached_before_downstream_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "selector_cache" / "story.json"

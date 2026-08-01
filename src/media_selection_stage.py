@@ -68,6 +68,7 @@ class MediaSelectionSettings:
     wikimedia_fallback_enabled: bool = True
     wikimedia_max_downloads_per_video: int = 10
     wikimedia_max_searches_per_video: int = 6
+    maximum_uses_per_video: int = 2
 
     @classmethod
     def from_environment(cls) -> "MediaSelectionSettings":
@@ -113,6 +114,9 @@ class MediaSelectionSettings:
             wikimedia_max_searches_per_video=int(
                 os.getenv("WIKIMEDIA_MAX_SEARCHES_PER_VIDEO", "6")
             ),
+            maximum_uses_per_video=int(
+                os.getenv("MEDIA_MAX_USES_PER_VIDEO", "2")
+            ),
         )
 
     def validate(self) -> None:
@@ -145,6 +149,8 @@ class MediaSelectionSettings:
             raise ValueError(
                 "WIKIMEDIA_MAX_SEARCHES_PER_VIDEO must be between 0 and 30."
             )
+        if not 1 <= self.maximum_uses_per_video <= 10:
+            raise ValueError("MEDIA_MAX_USES_PER_VIDEO must be between 1 and 10.")
 
 
 class WindowDecision(BaseModel):
@@ -1176,9 +1182,10 @@ def _enforce_selection_constraints(
     windows: list[dict],
     decisions: dict[str, WindowDecision],
     assets_by_id: dict[str, dict],
+    video_usage_counts: Counter[str],
+    maximum_uses_per_video: int,
 ) -> list[dict]:
     selected: list[dict] = []
-    used_sha: set[str] = set()
     previous_sha = ""
     for window in windows:
         decision = decisions[window["window_id"]]
@@ -1193,14 +1200,16 @@ def _enforce_selection_constraints(
         ]
         deduplicated_ids = list(dict.fromkeys(preferred_ids))
 
-        def acceptable(asset_id: str, *, allow_story_reuse: bool) -> bool:
+        def acceptable(asset_id: str, *, allow_reuse: bool) -> bool:
             candidate = candidate_by_id.get(asset_id)
             if candidate is None:
                 return False
             sha = candidate["sha256"]
             if sha == previous_sha:
                 return False
-            if not allow_story_reuse and sha in used_sha:
+            if video_usage_counts[sha] >= maximum_uses_per_video:
+                return False
+            if not allow_reuse and video_usage_counts[sha] > 0:
                 return False
             return "crop_risk" not in candidate.get("quality_flags", [])
 
@@ -1208,12 +1217,13 @@ def _enforce_selection_constraints(
         if (
             preferred_online.get("online_fallback") is True
             and "crop_risk" not in preferred_online.get("quality_flags", [])
+            and acceptable(decision.selected_asset_id or "", allow_reuse=True)
         ):
             chosen_id = decision.selected_asset_id
             override_reason = (
                 "Intentional Wikimedia reuse was preferred over an unrelated local "
                 "candidate."
-                if preferred_online.get("sha256") in used_sha
+                if video_usage_counts[preferred_online.get("sha256", "")] > 0
                 else ""
             )
         else:
@@ -1221,7 +1231,7 @@ def _enforce_selection_constraints(
                 (
                     asset_id
                     for asset_id in deduplicated_ids
-                    if acceptable(asset_id, allow_story_reuse=False)
+                    if acceptable(asset_id, allow_reuse=False)
                 ),
                 None,
             )
@@ -1231,22 +1241,34 @@ def _enforce_selection_constraints(
                 (
                     asset_id
                     for asset_id in deduplicated_ids
-                    if acceptable(asset_id, allow_story_reuse=True)
+                    if acceptable(asset_id, allow_reuse=True)
                 ),
                 None,
             )
             if chosen_id is not None:
-                override_reason = "Story-level reuse was necessary."
+                override_reason = "Video-level reuse was necessary."
         if chosen_id is None:
             chosen_id = next(
                 (
                     asset_id
                     for asset_id in deduplicated_ids
                     if candidate_by_id.get(asset_id, {}).get("sha256") != previous_sha
+                    and video_usage_counts[
+                        candidate_by_id.get(asset_id, {}).get("sha256", "")
+                    ]
+                    < maximum_uses_per_video
                 ),
-                deduplicated_ids[0],
+                None,
             )
-            override_reason = "A crop-risk or repeated fallback was necessary."
+            override_reason = (
+                "A crop-risk fallback under the video reuse cap was necessary."
+            )
+        if chosen_id is None:
+            raise RuntimeError(
+                f"No image remains below the {maximum_uses_per_video}-use video cap "
+                f"for {window['window_id']}. Increase MEDIA_SHORTLIST_SIZE or add "
+                "more relevant assets."
+            )
         if chosen_id != decision.selected_asset_id and not override_reason:
             override_reason = (
                 "Selected the best non-repeated, crop-safe candidate from the "
@@ -1292,7 +1314,7 @@ def _enforce_selection_constraints(
                 in {"", "unknown"},
             }
         )
-        used_sha.add(asset["sha256"])
+        video_usage_counts[asset["sha256"]] += 1
         previous_sha = asset["sha256"]
     return selected
 
@@ -1421,6 +1443,41 @@ def run_media_selection(
     wikimedia_search_count = 0
     selector_cache_hits = 0
     selector_requests_this_run = 0
+    selected_story_ids = {item["story_id"] for item in selected_timing}
+    video_usage_counts: Counter[str] = Counter()
+
+    # Generated hero images are also on-screen images, so their appearances count
+    # toward the same per-video cap as archive and Wikimedia selections.
+    for storyboard_story in storyboard.get("stories", []):
+        for image in storyboard_story.get("images", []):
+            checksum = str(image.get("generation", {}).get("file_sha256", ""))
+            if not checksum:
+                image_path = Path(str(image.get("output_file", "")))
+                if image_path.is_file():
+                    checksum = sha256_file(image_path)
+            if checksum:
+                video_usage_counts[checksum] += 1
+
+    # A one-story repair must respect selections already saved for other stories.
+    for story_id, planned_story in planned_by_id.items():
+        if story_id in selected_story_ids:
+            continue
+        for window in planned_story.get("windows", []):
+            checksum = str(window.get("selected_asset", {}).get("sha256", ""))
+            if checksum:
+                video_usage_counts[checksum] += 1
+
+    overused = {
+        checksum: count
+        for checksum, count in video_usage_counts.items()
+        if count > settings.maximum_uses_per_video
+    }
+    if overused:
+        raise RuntimeError(
+            "Existing visual plan already exceeds MEDIA_MAX_USES_PER_VIDEO; "
+            "rerun the complete archive-visual stage with --force."
+        )
+
     for story in selected_timing:
         storyboard_story = storyboard_by_id.get(story["story_id"])
         if storyboard_story is None:
@@ -1450,6 +1507,15 @@ def run_media_selection(
         )
         cached = planned_by_id.get(story["story_id"], {})
         if not force and _cached_story_current(cached, fingerprint):
+            for window in cached.get("windows", []):
+                checksum = str(window.get("selected_asset", {}).get("sha256", ""))
+                if checksum:
+                    video_usage_counts[checksum] += 1
+                    if video_usage_counts[checksum] > settings.maximum_uses_per_video:
+                        raise RuntimeError(
+                            "Cached visual plan exceeds MEDIA_MAX_USES_PER_VIDEO; "
+                            "rerun the complete archive-visual stage with --force."
+                        )
             continue
 
         selector_cache = _selector_cache_path(video_dir, story["story_id"])
@@ -1504,6 +1570,8 @@ def run_media_selection(
             windows,
             decision_by_window,
             assets_by_id,
+            video_usage_counts,
+            settings.maximum_uses_per_video,
         )
         if settings.copy_selected_assets:
             _copy_selected(
@@ -1581,6 +1649,13 @@ def run_media_selection(
                     }
                 ),
                 "window_count": len(selected_windows),
+                "maximum_asset_use_count": max(
+                    (
+                        video_usage_counts[window["selected_asset"]["sha256"]]
+                        for window in selected_windows
+                    ),
+                    default=0,
+                ),
                 "license_review_count": sum(
                     window["requires_license_review"]
                     for window in selected_windows
@@ -1670,6 +1745,11 @@ def run_media_selection(
             "crop_risk_count": sum(
                 item.get("quality", {}).get("crop_risk_count", 0)
                 for item in ordered
+            ),
+            "maximum_uses_per_image": settings.maximum_uses_per_video,
+            "reuse_cap_respected": all(
+                count <= settings.maximum_uses_per_video
+                for count in video_usage_counts.values()
             ),
         },
     }

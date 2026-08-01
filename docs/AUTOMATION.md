@@ -242,6 +242,10 @@ the complete story context. These recoverable model mistakes do not abort produc
 Each raw per-story selector response is saved before validation under
 `05_visuals/selector_cache/`. A matching fingerprint lets a resumed run reuse that
 response without paying for the same selector request again.
+`MEDIA_MAX_USES_PER_VIDEO=2` is a hard
+SHA-256-based cap across the complete video, including generated hero images, local
+archive images, and Wikimedia downloads. Selection repairs and cached story resumes
+must respect the same limit.
 
 ## Environment-file health
 
