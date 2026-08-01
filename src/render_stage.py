@@ -34,6 +34,7 @@ from file_utils import (  # noqa: E402
     sha256_file,
 )
 from file_locations import project_dir, project_name  # noqa: E402
+from news_archive import NewsArchive  # noqa: E402
 from motion_filters import (  # noqa: E402
     MOTION_RENDERER_VERSION,
     smooth_push_in_filter,
@@ -1475,7 +1476,7 @@ def render_project(
     atomic_write_json(report_path, report)
     state = load_json(video_dir / "state.json", "Stage state")
     state.setdefault("stages", {})[STAGE_NAME] = {
-        "status": "RENDER_READY" if report["quality"]["status"] == "passed" else "FAILED",
+        "status": "FINALIZING_ARCHIVE" if report["quality"]["status"] == "passed" else "FAILED",
         "render_plan": str(video_dir / "08_render" / "render_plan.json"),
         "render_report": str(report_path),
         "final_file": str(final),
@@ -1487,6 +1488,12 @@ def render_project(
     atomic_write_json(video_dir / "state.json", state)
     if report["quality"]["status"] != "passed":
         raise RuntimeError(f"Milestone 8 QA failed: {report}")
+    report["news_archive"] = NewsArchive().finalize_project(video_number)
+    atomic_write_json(report_path, report)
+    state["stages"][STAGE_NAME]["status"] = "RENDER_READY"
+    state["stages"][STAGE_NAME]["updated_at_utc"] = utc_now()
+    state["updated_at_utc"] = state["stages"][STAGE_NAME]["updated_at_utc"]
+    atomic_write_json(video_dir / "state.json", state)
     return report
 
 

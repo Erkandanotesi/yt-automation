@@ -1702,6 +1702,7 @@ def main(argv: list[str] | None = None) -> int:
                         for item in created_items
                     },
                     compare_with_ai=compare_news_files_with_ai,
+                    persist=False,
                 )
                 duplicate_decision = archive_result["decision"]
                 if duplicate_decision["is_duplicate"]:
@@ -1800,19 +1801,6 @@ def main(argv: list[str] | None = None) -> int:
             LOGGER.error("Proje kalite kapısından geçemedi: %s", exc)
             return 1
 
-        used_urls.update(item["candidate"]["url"] for item in created_items)
-        archive.mark_project_used(
-            video_name=VIDEO_NAME,
-            items=[
-                {
-                    "archive_id": item["archive_record"]["archive_id"],
-                    "order": item["order"],
-                    "narration": item["summary"].summary_en,
-                }
-                for item in created_items
-            ],
-        )
-        save_state(used_urls)
         save_project_info(
             len(candidates),
             rankings,

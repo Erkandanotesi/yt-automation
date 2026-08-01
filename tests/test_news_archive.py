@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from news_archive import ArchiveSettings, NewsArchive, content_sha256
 
@@ -148,7 +149,69 @@ class NewsArchiveTests(unittest.TestCase):
                 compare_with_ai=lambda payload: self.fail("unrelated files reached AI"),
             )
             self.assertFalse(result["decision"]["is_duplicate"])
+
+    def test_inspection_does_not_archive_an_incomplete_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive = self.archive(Path(directory) / "archive")
+            result = archive.inspect_and_store(
+                canonical_url="https://example.com/pending",
+                title="Pending technology report",
+                source="Test Feed",
+                source_url="https://example.com/pending",
+                published_utc="2026-08-01T00:00:00+00:00",
+                category="tech",
+                article_text="A pending technology report with verified details. " * 20,
+                video_name="Video 10",
+                persist=False,
+            )
+            self.assertFalse(result["decision"]["is_duplicate"])
+            self.assertFalse(archive.index_path.exists())
+            self.assertFalse(archive.articles_root.exists())
             self.assertEqual(result["decision"]["method"], "local_no_match")
+
+    def test_final_render_promotes_project_news_and_url_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = self.archive(root / "archive")
+            project = root / "Video 10"
+            news = project / "Haberler"
+            render = project / "08_render"
+            news.mkdir(parents=True)
+            render.mkdir()
+            original = news / "01_story_pending-orijinal.txt"
+            narration = news / "01_story_pending.txt"
+            original.write_text("A completed technology report. " * 30, encoding="utf-8")
+            narration.write_text("A completed technology report.\n", encoding="utf-8")
+            (render / "render_report.json").write_text(
+                json.dumps({"quality": {"status": "passed"}}), encoding="utf-8"
+            )
+            (project / "project_info.json").write_text(json.dumps({
+                "video_name": "Video 10",
+                "category": "tech",
+                "stories": [{
+                    "story_id": "story_pending",
+                    "order": 1,
+                    "title": "Completed technology report",
+                    "source_title": "Completed technology report",
+                    "source": "Test Feed",
+                    "source_url": "https://example.com/completed",
+                    "published_utc": "2026-08-01T00:00:00+00:00",
+                    "original": str(original),
+                    "text": str(narration),
+                }],
+            }), encoding="utf-8")
+            history = root / "processed_urls.json"
+            with (
+                patch("news_archive.project_dir", return_value=project),
+                patch("news_archive.PROCESSED_URLS_FILE", history),
+            ):
+                result = archive.finalize_project(10)
+            self.assertEqual(result["status"], "ARCHIVE_FINALIZED")
+            self.assertEqual(archive.status()["used_record_count"], 1)
+            self.assertIn(
+                "https://example.com/completed",
+                json.loads(history.read_text(encoding="utf-8"))["used_urls"],
+            )
 
     def test_completed_project_backfill_is_idempotent_and_offline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -162,6 +225,11 @@ class NewsArchiveTests(unittest.TestCase):
             summary = news / "01_story_test.txt"
             original.write_text("A completed archived technology article. " * 20, encoding="utf-8")
             summary.write_text("A short narration of the archived article.\n", encoding="utf-8")
+            render_dir = project / "08_render"
+            render_dir.mkdir()
+            (render_dir / "render_report.json").write_text(
+                json.dumps({"quality": {"status": "passed"}}), encoding="utf-8"
+            )
             (project / "project_info.json").write_text(
                 json.dumps(
                     {

@@ -47,6 +47,7 @@ from file_utils import (  # noqa: E402
 from file_locations import PROJECTS_ROOT, project_dir, project_name  # noqa: E402
 from storyboard_stage import probe_image  # noqa: E402
 from tooling import find_executable  # noqa: E402
+from youtube_upload import format_youtube_title, next_publish_slot  # noqa: E402
 
 
 SCHEMA_VERSION = 1
@@ -821,12 +822,6 @@ def chapter_block(chapters: list[dict]) -> str:
 
 
 def build_description(copy: PublishingCopy, project: dict, chapters: list[dict]) -> str:
-    sources = []
-    for story in sorted(project["stories"], key=lambda item: int(item["order"])):
-        sources.append(
-            f"{int(story['order'])}. {story.get('source_title') or story['title']}\n"
-            f"{story['source_url']}"
-        )
     hashtags = " ".join(
         item if item.startswith("#") else f"#{item}" for item in copy.hashtags
     )
@@ -834,7 +829,7 @@ def build_description(copy: PublishingCopy, project: dict, chapters: list[dict])
         f"{copy.lead_description.strip()}\n\n"
         f"{copy.episode_description.strip()}\n\n"
         f"CHAPTERS\n{chapter_block(chapters)}\n\n"
-        f"SOURCES\n" + "\n\n".join(sources) + f"\n\n{hashtags}\n"
+        f"{hashtags}\n"
     )
 
 
@@ -1248,9 +1243,10 @@ def build_publish_package(
     chapters = build_chapters(project, timing)
     chapters_text = chapter_block(chapters)
     description = build_description(publishing_copy, project, chapters)
+    youtube_title = format_youtube_title(publishing_copy.recommended_title)
     if chapters_text not in description:
         raise RuntimeError("Description is missing its exact YouTube chapter block.")
-    atomic_write_text(output_dir / "title.txt", publishing_copy.recommended_title)
+    atomic_write_text(output_dir / "title.txt", youtube_title)
     atomic_write_text(output_dir / "description.txt", description)
     atomic_write_text(output_dir / "chapters.txt", chapters_text + "\n")
     atomic_write_text(output_dir / "tags.txt", ", ".join(publishing_copy.tags) + "\n")
@@ -1393,6 +1389,8 @@ def build_publish_package(
         }
     )
     final_video = video_dir / "08_render" / f"{project_name(video_number)}_final.mp4"
+    upload_manifest_path = output_dir / "youtube_upload_manifest.json"
+    scheduled_publish = next_publish_slot(exclude_manifest=upload_manifest_path)
     upload_manifest = {
         "schema_version": 1,
         "provider": "youtube_data_api_v3",
@@ -1403,14 +1401,16 @@ def build_publish_package(
         "thumbnail_sha256": thumbnails["final_sha256"],
         "metadata": {
             "snippet": {
-                "title": publishing_copy.recommended_title,
+                "title": youtube_title,
                 "description": description,
                 "tags": publishing_copy.tags,
                 "categoryId": "28",
                 "defaultLanguage": "en",
+                "defaultAudioLanguage": "en",
             },
             "status": {
                 "privacyStatus": "private",
+                "publishAt": scheduled_publish.isoformat(),
                 "selfDeclaredMadeForKids": False,
                 "embeddable": True,
                 "license": "youtube",
@@ -1424,9 +1424,12 @@ def build_publish_package(
             "thumbnail_after_video_insert": True,
         },
         "chapters_embedded_in_description": chapter_block(chapters) in description,
+        "scheduled_publish_at": scheduled_publish.isoformat(),
+        "scheduled_publish_at_utc": scheduled_publish.astimezone(timezone.utc).isoformat(),
+        "schedule_timezone": "GMT+03:00 Turkey",
+        "automatic_captions": "youtube_automatic_when_eligible",
         "created_at_utc": utc_now(),
     }
-    upload_manifest_path = output_dir / "youtube_upload_manifest.json"
     atomic_write_json(upload_manifest_path, upload_manifest)
     package["youtube_upload_manifest_file"] = str(upload_manifest_path)
     package["youtube_upload_ready"] = True

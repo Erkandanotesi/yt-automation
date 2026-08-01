@@ -78,8 +78,9 @@ Tech News/
 
 ## Pulled-news archive and duplicate prevention
 
-Every full article fetched by the news stage is saved under
-`data/news_archive/articles/`. Its filename contains both the stable story ID derived
+Fetched articles stay inside their `Video N` project while production is incomplete.
+Only after final-render QA passes are the selected sources committed under
+`data/news_archive/articles/`. Each filename contains both the stable story ID derived
 from the canonical URL and a normalized source-text SHA-256 prefix; `index.json`
 stores the complete hash. Successfully used
 narrations are mirrored under `data/news_archive/summaries/`, while `index.json`
@@ -95,7 +96,7 @@ Duplicate checks are deliberately layered:
 4. The decision is cached by the new/prior content hashes and model namespace, so an
    interrupted or repeated run does not pay for the same comparison twice.
 
-Completed `Video N` projects are backfilled automatically before a new news run. This
+Completed, QA-passing `Video N` projects are backfilled automatically before a new news run. This
 backfill performs no AI requests. Inspect it manually with:
 
 ```text
@@ -259,8 +260,14 @@ Video N/
 `-- state.json
 ```
 
-The upload manifest remains private-by-default and checksum-locks the final MP4 and
-thumbnail. Direct uploader commands still require `--confirm-upload`; the autonomous
+The upload manifest checksum-locks the final MP4 and thumbnail. Uploads are scheduled
+for the next free 12:00 or 20:00 GMT+3 Turkey slot. YouTube requires scheduled videos
+to be inserted as private; `publishAt` automatically makes them public at that slot.
+The title always ends in ` | Tech Reports`, descriptions omit a SOURCES section, and
+both metadata and original-audio language are set to English. YouTube then generates
+and publishes automatic English captions when the video is eligible; the Data API has
+no separate creator-side auto-caption switch. Direct uploader commands still require
+`--confirm-upload`; the autonomous
 launcher supplies it only after the visible two-minute opt-out countdown.
 
 Before the first autonomous upload, save a Google OAuth Desktop-app credential as

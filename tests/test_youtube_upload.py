@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from file_utils import sha256_file
 from youtube_upload import (
     YouTubeUploadSettings,
+    next_publish_slot,
     upload_from_manifest,
     validate_chapters,
     validate_upload_manifest,
@@ -208,11 +210,25 @@ class YouTubeUploadTests(unittest.TestCase):
         self.assertEqual(insert_kwargs["part"], "snippet,status")
         self.assertEqual(
             insert_kwargs["body"]["snippet"]["title"],
-            payload["metadata"]["snippet"]["title"],
+            payload["metadata"]["snippet"]["title"] + " | Tech Reports",
         )
         self.assertEqual(insert_kwargs["body"]["status"]["privacyStatus"], "private")
+        self.assertIn("publishAt", insert_kwargs["body"]["status"])
+        self.assertEqual(insert_kwargs["body"]["snippet"]["defaultLanguage"], "en")
+        self.assertEqual(insert_kwargs["body"]["snippet"]["defaultAudioLanguage"], "en")
+        self.assertNotIn("SOURCES", insert_kwargs["body"]["snippet"]["description"])
         self.assertFalse(insert_kwargs["notifySubscribers"])
         youtube.thumbnails.return_value.set.assert_called_once()
+
+    def test_turkey_schedule_uses_noon_then_twenty_hundred(self) -> None:
+        turkey = timezone(timedelta(hours=3))
+        with patch("youtube_upload._reserved_publish_times", return_value=set()):
+            before_noon = next_publish_slot(datetime(2026, 8, 1, 11, 0, tzinfo=turkey))
+            afternoon = next_publish_slot(datetime(2026, 8, 1, 18, 0, tzinfo=turkey))
+            evening = next_publish_slot(datetime(2026, 8, 1, 21, 0, tzinfo=turkey))
+        self.assertEqual(before_noon.isoformat(), "2026-08-01T12:00:00+03:00")
+        self.assertEqual(afternoon.isoformat(), "2026-08-01T20:00:00+03:00")
+        self.assertEqual(evening.isoformat(), "2026-08-02T12:00:00+03:00")
 
 
 if __name__ == "__main__":

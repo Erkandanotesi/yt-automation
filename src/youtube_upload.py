@@ -8,7 +8,7 @@ import random
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ from file_utils import (  # noqa: E402
     report_cli_error,
     sha256_file,
 )
-from file_locations import YOUTUBE_CREDENTIALS_ROOT, project_dir  # noqa: E402
+from file_locations import PROJECTS_ROOT, YOUTUBE_CREDENTIALS_ROOT, project_dir  # noqa: E402
 
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
@@ -39,10 +39,83 @@ RETRIABLE_403_REASONS = {"backendError", "rateLimitExceeded", "userRateLimitExce
 MINIMUM_CHAPTERS = 3
 MINIMUM_CHAPTER_SECONDS = 10
 CHUNK_GRANULARITY = 256 * 1024
+TURKEY_TIMEZONE = timezone(timedelta(hours=3), name="Turkey")
+PUBLISH_HOURS = (12, 20)
+TITLE_SUFFIX = " | Tech Reports"
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def format_youtube_title(value: str) -> str:
+    base = value.strip()
+    if base.casefold().endswith(TITLE_SUFFIX.casefold()):
+        base = base[: -len(TITLE_SUFFIX)].rstrip()
+    maximum = 100 - len(TITLE_SUFFIX)
+    if len(base) > maximum:
+        shortened = base[: maximum + 1].rsplit(" ", 1)[0].strip(" -|:;,. ")
+        base = shortened or base[:maximum].strip(" -|:;,. ")
+    if not base:
+        raise ValueError("YouTube title is empty before the Tech Reports suffix.")
+    return f"{base}{TITLE_SUFFIX}"
+
+
+def remove_sources_section(description: str) -> str:
+    lines = description.splitlines()
+    if "SOURCES" not in lines:
+        return description
+    start = lines.index("SOURCES")
+    end = start + 1
+    while end < len(lines) and not lines[end].lstrip().startswith("#"):
+        end += 1
+    cleaned = lines[:start] + lines[end:]
+    return "\n".join(cleaned).rstrip() + "\n"
+
+
+def _next_slot_after(moment: datetime) -> datetime:
+    local = moment.astimezone(TURKEY_TIMEZONE)
+    for hour in PUBLISH_HOURS:
+        candidate = local.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if candidate > local:
+            return candidate
+    return (local + timedelta(days=1)).replace(
+        hour=PUBLISH_HOURS[0], minute=0, second=0, microsecond=0
+    )
+
+
+def _reserved_publish_times(exclude_manifest: Path | None = None) -> set[datetime]:
+    reserved: set[datetime] = set()
+    for path in PROJECTS_ROOT.glob("Video */09_publish/youtube_upload_*.json"):
+        if exclude_manifest and path.resolve() == exclude_manifest.resolve():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        raw = payload.get("scheduled_publish_at") or payload.get("metadata", {}).get(
+            "status", {}
+        ).get("publishAt")
+        if not raw:
+            continue
+        try:
+            reserved.add(datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
+        except ValueError:
+            continue
+    return reserved
+
+
+def next_publish_slot(
+    now: datetime | None = None, *, exclude_manifest: Path | None = None
+) -> datetime:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ValueError("Schedule time must include a timezone.")
+    candidate = _next_slot_after(current)
+    reserved = _reserved_publish_times(exclude_manifest)
+    while any(candidate == item.astimezone(TURKEY_TIMEZONE) for item in reserved):
+        candidate = _next_slot_after(candidate)
+    return candidate
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -202,8 +275,10 @@ def validate_upload_manifest(
     status = metadata.get("status")
     if not isinstance(snippet, dict) or not isinstance(status, dict):
         raise ValueError("Manifest snippet/status metadata is missing.")
-    title = str(snippet.get("title", "")).strip()
-    description = str(snippet.get("description", "")).strip()
+    title = format_youtube_title(str(snippet.get("title", "")))
+    snippet["title"] = title
+    description = remove_sources_section(str(snippet.get("description", ""))).strip()
+    snippet["description"] = description
     if not title or len(title) > 100:
         raise ValueError("YouTube title must contain 1 to 100 characters.")
     if not description or len(description.encode("utf-8")) > 5000:
@@ -215,11 +290,28 @@ def validate_upload_manifest(
         raise ValueError("Combined YouTube tags exceed 500 characters.")
     chapters = validate_chapters(description)
 
-    # Environment values are applied at upload time, keeping one manifest usable
-    # across private validation and a later explicitly approved release policy.
+    # Environment values are applied at upload time. Scheduled publication must be
+    # inserted as private because that pairing is required by the YouTube Data API.
     snippet["categoryId"] = settings.category_id
     snippet["defaultLanguage"] = settings.default_language
-    status["privacyStatus"] = settings.privacy_status
+    snippet["defaultAudioLanguage"] = settings.default_language
+    scheduled_raw = manifest.get("scheduled_publish_at") or status.get("publishAt")
+    scheduled = None
+    if scheduled_raw:
+        try:
+            parsed = datetime.fromisoformat(str(scheduled_raw).replace("Z", "+00:00"))
+            local = parsed.astimezone(TURKEY_TIMEZONE)
+            if (
+                parsed > datetime.now(timezone.utc)
+                and local.hour in PUBLISH_HOURS
+                and local.minute == local.second == 0
+            ):
+                scheduled = local
+        except ValueError:
+            scheduled = None
+    scheduled = scheduled or next_publish_slot()
+    status["privacyStatus"] = "private"
+    status["publishAt"] = scheduled.isoformat()
     status["selfDeclaredMadeForKids"] = False
     upload = manifest.get("upload", {})
     if upload.get("mode") != "resumable":
@@ -235,7 +327,11 @@ def validate_upload_manifest(
         "thumbnail_sha256": manifest["thumbnail_sha256"],
         "thumbnail_bytes": thumbnail.stat().st_size,
         "title": title,
-        "privacy_status": settings.privacy_status,
+        "privacy_status": "private",
+        "scheduled_publish_at": scheduled.isoformat(),
+        "scheduled_publish_at_utc": scheduled.astimezone(timezone.utc).isoformat(),
+        "video_language": settings.default_language,
+        "automatic_captions": "youtube_automatic_when_eligible",
         "chapter_count": len(chapters),
         "notify_subscribers": settings.notify_subscribers,
         "resumable_chunk_size_bytes": settings.chunk_size_bytes,
@@ -463,8 +559,12 @@ def upload_from_manifest(
             "video_id": video_id,
             "watch_url": f"https://www.youtube.com/watch?v={video_id}",
             "video_sha256": validation["video_sha256"],
-            "privacy_status": settings.privacy_status,
+            "privacy_status": validation["privacy_status"],
             "uploaded_at_utc": utc_now(),
+            "scheduled_publish_at": validation["scheduled_publish_at"],
+            "scheduled_publish_at_utc": validation["scheduled_publish_at_utc"],
+            "video_language": validation["video_language"],
+            "automatic_captions": validation["automatic_captions"],
         }
         atomic_write_json(result_path, partial_result)
 
@@ -537,6 +637,7 @@ def main() -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             print(f"YouTube upload complete: {result['watch_url']}")
+            print(f"Scheduled public release (Turkey): {result['scheduled_publish_at']}")
         return 0
     except Exception as exc:  # noqa: BLE001
         report_cli_error("YOUTUBE UPLOAD", exc)

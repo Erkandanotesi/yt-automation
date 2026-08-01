@@ -15,7 +15,10 @@ from typing import Callable
 
 from file_locations import (
     NEWS_ARCHIVE_ROOT,
+    PROCESSED_URLS_FILE,
     PROJECTS_ROOT,
+    project_dir,
+    project_name,
 )
 from file_utils import atomic_write_json, atomic_write_text, sha256_text, stable_story_id
 
@@ -219,8 +222,11 @@ class NewsArchive:
         limit = self.settings.ai_text_character_limit
         previous: list[dict] = []
         for item in candidates:
-            source_path = Path(str(item["source_file"]))
-            if not source_path.is_file():
+            source_path = Path(str(item.get("source_file", "")))
+            previous_text = str(item.get("_article_text", ""))
+            if source_path.is_file():
+                previous_text = source_path.read_text(encoding="utf-8")
+            if not previous_text:
                 continue
             previous.append(
                 {
@@ -231,10 +237,13 @@ class NewsArchive:
                     "published_utc": item.get("published_utc", ""),
                     "source_url": item.get("source_url", ""),
                     "content_sha256": item.get("content_sha256", ""),
-                    "text": source_path.read_text(encoding="utf-8")[:limit],
+                    "text": previous_text[:limit],
                 }
             )
-        current_path = Path(str(record["source_file"]))
+        current_path = Path(str(record.get("source_file", "")))
+        current_text = str(record.get("_article_text", ""))
+        if current_path.is_file():
+            current_text = current_path.read_text(encoding="utf-8")
         return {
             "new_file": {
                 "archive_id": record["archive_id"],
@@ -244,7 +253,7 @@ class NewsArchive:
                 "published_utc": record.get("published_utc", ""),
                 "source_url": record.get("source_url", ""),
                 "content_sha256": record.get("content_sha256", ""),
-                "text": current_path.read_text(encoding="utf-8")[:limit],
+                "text": current_text[:limit],
             },
             "previous_files": previous,
         }
@@ -263,8 +272,10 @@ class NewsArchive:
         active_record_ids: set[str] | None = None,
         compare_with_ai: Callable[[dict], dict] | None = None,
         skip_duplicate_check: bool = False,
+        persist: bool = True,
     ) -> dict:
-        self.ensure_directories()
+        if persist:
+            self.ensure_directories()
         active_ids = set(active_record_ids or set())
         normalized = normalize_text(article_text)
         content_hash = sha256_text(normalized)
@@ -272,7 +283,7 @@ class NewsArchive:
         archive_id = f"pulled_{sha256_text(canonical_url + chr(10) + content_hash)[:16]}"
         filename = f"{story_id}__sha256-{content_hash[:16]}__{_slug(title)}.txt"
         source_path = self.articles_root / filename
-        if not source_path.is_file():
+        if persist and not source_path.is_file():
             atomic_write_text(source_path, article_text.strip() + "\n")
 
         index = self.load_index()
@@ -299,8 +310,10 @@ class NewsArchive:
             "last_seen_utc": utc_now(),
             "pulls": pulls,
             "uses": list(existing.get("uses", [])),
+            "_article_text": article_text if not persist else "",
         }
-        index["records"][archive_id] = record
+        if persist:
+            index["records"][archive_id] = record
 
         exact_matches = [
             item
@@ -392,12 +405,70 @@ class NewsArchive:
                             if key not in {"ai_request_performed", "cache_hit"}
                         },
                     }
-                    self._save_cache(cache)
+                    if persist:
+                        self._save_cache(cache)
 
         record["latest_duplicate_decision"] = decision
-        index["records"][archive_id] = record
-        self._save_index(index)
+        record.pop("_article_text", None)
+        if persist:
+            index["records"][archive_id] = record
+            self._save_index(index)
         return {"record": record, "decision": decision}
+
+    def finalize_project(self, video_number: int) -> dict:
+        """Archive news only after a checksum/QA-verified final render exists."""
+        video_root = project_dir(video_number)
+        render_report_path = video_root / "08_render" / "render_report.json"
+        project_info_path = video_root / "project_info.json"
+        if not render_report_path.is_file() or not project_info_path.is_file():
+            raise RuntimeError("Project news cannot be archived before the final render exists.")
+        render_report = self._load_json(render_report_path, {})
+        if render_report.get("quality", {}).get("status") != "passed":
+            raise RuntimeError("Project news cannot be archived before final render QA passes.")
+        project = self._load_json(project_info_path, {})
+        video_name = str(project.get("video_name") or project_name(video_number))
+        items: list[dict] = []
+        used_urls: set[str] = set()
+        for story in sorted(project.get("stories", []), key=lambda item: int(item["order"])):
+            source_path = Path(str(story.get("original", "")))
+            narration_path = Path(str(story.get("text", "")))
+            if not source_path.is_file() or not narration_path.is_file():
+                raise RuntimeError(f"Completed project story files are missing: {story.get('story_id')}")
+            result = self.inspect_and_store(
+                canonical_url=str(story.get("source_url", "")),
+                title=str(story.get("source_title") or story.get("title") or "Untitled news"),
+                source=str(story.get("source", "")),
+                source_url=str(story.get("source_url", "")),
+                published_utc=str(story.get("published_utc", "")),
+                category=str(project.get("category", "tech")),
+                article_text=source_path.read_text(encoding="utf-8"),
+                video_name=video_name,
+                skip_duplicate_check=True,
+            )
+            items.append({
+                "archive_id": result["record"]["archive_id"],
+                "order": int(story["order"]),
+                "narration": narration_path.read_text(encoding="utf-8"),
+            })
+            if story.get("source_url"):
+                used_urls.add(str(story["source_url"]))
+        updated = self.mark_project_used(video_name=video_name, items=items)
+        history = self._load_json(PROCESSED_URLS_FILE, {"used_urls": []})
+        used_urls.update(str(item) for item in history.get("used_urls", []))
+        atomic_write_json(PROCESSED_URLS_FILE, {
+            "updated_at": utc_now(),
+            "last_video": video_name,
+            "used_urls": sorted(used_urls),
+        })
+        marker = video_root / "orchestration" / "news_archive_finalized.json"
+        atomic_write_json(marker, {
+            "status": "ARCHIVE_FINALIZED",
+            "video_name": video_name,
+            "finalized_at_utc": utc_now(),
+            "record_count": len(updated),
+            "archive_ids": [item["archive_id"] for item in updated],
+        })
+        return {"status": "ARCHIVE_FINALIZED", "record_count": len(updated), "marker": str(marker)}
 
     def mark_used(
         self,
@@ -485,6 +556,14 @@ class NewsArchive:
                 skipped += 1
                 continue
             if manifest.get("status") != "complete":
+                continue
+            render_report = project_dir / "08_render" / "render_report.json"
+            if not render_report.is_file():
+                continue
+            try:
+                if json.loads(render_report.read_text(encoding="utf-8")).get("quality", {}).get("status") != "passed":
+                    continue
+            except (OSError, json.JSONDecodeError):
                 continue
             for story in manifest.get("stories", []):
                 source_path = Path(str(story.get("original", "")))

@@ -219,7 +219,8 @@ class PublishStageTests(unittest.TestCase):
         description = build_description(publishing_copy(), project, chapters)
 
         self.assertEqual(chapter_block(chapters).splitlines()[1], "1:39 Story 2")
-        self.assertIn(f"CHAPTERS\n{chapter_block(chapters)}\n\nSOURCES", description)
+        self.assertIn(f"CHAPTERS\n{chapter_block(chapters)}\n\n", description)
+        self.assertNotIn("SOURCES", description)
 
     def test_final_thumbnail_is_archived_with_prompt_and_alignment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
