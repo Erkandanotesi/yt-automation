@@ -20,6 +20,11 @@ klasöründedir. Bütün yolların tek kaynağı `src\file_locations.py` dosyas�
 `data\news_archive` çekilen haber metinlerini ID + SHA-256 ile saklar. Aynı metin
 yerel olarak engellenir; farklı feed'deki muhtemel aynı olaylar yalnızca gerektiğinde
 AI ile karşılaştırılır ve sonuç hash'lerle önbelleğe alınır.
+Çekilen sayfa ayrıca hata/CAPTCHA/erişim engeli, kısa veya tekrarlanan metin,
+başlık uyumsuzluğu ve düşük makale kalitesi kontrollerinden geçer.
+`-orijinal.txt` dosyaları okunabilir makale paragraflarıyla kaydedilir.
+Bozuk bir kaynak reddedilince aynı sıralama isteğinde hazırlanan RSS yedeklerinden
+sıradaki haber denenir. Yeterli sağlam haber yoksa eksik proje durur; bozuk metin kullanılmaz.
 
 2. KURULUM
 ----------
@@ -43,6 +48,11 @@ Tam yerel test:
 
 scripts\test_program.bat
 
+`.env` değerlerini göstermeden kodlama, tekrar ve bozuk Türkçe yorum kontrolü:
+
+scripts\env_doctor.bat status
+scripts\env_doctor.bat fix
+
 4. TEK DÜĞMELİ ÜRETİM
 ---------------------
 
@@ -54,6 +64,8 @@ news-studio.bat new --category tech --confirm-api-costs
 
 İlk çalışma haberleri, orijinal metinleri, sesleri ve zamanlamayı üretir; ardından
 `Video N\03_manual_separators` klasörünü oluşturup bekler.
+Bu anda önce okunacak `Haberler`, ardından separator dosyalarının kaydedileceği
+`03_manual_separators` klasörü otomatik açılır.
 
 Manuel separator dosyalarını ekledikten sonra:
 

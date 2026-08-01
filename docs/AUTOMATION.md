@@ -34,6 +34,7 @@ Tech News/
 |   |   |-- news_studio.py           # Milestone 10 orchestrator
 |   |   |-- news_pipeline.py
 |   |   |-- news_archive.py          # persistent hash + AI duplicate guard
+|   |   |-- env_doctor.py            # secret-safe .env encoding/duplicate repair
 |   |   |-- elevenlabs_tts.py
 |   |   |-- alignment_stage.py
 |   |   |-- manual_checkpoint.py
@@ -99,6 +100,20 @@ scripts\news_archive.bat status
 scripts\news_archive.bat backfill
 ```
 
+Before a pulled page reaches the archive or summary model, it must pass the source
+quality gate. The gate rejects HTTP errors, unsupported content types, access-denied
+and CAPTCHA pages, title/source mismatches, unusually short or sentence-poor text,
+low lexical diversity, and repeated boilerplate. If the full article fails, the RSS
+body is allowed only when it independently passes the same checks.
+Rejected sources never occupy a video slot. The news stage immediately tries the
+next ranked RSS candidate from a 15-story reserve prepared in the same ranking call.
+If the feeds still cannot supply the requested number of valid articles, the project
+is marked incomplete; broken material is never used merely to fill the quota.
+
+Accepted source prose is normalized into short article paragraphs before it is saved
+as `Haberler/*-orijinal.txt`. Whitespace-only formatting does not change duplicate
+identity because the archive hashes normalized content.
+
 Only folders named exactly `Video N` participate in project numbering.
 
 ## Stable commands
@@ -124,7 +139,10 @@ generators retain their own confirmation gates as a second safety layer.
 
 1. Preflight validates the modular layout, configuration, assets, and tools.
 2. `new` creates the next numbered project and runs news, TTS, and alignment.
-3. The flow creates `03_manual_separators/` and stops without losing state.
+3. The flow creates `03_manual_separators/` and stops without losing state. Windows
+   Explorer opens `Haberler/` first for reading and then `03_manual_separators/` as
+   the save destination. Set `AUTO_OPEN_SEPARATOR_FOLDERS=false` only on a headless
+   machine.
 4. `resume` validates the manual separators, then produces storyboard images, archive
    selections, captions, effects, and the 60-second review preview.
 5. The review preview must be approved. Approval is tied to its SHA-256; replacing the
@@ -140,6 +158,18 @@ stopped.
 
 Stage events are appended to `Video N/orchestration/events.jsonl`; full subprocess
 output is stored under `Video N/orchestration/logs/`.
+
+## Environment-file health
+
+The environment doctor never displays assignment values. It reports encoding,
+duplicate variable names, BOM state, and mojibake comment line numbers. `fix` keeps
+the last assignment, removes earlier duplicates, repairs comments, and writes UTF-8
+without BOM:
+
+```text
+scripts\env_doctor.bat status
+scripts\env_doctor.bat fix
+```
 
 ## Generated project structure
 

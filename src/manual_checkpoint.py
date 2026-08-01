@@ -49,6 +49,15 @@ def env_list(name: str, default: str) -> tuple[str, ...]:
     )
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "true" if default else "false").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false.")
+
+
 @dataclass(frozen=True)
 class SeparatorSpec:
     width: int = 1920
@@ -251,6 +260,7 @@ def prepare_checkpoint(
         {
             "input_fingerprint": fingerprint,
             "project_directory": str(video_dir),
+            "news_directory": str(video_dir / "Haberler"),
             "separator_directory": str(paths[0].parent),
             "required_count": required_count,
             "expected_files": [str(path) for path in paths],
@@ -266,6 +276,44 @@ def prepare_checkpoint(
         atomic_write_json(timing_path, timing)
     _write_stage(state_path, state, stage)
     return state_path, state, stage, timing
+
+
+def _open_directory(path: Path) -> None:
+    if os.name == "nt":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return
+    command = ["open", str(path)] if sys.platform == "darwin" else ["xdg-open", str(path)]
+    subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def open_checkpoint_folders(
+    stage: dict,
+    *,
+    opener=None,
+) -> list[Path]:
+    """Open source news first, then the folder where separators must be saved."""
+    if not env_bool("AUTO_OPEN_SEPARATOR_FOLDERS", True):
+        return []
+    open_function = opener or _open_directory
+    folders = [
+        Path(stage["news_directory"]),
+        Path(stage["separator_directory"]),
+    ]
+    opened: list[Path] = []
+    for folder in folders:
+        if not folder.is_dir():
+            print(f"[CHECKPOINT WARNING] Folder does not exist: {folder}")
+            continue
+        try:
+            open_function(folder)
+            opened.append(folder)
+        except OSError as exc:
+            print(f"[CHECKPOINT WARNING] Could not open {folder}: {exc}")
+    return opened
 
 
 def parse_frame_rate(value: str) -> float:
@@ -639,6 +687,7 @@ def print_checkpoint(stage: dict) -> None:
     )
     print()
     print(f"Project folder   : {stage['project_directory']}")
+    print(f"News to review   : {stage['news_directory']}")
     print(f"Separator folder : {stage['separator_directory']}")
     print(f"Required files   : {stage['required_count']}")
     for path in stage["expected_files"]:
@@ -725,6 +774,7 @@ def main() -> int:
             raise ValueError("--video must be 1 or greater.")
         if args.action == "prepare":
             _, _, stage, _ = prepare_checkpoint(args.video)
+            open_checkpoint_folders(stage)
             print_checkpoint(stage)
             return 0
         if args.action == "validate":
@@ -751,6 +801,9 @@ def main() -> int:
             )
             return 0
 
+        _, _, stage, _ = prepare_checkpoint(args.video)
+        if stage["status"] != "READY":
+            open_checkpoint_folders(stage)
         result = prompt_checkpoint(args.video)
         return 0 if result == "READY" else 2
     except Exception as exc:  # noqa: BLE001

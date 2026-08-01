@@ -11,6 +11,7 @@ from manual_checkpoint import (
     SeparatorSpec,
     cancel_checkpoint,
     prepare_checkpoint,
+    open_checkpoint_folders,
     prompt_checkpoint,
     validate_checkpoint,
     validate_separator_file,
@@ -149,6 +150,26 @@ def make_separator(
 
 
 class ManualCheckpointTests(unittest.TestCase):
+    def test_checkpoint_opens_news_then_separator_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            news = root / "Haberler"
+            separators = root / "03_manual_separators"
+            news.mkdir()
+            separators.mkdir()
+            opened = []
+
+            result = open_checkpoint_folders(
+                {
+                    "news_directory": str(news),
+                    "separator_directory": str(separators),
+                },
+                opener=opened.append,
+            )
+
+            self.assertEqual(result, [news, separators])
+            self.assertEqual(opened, [news, separators])
+
     def test_prepare_creates_folder_state_and_survives_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

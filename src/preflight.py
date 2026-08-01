@@ -48,6 +48,7 @@ from render_stage import RenderSettings  # noqa: E402
 from publish_stage import PublishSettings  # noqa: E402
 from youtube_upload import YouTubeUploadSettings  # noqa: E402
 from news_archive import ArchiveSettings  # noqa: E402
+from env_doctor import inspect_env  # noqa: E402
 
 
 PLACEHOLDER_MARKERS = (
@@ -257,6 +258,27 @@ def collect_checks() -> list[Check]:
         (AUTOMATION_ROOT / ".env").is_file(),
         str(AUTOMATION_ROOT / ".env"),
     )
+    try:
+        env_report = inspect_env(AUTOMATION_ROOT / ".env")
+    except (OSError, RuntimeError) as exc:
+        add("Environment structure", False, str(exc))
+    else:
+        env_clean = (
+            env_report["encoding"] == "utf-8"
+            and not env_report["has_utf8_bom"]
+            and not env_report["duplicate_variables"]
+            and not env_report["mojibake_comment_lines"]
+        )
+        add(
+            "Environment structure",
+            env_clean,
+            (
+                f"encoding={env_report['encoding']}; BOM={env_report['has_utf8_bom']}; "
+                f"variables={env_report['variable_count']}; "
+                f"duplicates={sorted(env_report['duplicate_variables'])}; "
+                f"mojibake comments={env_report['mojibake_comment_lines']}"
+            ),
+        )
     ignored, ignore_detail = git_ignores_env()
     add("Secret exclusion", ignored, ignore_detail)
     ignored_state, state_detail = git_ignores_runtime_state()

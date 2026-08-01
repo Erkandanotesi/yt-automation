@@ -24,8 +24,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from trafilatura import extract
 
 from article_validation import (
+    article_quality_report,
+    format_article_text,
     source_matches_title,
-    title_source_relevance,
+    validate_article_quality,
     validate_unique_source_content,
 )
 from content_validation import (
@@ -83,7 +85,7 @@ MAX_AGE_HOURS = int(os.getenv("MAX_AGE_HOURS", "36"))
 MAX_CANDIDATES = int(os.getenv("MAX_CANDIDATES", "25"))
 MAX_FEED_ITEMS = int(os.getenv("MAX_FEED_ITEMS", "30"))
 TOP_N_DEFAULT = int(os.getenv("TOP_N", "5"))
-RANKING_RESERVE = int(os.getenv("RANKING_RESERVE", "5"))
+RANKING_RESERVE = int(os.getenv("RANKING_RESERVE", "15"))
 MIN_SCORE = int(os.getenv("MIN_SCORE", "65"))
 MIN_ARTICLE_CHARS = int(os.getenv("MIN_ARTICLE_CHARS", "500"))
 REQUIRE_FULL_TOP_N = os.getenv("REQUIRE_FULL_TOP_N", "true").strip().lower() in {
@@ -798,8 +800,9 @@ FILES:
 # =========================================================
 
 def rank_candidates(candidates: list[dict], channel_profile: str) -> list[RankedNews]:
-    # Rank a few reserves so an unreadable or invalid story can be replaced
-    # without paying for a second ranking request.
+    # Rank a large reserve in the same request so an unreadable, duplicate, or
+    # invalid article is replaced by another RSS candidate without paying for
+    # a second ranking request.
     target_count = min(len(candidates), TOP_N + max(0, RANKING_RESERVE))
     ranking_pool_size = min(len(candidates), max(12, target_count * 2))
     ranking_pool = candidates[:ranking_pool_size]
@@ -873,6 +876,13 @@ def extract_article_text(candidate: dict) -> str:
     def operation() -> tuple[str, str]:
         response = HTTP.get(candidate["url"], timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+        if content_type and content_type not in {
+            "text/html",
+            "application/xhtml+xml",
+            "text/plain",
+        }:
+            raise RuntimeError(f"Unsupported article content type: {content_type}")
 
         extracted = extract(
             response.text,
@@ -883,8 +893,8 @@ def extract_article_text(candidate: dict) -> str:
             output_format="txt",
         )
 
-        cleaned = re.sub(r"\s+", " ", extracted or "").strip()[:35000]
-        return cleaned, str(response.url)
+        formatted = format_article_text(extracted or "", maximum_characters=35000)
+        return formatted, str(response.url)
 
     try:
         article_text, final_url = retry_call(
@@ -892,56 +902,54 @@ def extract_article_text(candidate: dict) -> str:
             attempts=RSS_RETRIES,
             description=f"Haber metni çıkarma: {candidate['url']}",
         )
-        relevance = title_source_relevance(candidate["title"], article_text)
-        if (
-            len(article_text) >= MIN_ARTICLE_CHARS
-            and relevance["status"] == "passed"
-        ):
+        quality = article_quality_report(
+            candidate["title"],
+            article_text,
+            minimum_characters=MIN_ARTICLE_CHARS,
+        )
+        if quality["status"] == "passed":
             candidate["extraction"] = {
                 "method": "article_page",
                 "requested_url": candidate["url"],
                 "final_url": final_url,
-                "title_relevance": relevance,
+                "quality": quality,
             }
             return article_text
         candidate["extraction"] = {
             "method": "article_page_rejected",
             "requested_url": candidate["url"],
             "final_url": final_url,
-            "title_relevance": relevance,
+            "quality": quality,
         }
         LOGGER.warning(
-            "Fetched page does not match the RSS title; trying RSS text: "
-            "%s | match_ratio=%.2f | final_url=%s",
+            "Fetched page failed the article quality gate; trying RSS text: "
+            "%s | errors=%s | final_url=%s",
             candidate["title"],
-            relevance["match_ratio"],
+            quality["errors"],
             final_url,
         )
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("Full article page could not be used: %s", exc)
 
-    rss_text = re.sub(
-        r"\s+",
-        " ",
-        str(candidate.get("rss_text", "")),
-    ).strip()
-    relevance = title_source_relevance(candidate["title"], rss_text)
-    if (
-        len(rss_text) < MIN_ARTICLE_CHARS
-        or relevance["status"] != "passed"
-    ):
+    rss_text = format_article_text(str(candidate.get("rss_text", "")))
+    quality = article_quality_report(
+        candidate["title"],
+        rss_text,
+        minimum_characters=MIN_ARTICLE_CHARS,
+    )
+    if quality["status"] != "passed":
         raise RuntimeError(
-            "Neither the article page nor RSS text matches the candidate title: "
-            f"{candidate['title']}"
+            "Neither the article page nor RSS text passed the source quality gate: "
+            f"{candidate['title']} | errors={quality['errors']}"
         )
     LOGGER.warning("Using matching RSS text as the source fallback.")
     candidate["extraction"] = {
         "method": "rss_fallback",
         "requested_url": candidate["url"],
         "final_url": candidate.get("extraction", {}).get("final_url", ""),
-        "title_relevance": relevance,
+        "quality": quality,
     }
-    return rss_text[:35000]
+    return rss_text
 
 
 # =========================================================
@@ -1086,10 +1094,11 @@ def save_news_file(
 ) -> tuple[Path, Path, dict]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    readable_article = format_article_text(article_text)
     validation = validate_narration(
         title=summary.title_en,
         narration=summary.summary_en,
-        source_text=article_text,
+        source_text=readable_article,
         factual_review=summary.factual_review.model_dump(),
     )
     base_name = f"{order:02d}_{story_id}_{slugify(summary.title_en, 65)}"
@@ -1098,7 +1107,7 @@ def save_news_file(
     narration = summary.summary_en.strip()
 
     atomic_write_text(text_path, narration + "\n")
-    atomic_write_text(original_path, article_text.strip() + "\n")
+    atomic_write_text(original_path, readable_article + "\n")
     return text_path, original_path, validation
 
 
@@ -1150,6 +1159,11 @@ def validate_created_items(created_items: list[dict]) -> None:
         raise RuntimeError("Created stories are not in descending ranking order.")
 
     for item in created_items:
+        validate_article_quality(
+            item["candidate"]["title"],
+            item["article_text"],
+            minimum_characters=MIN_ARTICLE_CHARS,
+        )
         if not source_matches_title(
             item["candidate"]["title"],
             item["article_text"],
@@ -1505,6 +1519,11 @@ def validate_configuration() -> None:
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
 
     ArchiveSettings.from_environment().validate()
+
+    if RANKING_RESERVE < 0:
+        raise ValueError("RANKING_RESERVE cannot be negative.")
+    if MAX_CANDIDATES < TOP_N:
+        raise ValueError("MAX_CANDIDATES must be at least TOP_N.")
 
     if PROVIDER == "gemini" and not os.getenv("GEMINI_API_KEY"):
         raise RuntimeError(
