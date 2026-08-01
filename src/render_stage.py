@@ -34,6 +34,10 @@ from file_utils import (  # noqa: E402
     sha256_file,
 )
 from file_locations import project_dir, project_name  # noqa: E402
+from motion_filters import (  # noqa: E402
+    MOTION_RENDERER_VERSION,
+    smooth_push_in_filter,
+)
 from separator_policy import require_separator_checkpoint  # noqa: E402
 from tooling import find_executable  # noqa: E402
 
@@ -486,6 +490,7 @@ def _segment_fingerprint(event: dict, settings: RenderSettings) -> str:
             "height": settings.height,
             "fps": settings.fps,
             "crf": settings.segment_crf,
+            "visual_motion_renderer_version": MOTION_RENDERER_VERSION,
         }
     )
 
@@ -512,18 +517,18 @@ def _render_visual_segments(
         frames = max(1, round(duration * settings.fps))
         motion = event.get("motion", {})
         maximum_scale = float(motion.get("maximum_scale", 1.0))
-        if motion.get("type") == "slow_push_in" and maximum_scale > 1.0:
-            vf = (
-                f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase,"
-                f"crop={settings.width}:{settings.height},"
-                f"zoompan=z='1+({maximum_scale}-1)*on/{max(1, frames - 1)}':"
-                "x='floor((iw-iw/zoom)/2)':y='floor((ih-ih/zoom)/2)':"
-                f"d={frames}:s={settings.width}x{settings.height}:fps={settings.fps},"
-                "format=yuv420p"
+        if motion.get("type") in {"smooth_push_in", "slow_push_in"} and maximum_scale > 1.0:
+            vf = smooth_push_in_filter(
+                width=settings.width,
+                height=settings.height,
+                fps=settings.fps,
+                duration=duration,
+                frames=frames,
+                maximum_scale=maximum_scale,
             )
         else:
             vf = (
-                f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase,"
+                f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={settings.width}:{settings.height},"
                 f"tpad=stop_mode=clone:stop_duration={duration},"
                 f"fps={settings.fps},format=yuv420p"

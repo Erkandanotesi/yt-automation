@@ -104,7 +104,7 @@ Create `timeline.json` before rendering. It contains exact events such as:
   "story_id": "02",
   "type": "archive_image",
   "asset": "D:/.../Assets/Media/Android/example.jpg",
-  "motion": "slow_push_in",
+  "motion": "smooth_push_in",
   "caption_segment_ids": [31, 32]
 }
 ```
@@ -512,13 +512,16 @@ and relevance evidence.
 
 ## Milestone 6 — Motion, TV treatment, effects, sound, and music
 
-**Status: complete (2026-07-31).**
+**Status: complete (2026-08-01).**
 
 ### Image motion
 
-Use static center-cropped images until the renderer has a true subpixel transform.
-FFmpeg `zoompan` integer positioning is not acceptable because it creates visible
-pixel-by-pixel stepping. No directional pan, reverse zoom, or random movement is used.
+Hero and archive images use a restrained center push-in rendered with FFmpeg's
+floating-point `perspective` transform and cubic interpolation. Motion follows a
+smoothstep curve so it accelerates and decelerates gently. The quantized `zoompan`
+path is prohibited because its whole-pixel crop positions create visible stepping.
+One-second inter-story holds remain static; no directional pan, reverse zoom, or
+random movement is used.
 
 ### TV frame and glitch
 
@@ -569,8 +572,10 @@ Starting mix targets should be treated as test values, not laws:
 
 - `effects_stage.py` validates finalized separators, complete Milestone 5 coverage,
   and basic captions before writing `07_effects/effects_plan.json`.
-- Every hero/archive interval is static and center-cropped; directional pans and the
-  quantized `zoompan` path are prohibited.
+- Every hero/archive interval receives a deterministic, center-safe subpixel push-in.
+  `motion_filters.py` owns the FFmpeg expression, and render-cache versioning prevents
+  older quantized segments from being reused. Directional pans and the `zoompan` path
+  are prohibited.
 - Each boundary between stories has an exact one-second silent hold. The prior
   image and repeated music continue, while narration, captions, and story title stop.
 - The native-alpha `green-screen-tv-effect.mov` loops over story images and gap holds.

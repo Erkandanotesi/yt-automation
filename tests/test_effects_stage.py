@@ -301,7 +301,14 @@ class EffectsStageTests(unittest.TestCase):
             self.assertEqual(len(plan["visual_events"]), 4)
             self.assertEqual(
                 [item["motion"]["type"] for item in plan["visual_events"]],
-                ["static"] * 4,
+                ["smooth_push_in"] * 4,
+            )
+            self.assertTrue(
+                all(
+                    item["motion"]["renderer"] == "perspective_cubic_subpixel"
+                    and item["motion"]["easing"] == "smoothstep"
+                    for item in plan["visual_events"]
+                )
             )
             self.assertTrue(plan["quality"]["no_directional_pans"])
             self.assertTrue(plan["quality"]["glitch_under_three_percent"])

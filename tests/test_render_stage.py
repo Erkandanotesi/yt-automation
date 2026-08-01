@@ -13,6 +13,7 @@ from render_stage import (
     _render_preview,
     build_render_plan,
 )
+from motion_filters import smooth_push_in_filter
 
 
 def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
@@ -106,6 +107,24 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
 
 
 class RenderStageTests(unittest.TestCase):
+    def test_smooth_push_in_uses_floating_point_cubic_motion(self) -> None:
+        value = smooth_push_in_filter(
+            width=1920,
+            height=1080,
+            fps=30,
+            duration=3.0,
+            frames=90,
+            maximum_scale=1.02,
+        )
+
+        self.assertIn("flags=lanczos", value)
+        self.assertIn("perspective=", value)
+        self.assertIn("eval=frame", value)
+        self.assertIn("interpolation=cubic", value)
+        self.assertIn("on/89", value)
+        self.assertNotIn("zoompan", value)
+        self.assertNotIn("floor(", value)
+
     def test_timeline_paper_and_shutter_sfx_are_delayed_and_mixed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -43,6 +43,7 @@ from file_locations import (  # noqa: E402
 )
 from separator_policy import require_separator_checkpoint  # noqa: E402
 from tooling import find_executable  # noqa: E402
+from motion_filters import MOTION_RENDERER_NAME, smooth_push_in_filter  # noqa: E402
 
 
 EFFECTS_SCHEMA_VERSION = 1
@@ -78,8 +79,8 @@ class EffectsSettings:
     width: int = 1920
     height: int = 1080
     fps: int = 30
-    motion_scale: float = 1.0
-    hero_motion_scale: float = 1.0
+    motion_scale: float = 1.020
+    hero_motion_scale: float = 1.015
     tv_frame_enabled: bool = True
     tv_frame_file: Path = TV_FRAME_FILE
     tv_frame_opacity: float = 1.0
@@ -123,9 +124,9 @@ class EffectsSettings:
             width=int(os.getenv("EFFECTS_WIDTH", "1920")),
             height=int(os.getenv("EFFECTS_HEIGHT", "1080")),
             fps=int(os.getenv("EFFECTS_FPS", "30")),
-            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.0")),
+            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.020")),
             hero_motion_scale=float(
-                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.0")
+                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.015")
             ),
             tv_frame_enabled=_bool_env("TV_FRAME_ENABLED", True),
             tv_frame_file=_path_env(
@@ -542,9 +543,17 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
     for index, event in enumerate(raw_events):
         event["event_id"] = f"visual_{index + 1:04d}"
         event["duration"] = round(event["timeline_end"] - event["timeline_start"], 6)
+        is_hold = event["source_type"] == "inter_story_hold"
+        maximum_scale = (
+            settings.hero_motion_scale
+            if event["source_type"] == "generated_hero"
+            else settings.motion_scale
+        )
         event["motion"] = {
-            "type": "static",
-            "maximum_scale": 1.0,
+            "type": "static" if is_hold or maximum_scale <= 1.0 else "smooth_push_in",
+            "maximum_scale": 1.0 if is_hold else maximum_scale,
+            "renderer": MOTION_RENDERER_NAME,
+            "easing": "smoothstep",
             "focus": "center_safe",
             "vertical_pan": False,
             "caption_safe_bottom_percent": 22,
@@ -914,7 +923,10 @@ def _filter_templates(settings: EffectsSettings) -> dict:
             "captions",
         ],
         "motion": {
-            "slow_push_in": "zoompan=z='1+(MAX_SCALE-1)*on/(FRAMES-1)':x='floor((iw-iw/zoom)/2)':y='floor((ih-ih/zoom)/2)'",
+            "smooth_push_in": (
+                "tpad,fps,perspective=sense=source:eval=frame:"
+                "interpolation=cubic (floating-point center crop + smoothstep easing)"
+            ),
             "static": "scale=OUTPUT_WIDTH:OUTPUT_HEIGHT:force_original_aspect_ratio=increase,crop=OUTPUT_WIDTH:OUTPUT_HEIGHT",
         },
         "glitch": (
@@ -1148,12 +1160,16 @@ def render_reference_proof(
     ]
     for offset in range(1, 4):
         scale = settings.motion_scale
-        zoom = f"1+({scale}-1)*on/{frames - 1}"
-        x = "floor((iw-iw/zoom)/2)"
+        motion_filter = smooth_push_in_filter(
+            width=width,
+            height=height,
+            fps=fps,
+            duration=image_duration,
+            frames=frames,
+            maximum_scale=scale,
+        )
         filters.append(
-            f"[{offset}:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height},zoompan=z='{zoom}':x='{x}':"
-            f"y='floor((ih-ih/zoom)/2)':d={frames}:s={width}x{height}:fps={fps},"
+            f"[{offset}:v]{motion_filter},"
             f"trim=duration={image_duration},setpts=PTS-STARTPTS[v{offset}]"
         )
     filters.append("[v1][v2][v3]concat=n=3:v=1:a=0[vbase]")
@@ -1602,7 +1618,7 @@ def build_effects_plan(
             "visual_coverage": coverage,
             "motion_is_deterministic": True,
             "motion_is_consistent": all(
-                item["motion"]["type"] in {"slow_push_in", "static"}
+                item["motion"]["type"] in {"smooth_push_in", "slow_push_in", "static"}
                 for item in visuals
             ),
             "no_directional_pans": all(
