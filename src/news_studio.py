@@ -1507,6 +1507,11 @@ def main() -> int:
                 recover_stale_lock=args.recover_stale_lock,
                 dry_run=args.dry_run,
                 manual_separator_mode="skip" if args.skip_separators else "manual",
+                progress=(
+                    None
+                    if args.json or args.dry_run
+                    else ProgressDisplay(number)
+                ),
             )
         else:
             number = parse_video_number(args.video)
@@ -1522,6 +1527,11 @@ def main() -> int:
                     recover_stale_lock=args.recover_stale_lock,
                     dry_run=args.dry_run,
                     manual_separator_mode="skip" if args.skip_separators else "manual",
+                    progress=(
+                        None
+                        if args.json or args.dry_run
+                        else ProgressDisplay(number)
+                    ),
                 )
             elif args.command == "status":
                 result = collect_project_status(number)

@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from news_studio import (
     FLOW_STAGES,
@@ -17,6 +18,7 @@ from news_studio import (
     _preview_status,
     approve_preview,
     interactive,
+    main,
     run_preflight,
     run_flow,
     timed_choice,
@@ -34,6 +36,32 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_direct_resume_enables_progress_ui_unless_json_requested(self) -> None:
+        arguments = SimpleNamespace(
+            command="resume",
+            video="8",
+            confirm_api_costs=True,
+            approve_preview=False,
+            recover_stale_lock=False,
+            dry_run=False,
+            skip_separators=False,
+            json=False,
+        )
+        parser = MagicMock()
+        parser.parse_args.return_value = arguments
+        with (
+            patch("news_studio.build_parser", return_value=parser),
+            patch("news_studio._read_json", return_value={"category": "tech"}),
+            patch(
+                "news_studio.run_flow",
+                return_value={"status": "COMPLETE", "video_number": 8},
+            ) as run,
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(main(), 0)
+
+        self.assertIsInstance(run.call_args.kwargs["progress"], ProgressDisplay)
+
     def test_failed_stage_log_contains_traceback_command_and_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 8"
