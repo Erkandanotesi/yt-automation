@@ -41,6 +41,7 @@ GAMING_FEEDS_FILE = CONFIG_ROOT / "gaming_feeds.opml"
 TECH_PROFILE_FILE = CONFIG_ROOT / "channel_profile.txt"
 GAMING_PROFILE_FILE = CONFIG_ROOT / "gaming_channel_profile.txt"
 PROCESSED_URLS_FILE = DATA_ROOT / "processed_urls.json"
+NEWS_HISTORY_RESET_FILE = DATA_ROOT / "news_history_reset.json"
 NEWS_ARCHIVE_ROOT = _configured_path(
     "NEWS_ARCHIVE_PATH",
     DATA_ROOT / "news_archive",

@@ -29,6 +29,7 @@ Tech News/
 |   |-- .env.example
 |   |-- requirements.txt
 |   |-- create_video.bat             # autonomous/scheduled one-button workflow
+|   |-- clean_news_history.bat       # recoverable URL + duplicate-history reset
 |   |-- news-studio.bat              # stable CLI wrapper
 |   |-- setup.bat
 |   |-- src/
@@ -58,7 +59,9 @@ Tech News/
 |   |   `-- gaming_channel_profile.txt
 |   |-- data/
 |   |   |-- processed_urls.json      # runtime history; ignored by Git
+|   |   |-- news_history_reset.json  # prevents old projects reappearing after reset
 |   |   |-- news_archive/            # pulled sources, summaries, index, AI cache
+|   |   |-- history_backups/         # timestamped recoverable cleanup backups
 |   |   |-- indexes/                 # generated media indexes/reports
 |   |   `-- benchmarks/
 |   |-- docs/
@@ -103,6 +106,17 @@ backfill performs no AI requests. Inspect it manually with:
 scripts\news_archive.bat status
 scripts\news_archive.bat backfill
 ```
+
+To reset all previous-news history without deleting it permanently, close any running
+News Studio process and double-click `clean_news_history.bat`. Type `CLEAN` at the
+confirmation prompt. The command moves `processed_urls.json`, `news_archive/`, and any
+earlier reset policy into `data/history_backups/<timestamp>/`, creates empty URL and
+semantic-duplicate stores, and records every currently existing `Video N` directory in
+`news_history_reset.json`. Those old projects are then excluded from automatic archive
+backfill, so the reset is not silently undone on the next run. Newly completed videos
+are archived normally. Use `clean_news_history.bat --dry-run` to inspect the operation
+or `clean_news_history.bat --yes` for an explicitly authorized non-interactive reset.
+The cleaner refuses to run while a project lock exists.
 
 Before a pulled page reaches the archive or summary model, it must pass the source
 quality gate. The gate rejects HTTP errors, unsupported content types, access-denied

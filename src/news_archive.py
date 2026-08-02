@@ -15,6 +15,7 @@ from typing import Callable
 
 from file_locations import (
     NEWS_ARCHIVE_ROOT,
+    NEWS_HISTORY_RESET_FILE,
     PROCESSED_URLS_FILE,
     PROJECTS_ROOT,
     project_dir,
@@ -535,7 +536,13 @@ class NewsArchive:
     def backfill_projects(self, projects_root: Path = PROJECTS_ROOT) -> dict:
         imported = 0
         skipped = 0
+        skipped_by_history_reset = 0
         already_present = 0
+        reset_policy = self._load_json(NEWS_HISTORY_RESET_FILE, {})
+        excluded_projects = {
+            str(value)
+            for value in reset_policy.get("excluded_backfill_projects", [])
+        }
         existing = self.load_index()
         known_uses = {
             (
@@ -547,6 +554,9 @@ class NewsArchive:
             for use in record.get("uses", [])
         }
         for project_dir in sorted(projects_root.glob("Video *")):
+            if project_dir.name in excluded_projects:
+                skipped_by_history_reset += 1
+                continue
             manifest_path = project_dir / "project_info.json"
             if not manifest_path.is_file():
                 continue
@@ -606,6 +616,7 @@ class NewsArchive:
             "imported": imported,
             "already_present": already_present,
             "skipped": skipped,
+            "skipped_by_history_reset": skipped_by_history_reset,
             "archive_root": str(self.root),
         }
 

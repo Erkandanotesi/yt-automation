@@ -8,6 +8,7 @@ from file_locations import (
     DATA_ROOT,
     EDITING_REFERENCE_FILE,
     PROCESSED_URLS_FILE,
+    NEWS_HISTORY_RESET_FILE,
     NEWS_ARCHIVE_ROOT,
     SOURCE_ROOT,
     YOUTUBE_SCHEDULE_STATE_FILE,
@@ -21,6 +22,10 @@ class FileLocationTests(unittest.TestCase):
         self.assertEqual(CONFIG_ROOT, AUTOMATION_ROOT / "config")
         self.assertEqual(DATA_ROOT, AUTOMATION_ROOT / "data")
         self.assertEqual(PROCESSED_URLS_FILE, DATA_ROOT / "processed_urls.json")
+        self.assertEqual(
+            NEWS_HISTORY_RESET_FILE,
+            DATA_ROOT / "news_history_reset.json",
+        )
         self.assertEqual(NEWS_ARCHIVE_ROOT, DATA_ROOT / "news_archive")
         self.assertEqual(
             YOUTUBE_SCHEDULE_STATE_FILE, DATA_ROOT / "youtube_schedule_state.json"
