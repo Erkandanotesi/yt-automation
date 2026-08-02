@@ -20,9 +20,12 @@ from media_selection_stage import (
     _resolve_context_safe_fallbacks,
     _save_selector_cache,
     _validate_decisions,
+    _window_excerpt,
+    _window_text,
     _window_entities,
     build_archive_windows,
     coverage_quality,
+    infer_scene_intent,
     resolve_wikimedia_fallbacks,
     run_media_selection,
     shortlist_assets,
@@ -143,6 +146,92 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_window_uses_full_containing_sentence_for_entity_context(self) -> None:
+        story = {
+            "title": "Microsoft responds",
+            "phrases": [
+                {
+                    "start": 0,
+                    "end": 2,
+                    "text": "Microsoft has confirmed that,",
+                },
+                {
+                    "start": 2,
+                    "end": 4,
+                    "text": "the allegations are false.",
+                },
+            ],
+            "sentences": [
+                {
+                    "start": 0,
+                    "end": 4,
+                    "text": "Microsoft has confirmed that, the allegations are false.",
+                }
+            ],
+        }
+
+        self.assertEqual(
+            _window_excerpt(story, 2, 4),
+            "the allegations are false.",
+        )
+        self.assertEqual(
+            _window_text(story, 2, 4),
+            "Microsoft has confirmed that, the allegations are false.",
+        )
+
+    def test_old_phrase_only_manifest_expands_to_sentence_punctuation(self) -> None:
+        story = {
+            "title": "Microsoft responds",
+            "phrases": [
+                {"start": 0, "end": 2, "text": "Microsoft has confirmed that,"},
+                {"start": 2, "end": 4, "text": "the allegations are false."},
+                {"start": 4, "end": 6, "text": "A separate topic follows."},
+            ],
+            "sentences": [],
+        }
+
+        self.assertEqual(
+            _window_text(story, 2, 4),
+            "Microsoft has confirmed that, the allegations are false.",
+        )
+
+    def test_software_launch_does_not_select_a_rocket(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rocket = make_asset(
+                root,
+                "SpaceX/spacex-launch.png",
+                ["spacex", "rocket", "launch"],
+                "user_confirmed_no_copyright",
+            )
+            person = make_asset(
+                root,
+                "People/tom-evslin-portrait.png",
+                ["tom", "evslin", "portrait"],
+                "user_confirmed_no_copyright",
+            )
+            text = (
+                "Tom Evslin argued AT&T should become an ISP, offer unlimited "
+                "pricing, launch quickly, and adapt."
+            )
+            window = {
+                "text": text,
+                "entities": ["Tom Evslin", "AT&T"],
+                "scene_intent": infer_scene_intent(text),
+                "visual_queries": [],
+            }
+
+            shortlist = shortlist_assets(
+                {"assets": [rocket, person]},
+                window,
+                selection_settings(),
+            )
+            by_id = {item["asset_id"]: item for item in shortlist}
+
+            self.assertNotEqual(window["scene_intent"], "space")
+            self.assertTrue(by_id[person["asset_id"]]["context_grounded"])
+            self.assertFalse(by_id[rocket["asset_id"]]["context_grounded"])
+
     def test_stale_thumbnail_asset_is_excluded_from_shortlist(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

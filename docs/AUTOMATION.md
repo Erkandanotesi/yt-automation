@@ -259,6 +259,14 @@ or at least one distinctive non-generic context term is required. Entity context
 carried across pronouns and split sentences, while choices below
 `MEDIA_MIN_AI_CONFIDENCE=0.45` are rejected in favor of the existing Wikimedia path.
 This improves precision without adding a vision request or another paid AI call.
+Visual timing stays precise without discarding grammatical context. Long AI-hero beats
+and archive windows are capped by `MEDIA_MAX_WINDOW_SECONDS` (7 seconds by default),
+prefer cuts at periods, commas, semicolons, colons, question marks, and exclamation
+marks, and fall back to aligned phrase boundaries when needed. The selector receives
+both the exact timed clause and its complete containing sentence, so a long sentence
+can change images naturally while names such as Microsoft or Steve Jobs remain attached
+to later clauses. Ambiguous verbs such as `launch` never imply spaceflight unless the
+context also contains space-specific evidence such as a rocket, satellite, or orbit.
 If no acceptable local or Wikimedia result exists, FFmpeg creates a unique dark,
 context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
 chapter title remains visible, production continues without an API request, and no

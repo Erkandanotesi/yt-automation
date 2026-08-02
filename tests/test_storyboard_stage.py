@@ -324,6 +324,53 @@ class StoryboardStageTests(unittest.TestCase):
         self.assertEqual(candidates[0]["start"], 5.0)
         self.assertEqual(candidates[0]["timeline_start"], 15.0)
 
+    def test_long_visual_beat_splits_at_clause_punctuation_with_sentence_context(self) -> None:
+        full_sentence = (
+            "Microsoft confirmed the report, rejected the allegations, and promised "
+            "a detailed response after its internal review."
+        )
+        context = {
+            "story_id": "story_1",
+            "timing": {
+                "narration": {"start": 10},
+                "separator": {"duration": 0, "skipped": True},
+                "visual_beats": [
+                    {"important_claim": full_sentence, "start": 0, "end": 18},
+                    {"important_claim": "A second beat.", "start": 18, "end": 21},
+                ],
+                "phrases": [
+                    {"text": "Microsoft confirmed the report,", "start": 0, "end": 5},
+                    {"text": "rejected the allegations,", "start": 5, "end": 10},
+                    {"text": "and promised a detailed response", "start": 10, "end": 14},
+                    {"text": "after its internal review.", "start": 14, "end": 18},
+                    {"text": "A second beat.", "start": 18, "end": 21},
+                ],
+                "sentences": [
+                    {"text": full_sentence, "start": 0, "end": 18},
+                    {"text": "A second beat.", "start": 18, "end": 21},
+                ],
+            },
+        }
+
+        candidates = candidate_beats(context, maximum_duration_seconds=7)
+        long_beat_candidates = [item for item in candidates if item["start"] < 18]
+
+        self.assertEqual(
+            [item["timestamp_excerpt"] for item in long_beat_candidates],
+            [
+                "Microsoft confirmed the report,",
+                "rejected the allegations,",
+                "and promised a detailed response",
+                "after its internal review.",
+            ],
+        )
+        self.assertTrue(
+            all(item["end"] - item["start"] <= 7 for item in long_beat_candidates)
+        )
+        self.assertTrue(
+            all(item["beat_text"] == full_sentence for item in long_beat_candidates)
+        )
+
     def test_approved_image_is_archived_with_descriptive_filename(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -377,7 +424,14 @@ class StoryboardStageTests(unittest.TestCase):
             images = result["stories"][0]["images"]
             self.assertEqual(len(images), 2)
             self.assertEqual(images[0]["time_range"]["start"], 1.0)
-            self.assertEqual(images[1]["time_range"]["end"], 27.0)
+            self.assertEqual(images[1]["time_range"]["end"], 25.0)
+            self.assertTrue(
+                all(
+                    image["time_range"]["end"] - image["time_range"]["start"]
+                    <= configured.maximum_image_seconds
+                    for image in images
+                )
+            )
             self.assertIn("bottom 22%", images[0]["prompt"])
             self.assertIn("No readable text", images[0]["prompt"])
             self.assertEqual(images[0]["generation"]["status"], "pending")

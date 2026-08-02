@@ -91,6 +91,7 @@ class StoryboardSettings:
     images_per_story: int = 2
     maximum_image_requests_per_run: int = 10
     duplicate_hamming_threshold: int = 6
+    maximum_image_seconds: float = 7.0
     archive_directory: Path | None = (
         PROJECTS_ROOT / "Assets" / "Media" / "AI Generated"
     )
@@ -145,6 +146,10 @@ class StoryboardSettings:
                 "IMAGE_DUPLICATE_HAMMING_THRESHOLD",
                 6,
             ),
+            maximum_image_seconds=_env_float(
+                "MEDIA_MAX_WINDOW_SECONDS",
+                7.0,
+            ),
             archive_directory=archive_directory.resolve(),
         )
 
@@ -198,6 +203,8 @@ class StoryboardSettings:
             raise ValueError("MAX_IMAGE_REQUESTS_PER_RUN must be positive.")
         if not 0 <= self.duplicate_hamming_threshold <= 64:
             raise ValueError("Duplicate hash threshold must be between 0 and 64.")
+        if self.maximum_image_seconds < 2.0:
+            raise ValueError("MEDIA_MAX_WINDOW_SECONDS must be at least 2 seconds.")
 
 
 def _descriptive_archive_name(story: dict, image: dict, source: Path) -> str:
@@ -379,7 +386,81 @@ def load_story_contexts(
     return state, timing, contexts
 
 
-def candidate_beats(context: dict, minimum_count: int = 2) -> list[dict]:
+def _overlaps_range(item: dict, start: float, end: float) -> bool:
+    item_start = float(item.get("start", 0))
+    item_end = float(item.get("end", item_start))
+    return item_end > start + 0.001 and item_start < end - 0.001
+
+
+def _timed_text(items: list[dict], start: float, end: float) -> str:
+    parts = [
+        str(item.get("text") or item.get("important_claim") or "").strip()
+        for item in items
+        if _overlaps_range(item, start, end)
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _split_visual_range(
+    timing: dict,
+    start: float,
+    end: float,
+    maximum_seconds: float,
+) -> list[tuple[float, float]]:
+    """Split long visual beats at natural clause punctuation when possible."""
+    if end - start <= maximum_seconds + 0.001:
+        return [(start, end)]
+    phrases = sorted(
+        timing.get("phrases", []),
+        key=lambda item: (float(item.get("start", 0)), float(item.get("end", 0))),
+    )
+    phrase_boundaries = [
+        (
+            float(item.get("end", item.get("start", 0))),
+            bool(
+                re.search(
+                    r"[,.;:!?][\"')\]]?$",
+                    str(item.get("text", "")).strip(),
+                )
+            ),
+        )
+        for item in phrases
+        if start + 0.1 < float(item.get("end", item.get("start", 0))) < end - 0.1
+    ]
+    ranges: list[tuple[float, float]] = []
+    cursor = start
+    target_seconds = min(5.0, maximum_seconds)
+    while end - cursor > maximum_seconds + 0.001:
+        latest = cursor + maximum_seconds
+        earliest = cursor + min(2.0, maximum_seconds * 0.5)
+        natural = [
+            value
+            for value, punctuated in phrase_boundaries
+            if punctuated and earliest <= value <= latest
+        ]
+        fallback = [
+            value
+            for value, _ in phrase_boundaries
+            if earliest <= value <= latest
+        ]
+        choices = natural or fallback
+        split = (
+            min(choices, key=lambda value: abs(value - (cursor + target_seconds)))
+            if choices
+            else latest
+        )
+        ranges.append((cursor, split))
+        cursor = split
+    if end > cursor + 0.001:
+        ranges.append((cursor, end))
+    return ranges
+
+
+def candidate_beats(
+    context: dict,
+    minimum_count: int = 2,
+    maximum_duration_seconds: float = 7.0,
+) -> list[dict]:
     timing = context["timing"]
     raw_candidates = timing.get("visual_beats", [])
     separator_hidden_seconds = (
@@ -423,30 +504,52 @@ def candidate_beats(context: dict, minimum_count: int = 2) -> list[dict]:
         end = float(beat.get("end", start))
         if not text or end <= start:
             continue
-        identity = (round(start, 6), round(end, 6), text.casefold())
-        if identity in seen_ranges:
-            continue
-        seen_ranges.add(identity)
-        candidates.append(
-            {
-                "candidate_id": f"beat_{len(candidates) + 1:02d}",
-                "beat_text": text,
-                "start": round(start, 6),
-                "end": round(end, 6),
-                "timeline_start": round(
-                    float(timing["narration"]["start"]) + start,
-                    6,
-                ),
-                "timeline_end": round(
-                    float(timing["narration"]["start"]) + end,
-                    6,
-                ),
-                "importance": beat.get("importance", "supporting"),
-                "visual_query": beat.get("visual_query", ""),
-                "named_entities": beat.get("named_entities", {}),
-                "visible_after_seconds": round(separator_hidden_seconds, 6),
-            }
-        )
+        for segment_start, segment_end in _split_visual_range(
+            timing,
+            start,
+            end,
+            maximum_duration_seconds,
+        ):
+            timestamp_excerpt = _timed_text(
+                timing.get("phrases", []),
+                segment_start,
+                segment_end,
+            )
+            sentence_context = _timed_text(
+                timing.get("sentences", []),
+                segment_start,
+                segment_end,
+            )
+            contextual_text = sentence_context or text
+            identity = (
+                round(segment_start, 6),
+                round(segment_end, 6),
+                contextual_text.casefold(),
+            )
+            if identity in seen_ranges:
+                continue
+            seen_ranges.add(identity)
+            candidates.append(
+                {
+                    "candidate_id": f"beat_{len(candidates) + 1:02d}",
+                    "beat_text": contextual_text,
+                    "timestamp_excerpt": timestamp_excerpt or text,
+                    "start": round(segment_start, 6),
+                    "end": round(segment_end, 6),
+                    "timeline_start": round(
+                        float(timing["narration"]["start"]) + segment_start,
+                        6,
+                    ),
+                    "timeline_end": round(
+                        float(timing["narration"]["start"]) + segment_end,
+                        6,
+                    ),
+                    "importance": beat.get("importance", "supporting"),
+                    "visual_query": beat.get("visual_query", ""),
+                    "named_entities": beat.get("named_entities", {}),
+                    "visible_after_seconds": round(separator_hidden_seconds, 6),
+                }
+            )
     if len(candidates) < minimum_count:
         raise RuntimeError(
             f"{context['story_id']} has fewer than {minimum_count} visible timed visual "
@@ -471,6 +574,7 @@ def story_planner_fingerprint(
             "image_model": settings.image_model,
             "image_size": settings.image_size,
             "images_per_story": settings.images_per_story,
+            "maximum_image_seconds": settings.maximum_image_seconds,
             "style": DEFAULT_STYLE,
             "negative_constraints": DEFAULT_NEGATIVE_CONSTRAINTS,
         }
@@ -506,6 +610,8 @@ For each selection:
   to this beat; do not include generic style or negative constraints because the
   application appends those consistently;
 - selection_reason: why this beat is important and distinct from the other image.
+Use timestamp_excerpt to choose the precise clause being illustrated. Use beat_text
+as its complete sentence context so pronouns and split clauses retain their subject.
 
 STORY
 ID: {context['story_id']}
@@ -534,7 +640,11 @@ def plan_story_with_openai(
         raise RuntimeError("OPENAI_API_KEY is required for AI storyboarding.")
     from openai import OpenAI
 
-    candidates = candidate_beats(context, settings.images_per_story)
+    candidates = candidate_beats(
+        context,
+        settings.images_per_story,
+        settings.maximum_image_seconds,
+    )
     client = OpenAI(timeout=settings.timeout_seconds)
     last_error: Exception | None = None
     for attempt in range(1, settings.planner_retries + 1):
@@ -636,7 +746,8 @@ def api_image_prompt(
 ) -> str:
     return (
         "Create one editorial still image for a technology-news YouTube video.\n\n"
-        f"News beat: {candidate['beat_text']}\n"
+        f"Exact timed clause: {candidate.get('timestamp_excerpt') or candidate['beat_text']}\n"
+        f"Full sentence context: {candidate['beat_text']}\n"
         f"Scene to depict: {selection.image_prompt.strip()}\n"
         f"Viewer takeaway: {selection.visual_concept.strip()}\n\n"
         f"Visual style: {DEFAULT_STYLE}.\n"
@@ -695,7 +806,11 @@ def build_storyboard(
     planned_by_id: dict[str, dict] = dict(existing_by_id)
 
     for context in selected_contexts:
-        candidates = candidate_beats(context, settings.images_per_story)
+        candidates = candidate_beats(
+            context,
+            settings.images_per_story,
+            settings.maximum_image_seconds,
+        )
         fingerprint = story_planner_fingerprint(context, candidates, settings)
         cached = existing_by_id.get(context["story_id"])
         if (

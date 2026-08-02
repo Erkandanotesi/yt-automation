@@ -54,8 +54,8 @@ STAGE_NAME = "archive_visuals"
 
 GENERIC_CONTEXT_TOKENS = {
     "ai", "artificial", "company", "computer", "digital", "image", "internet",
-    "model", "news", "online", "report", "software", "system", "tech",
-    "technology", "video", "website",
+    "launch", "launched", "launching", "model", "news", "online", "report",
+    "software", "system", "tech", "technology", "video", "website",
 }
 
 
@@ -370,22 +370,73 @@ def _overlap(start: float, end: float, item: dict) -> bool:
     return item_end > start + 0.001 and item_start < end - 0.001
 
 
-def _window_text(story: dict, start: float, end: float) -> str:
+def _item_text(item: dict) -> str:
+    return str(item.get("text") or item.get("important_claim") or "").strip()
+
+
+def _overlapping_text(
+    story: dict,
+    collection: str,
+    start: float,
+    end: float,
+) -> str:
+    pieces: list[str] = []
+    for item in story.get(collection, []):
+        if not _overlap(start, end, item):
+            continue
+        text = _item_text(item)
+        if text and text not in pieces:
+            pieces.append(text)
+    return " ".join(pieces)
+
+
+def _phrase_sentence_context(story: dict, start: float, end: float) -> str:
+    """Expand overlapping timed phrases to their punctuation-bounded sentence."""
+    phrases = sorted(
+        story.get("phrases", []),
+        key=lambda item: (float(item.get("start", 0)), float(item.get("end", 0))),
+    )
+    overlapping = [
+        index for index, item in enumerate(phrases) if _overlap(start, end, item)
+    ]
+    if not overlapping:
+        return ""
+    left = overlapping[0]
+    right = overlapping[-1] + 1
+    while left > 0 and not re.search(r"[.!?][\"')\]]?$", _item_text(phrases[left - 1])):
+        left -= 1
+    while right < len(phrases) and not re.search(
+        r"[.!?][\"')\]]?$",
+        _item_text(phrases[right - 1]),
+    ):
+        right += 1
+    return " ".join(
+        text
+        for text in (_item_text(item) for item in phrases[left:right])
+        if text
+    )
+
+
+def _window_excerpt(story: dict, start: float, end: float) -> str:
     for collection in ("phrases", "sentences", "visual_beats"):
-        pieces = []
-        for item in story.get(collection, []):
-            if not _overlap(start, end, item):
-                continue
-            text = str(
-                item.get("text")
-                or item.get("important_claim")
-                or ""
-            ).strip()
-            if text and text not in pieces:
-                pieces.append(text)
-        if pieces:
-            return " ".join(pieces)
+        text = _overlapping_text(story, collection, start, end)
+        if text:
+            return text
     return str(story.get("title", "")).strip()
+
+
+def _window_text(story: dict, start: float, end: float) -> str:
+    # Sentence records preserve the named subject when a timestamp begins midway
+    # through a sentence. Older manifests without sentences are expanded from
+    # phrases until sentence-ending punctuation instead.
+    sentence_text = _overlapping_text(story, "sentences", start, end)
+    if sentence_text:
+        return sentence_text
+    phrase_context = _phrase_sentence_context(story, start, end)
+    if phrase_context:
+        return phrase_context
+    visual_text = _overlapping_text(story, "visual_beats", start, end)
+    return visual_text or str(story.get("title", "")).strip()
 
 
 def _story_entities(story: dict) -> list[str]:
@@ -441,7 +492,7 @@ def infer_scene_intent(text: str) -> str:
     rules = (
         ({"ceo", "founder", "executive", "person", "president"}, "person"),
         ({"phone", "mobile", "android", "iphone", "app"}, "mobile_device"),
-        ({"rocket", "launch", "space", "satellite", "orbit"}, "space"),
+        ({"rocket", "space", "satellite", "orbit"}, "space"),
         ({"car", "vehicle", "robotaxi", "factory", "ev"}, "vehicle_or_factory"),
         ({"server", "datacenter", "cloud", "compute"}, "data_center"),
         ({"chip", "processor", "gpu", "cpu", "semiconductor"}, "hardware"),
@@ -486,6 +537,7 @@ def build_archive_windows(
             settings,
         ):
             text = _window_text(story, start, end)
+            timestamp_excerpt = _window_excerpt(story, start, end)
             visual_queries = [
                 str(item.get("visual_query", "")).strip()
                 for item in story.get("visual_beats", [])
@@ -516,6 +568,7 @@ def build_archive_windows(
                         6,
                     ),
                     "text": text,
+                    "timestamp_excerpt": timestamp_excerpt,
                     "entities": entities,
                     "scene_intent": infer_scene_intent(
                         " ".join([text, *entities, *visual_queries])
@@ -779,7 +832,11 @@ def selection_prompt(story: dict, windows: list[dict]) -> str:
         compact.append(
             {
                 "window_id": window["window_id"],
-                "spoken_text": window["text"],
+                "full_sentence_context": window["text"],
+                "timestamp_excerpt": window.get(
+                    "timestamp_excerpt",
+                    window["text"],
+                ),
                 "time_range": {
                     "start": window["start"],
                     "end": window["end"],
@@ -794,6 +851,8 @@ Evaluate the archive candidates for every narration window in this technology-ne
 story. Select one only when it is clearly relevant to the exact spoken context.
 
 Rules:
+- Use `full_sentence_context` to resolve the company, person, product, and meaning;
+  never interpret a mid-sentence `timestamp_excerpt` in isolation.
 - Match the precise spoken claim and entity, not merely a broad technology category.
 - `context_grounded=false` is a hard rejection: never select that candidate even if
   its broad category, local score, or filename appears superficially useful.
