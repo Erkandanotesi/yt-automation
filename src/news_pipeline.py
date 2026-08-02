@@ -1158,6 +1158,21 @@ light sarcasm only when context supports it; otherwise sound normal.
             "Keep the player-rights, ownership, privacy, open-platform, "
             "anti-lock-in, and anti-exploitation perspective."
         )
+        delivery_brief = """
+Use simple, warm, intimate but formal and kind language. Make it engaging,
+legally cautious, and ready for ElevenLabs. No greeting, farewell, heading,
+bullets, labels, or stage directions. Return title_en as metadata and the
+narration as summary_en. Do not use direct quotations or quotation marks;
+paraphrase supported statements and preserve attribution.
+"""
+        review_brief = """
+Before returning, compare every name/entity, number/date, direct quote, and
+attribution in the narration against SOURCE TEXT. In factual_review, list the
+exact source phrases you checked. List any tempting unsupported claims you
+removed. Do not put source facts in factual_review unless their exact wording
+appears in SOURCE TEXT. Copy checked phrases verbatim, including any internal
+punctuation. Omit a review item rather than paraphrasing its source wording.
+"""
     else:
         writing_brief = """
 Write an English YouTube tech-news script from the source. Aim for 175-185
@@ -1165,26 +1180,23 @@ words and never exceed 195 words.
 Preserve every material fact that fits; add nothing unsupported. Attribute
 allegations and retain uncertainty. Be skeptical of big tech and supportive of
 free speech and privacy; use light sarcasm only when context supports it.
-Otherwise sound normal.
 """
         revision_style = (
             "Keep the skeptical-big-tech, free-speech, and privacy perspective."
         )
+        delivery_brief = """
+Use simple, warm, intimate but formal and kind language. Make it engaging and
+ready for ElevenLabs. No greeting, farewell, heading, bullets, labels, or stage
+directions. Return title_en as metadata and the narration as summary_en. Do not
+use direct quotations or quotation marks; paraphrase supported statements and
+preserve attribution.
+"""
+        review_brief = ""
 
     prompt = f"""
 {writing_brief.strip()}
-Use simple, warm, intimate but formal and kind language. Make it engaging,
-legally cautious, and ready for ElevenLabs. No greeting,
-farewell, heading, bullets, labels, or stage directions. Return title_en as
-metadata and the narration as summary_en. Do not use direct quotations or
-quotation marks; paraphrase supported statements and preserve attribution.
-
-Before returning, compare every name/entity, number/date, direct quote, and
-attribution in the narration against SOURCE TEXT. In factual_review, list the
-exact source phrases you checked. List any tempting unsupported claims you
-removed. Do not put source facts in factual_review unless their exact wording
-appears in SOURCE TEXT. Copy checked phrases verbatim, including any internal
-punctuation. Omit a review item rather than paraphrasing its source wording.
+{delivery_brief.strip()}
+{review_brief.strip()}
 
 ORIGINAL TITLE:
 {candidate["title"]}

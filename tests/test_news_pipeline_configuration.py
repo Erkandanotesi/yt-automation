@@ -12,6 +12,41 @@ from file_utils import sha256_file
 
 
 class NewsPipelineConfigurationTests(unittest.TestCase):
+    def test_tech_summary_prompt_uses_requested_copy(self) -> None:
+        result = news_pipeline.NewsSummary(
+            title_en="A factual technology story",
+            summary_en=" ".join(["supported"] * 175),
+            factual_review=news_pipeline.FactualReview(),
+        )
+        candidate = {
+            "title": "Original technology headline",
+            "source": "Example Feed",
+            "published": news_pipeline.datetime.now(news_pipeline.timezone.utc),
+        }
+        with (
+            patch.object(news_pipeline, "IS_GAMING", False),
+            patch.object(
+                news_pipeline,
+                "structured_ai_call",
+                return_value=result,
+            ) as ai_call,
+            patch.object(news_pipeline, "validate_narration", return_value={}),
+        ):
+            news_pipeline.summarize_article(candidate, "Complete supplied article.")
+
+        prompt = ai_call.call_args.args[0]
+        self.assertIn(
+            "Write an English YouTube tech-news script from the source.",
+            prompt,
+        )
+        self.assertIn("Make it engaging and\nready for ElevenLabs.", prompt)
+        self.assertIn("ORIGINAL TITLE:\nOriginal technology headline", prompt)
+        self.assertIn("SOURCE:\nExample Feed", prompt)
+        self.assertIn("SOURCE TEXT:\nComplete supplied article.", prompt)
+        self.assertNotIn("legally cautious", prompt)
+        self.assertNotIn("Before returning", prompt)
+        self.assertNotIn("Otherwise sound normal", prompt)
+
     def test_candidate_pool_balances_publishers_and_defers_similar_headlines(self) -> None:
         now = news_pipeline.datetime.now(news_pipeline.timezone.utc)
 
