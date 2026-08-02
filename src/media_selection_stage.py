@@ -91,6 +91,7 @@ class MediaSelectionSettings:
     wikimedia_max_searches_per_video: int = 6
     maximum_uses_per_video: int = 2
     minimum_ai_confidence: float = 0.45
+    wikimedia_brand_logos_enabled: bool = True
 
     @classmethod
     def from_environment(cls) -> "MediaSelectionSettings":
@@ -142,6 +143,11 @@ class MediaSelectionSettings:
             minimum_ai_confidence=float(
                 os.getenv("MEDIA_MIN_AI_CONFIDENCE", "0.45")
             ),
+            wikimedia_brand_logos_enabled=os.getenv(
+                "WIKIMEDIA_BRAND_LOGOS_ENABLED",
+                "true",
+            ).strip().lower()
+            in {"1", "true", "yes", "on"},
         )
 
     def validate(self) -> None:
@@ -1210,6 +1216,91 @@ def _fallback_to_local_candidate(
     )
 
 
+def _company_entities(story: dict) -> list[str]:
+    companies: list[str] = []
+    records = [story, *story.get("visual_beats", [])]
+    for record in records:
+        named = record.get("named_entities") or {}
+        for category, values in named.items():
+            normalized_category = normalize_search_text(str(category))
+            if not any(
+                marker in normalized_category
+                for marker in ("compan", "organization", "organisation")
+            ):
+                continue
+            if isinstance(values, list):
+                companies.extend(str(value).strip() for value in values if str(value).strip())
+    return list(dict.fromkeys(companies))
+
+
+def _candidate_is_company_logo(candidate: dict, company: str) -> bool:
+    identity = normalize_search_text(
+        " ".join(
+            [
+                str(candidate.get("filename", "")),
+                str(candidate.get("local_caption", "")),
+                " ".join(str(value) for value in candidate.get("keywords", [])),
+            ]
+        )
+    )
+    company_text = normalize_search_text(company)
+    return company_text in identity and "logo" in identity.split()
+
+
+def prefer_explicit_company_logos(
+    windows: list[dict],
+    decisions: dict[str, WindowDecision],
+    story: dict,
+    *,
+    enabled: bool = True,
+) -> dict[str, WindowDecision]:
+    """Prefer one Commons logo when a company is explicitly spoken in a story."""
+    if not enabled:
+        return decisions
+    companies = _company_entities(story)
+    if not companies:
+        return decisions
+    updated = dict(decisions)
+    handled: set[str] = set()
+    for window in sorted(windows, key=lambda item: float(item.get("start", 0))):
+        excerpt = str(window.get("timestamp_excerpt") or window.get("text", ""))
+        explicit = _entities_in_text(companies, excerpt)
+        explicit.sort(
+            key=lambda entity: normalize_search_text(excerpt).find(
+                normalize_search_text(entity)
+            )
+        )
+        for company in explicit:
+            company_key = normalize_search_text(company)
+            if not company_key or company_key in handled:
+                continue
+            handled.add(company_key)
+            current = updated[window["window_id"]]
+            selected = next(
+                (
+                    candidate
+                    for candidate in window.get("shortlist", [])
+                    if candidate.get("asset_id") == current.selected_asset_id
+                ),
+                None,
+            )
+            if selected is not None and _candidate_is_company_logo(selected, company):
+                break
+            updated[window["window_id"]] = WindowDecision(
+                window_id=window["window_id"],
+                relevance_status="images_are_irrelevant",
+                confidence=max(0.7, float(current.confidence)),
+                selection_reason=(
+                    f"The narration explicitly names {company}; prefer its exact "
+                    "Wikimedia Commons logo over a generic contextual image."
+                ),
+                online_search_query=f"{company} official logo",
+                required_entity=company,
+            )
+            break
+    return updated
+
+
 def resolve_wikimedia_fallbacks(
     *,
     video_number: int,
@@ -1260,7 +1351,7 @@ def resolve_wikimedia_fallbacks(
     cached_queries: dict[str, dict] = {}
     online_throttled = False
 
-    def existing_asset(required_entity: str) -> dict | None:
+    def existing_asset(required_entity: str, *, logo_preferred: bool = False) -> dict | None:
         exact = re.sub(
             r"[^a-z0-9]+",
             " ",
@@ -1293,6 +1384,22 @@ def resolve_wikimedia_fallbacks(
         return max(
             matches,
             key=lambda item: (
+                int(
+                    logo_preferred
+                    and "logo"
+                    in normalize_search_text(
+                        " ".join(
+                            [
+                                str(item.get("filename", "")),
+                                str(item.get("local_caption", "")),
+                                " ".join(
+                                    str(value)
+                                    for value in item.get("keywords", [])
+                                ),
+                            ]
+                        )
+                    ).split()
+                ),
                 float(item.get("crop_retention_16_9", 0)),
                 int(item.get("width", 0)) * int(item.get("height", 0)),
             ),
@@ -1301,8 +1408,16 @@ def resolve_wikimedia_fallbacks(
 
     for window in irrelevant:
         current = decisions[window["window_id"]]
-        reusable = existing_asset(current.required_entity)
+        logo_preferred = "logo" in normalize_search_text(
+            current.online_search_query
+        ).split()
+        reusable = existing_asset(
+            current.required_entity,
+            logo_preferred=logo_preferred,
+        )
         if reusable is not None:
+            if logo_preferred:
+                reusable["brand_logo"] = True
             resolved_assets[window["window_id"]] = reusable
             continue
         if online_throttled:
@@ -1389,6 +1504,9 @@ def resolve_wikimedia_fallbacks(
             settings,
         )[0]
         online_shortlist["online_fallback"] = True
+        online_shortlist["brand_logo"] = "logo" in normalize_search_text(
+            decisions[window["window_id"]].online_search_query
+        ).split()
         window["shortlist"] = [
             online_shortlist,
             *[
@@ -1595,12 +1713,18 @@ def _enforce_selection_constraints(
                 return False
             if not allow_reuse and video_usage_counts[sha] > 0:
                 return False
-            return "crop_risk" not in candidate.get("quality_flags", [])
+            return (
+                candidate.get("brand_logo", False)
+                or "crop_risk" not in candidate.get("quality_flags", [])
+            )
 
         preferred_online = candidate_by_id.get(decision.selected_asset_id or "", {})
         if (
             preferred_online.get("online_fallback") is True
-            and "crop_risk" not in preferred_online.get("quality_flags", [])
+            and (
+                preferred_online.get("brand_logo", False)
+                or "crop_risk" not in preferred_online.get("quality_flags", [])
+            )
             and acceptable(decision.selected_asset_id or "", allow_reuse=True)
         ):
             chosen_id = decision.selected_asset_id
@@ -1695,6 +1819,7 @@ def _enforce_selection_constraints(
                     "context_safe_fallback": bool(
                         asset.get("context_safe_fallback", False)
                     ),
+                    "brand_logo": bool(candidate.get("brand_logo", False)),
                 },
                 "confidence": round(float(decision.confidence), 4),
                 "selection_reason": decision.selection_reason,
@@ -1944,6 +2069,12 @@ def run_media_selection(
             windows,
             story,
             minimum_confidence=settings.minimum_ai_confidence,
+        )
+        decision_by_window = prefer_explicit_company_logos(
+            windows,
+            decision_by_window,
+            story,
+            enabled=settings.wikimedia_brand_logos_enabled and not offline,
         )
         (
             decision_by_window,

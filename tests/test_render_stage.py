@@ -12,6 +12,7 @@ from render_stage import (
     _compose_video_track,
     _mix_audio_track,
     _render_preview,
+    _render_visual_segments,
     build_render_plan,
 )
 from motion_filters import smooth_push_in_filter
@@ -108,6 +109,42 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
 
 
 class RenderStageTests(unittest.TestCase):
+    def test_brand_logo_segment_uses_alpha_overlay_on_neutral_background(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logo = root / "logo.png"
+            logo.write_bytes(b"transparent-logo")
+            plan = {
+                "visual_events": [
+                    {
+                        "event_id": "logo_1",
+                        "asset": {"file": str(logo)},
+                        "duration": 2,
+                        "brand_logo": True,
+                        "motion": {"type": "static", "maximum_scale": 1.0},
+                    }
+                ]
+            }
+
+            def create_output(command: list[str], _label: str) -> None:
+                Path(command[-1]).write_bytes(b"rendered-segment")
+
+            with (
+                patch("render_stage._ffmpeg", return_value=Path("ffmpeg")),
+                patch("render_stage._run", side_effect=create_output) as run,
+            ):
+                _render_visual_segments(
+                    root,
+                    plan,
+                    RenderSettings(width=320, height=180, fps=30),
+                )
+
+            command = run.call_args.args[0]
+            filters = command[command.index("-filter_complex") + 1]
+            self.assertIn("color=c=0xe9edf2:s=320x180:r=30", command)
+            self.assertIn("format=rgba[logo]", filters)
+            self.assertIn("overlay=(W-w)/2:(H-h)/2", filters)
+
     def test_cleanup_removes_only_render_intermediates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 5"

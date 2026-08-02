@@ -26,6 +26,7 @@ from media_selection_stage import (
     build_archive_windows,
     coverage_quality,
     infer_scene_intent,
+    prefer_explicit_company_logos,
     resolve_wikimedia_fallbacks,
     run_media_selection,
     shortlist_assets,
@@ -146,6 +147,54 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_explicit_company_name_promotes_one_commons_logo_window(self) -> None:
+        story = {
+            "named_entities": {
+                "companies_organizations": ["OpenAI", "Microsoft"],
+            },
+            "visual_beats": [],
+        }
+        windows = [
+            {
+                "window_id": "window_1",
+                "start": 0,
+                "text": "OpenAI announced a policy change.",
+                "timestamp_excerpt": "OpenAI announced a policy change,",
+                "shortlist": [],
+            },
+            {
+                "window_id": "window_2",
+                "start": 5,
+                "text": "OpenAI announced a policy change.",
+                "timestamp_excerpt": "and explained its reasoning.",
+                "shortlist": [],
+            },
+            {
+                "window_id": "window_3",
+                "start": 10,
+                "text": "Microsoft responded later.",
+                "timestamp_excerpt": "Microsoft responded later.",
+                "shortlist": [],
+            },
+        ]
+        decisions = {
+            window["window_id"]: WindowDecision(
+                window_id=window["window_id"],
+                relevance_status="relevant",
+                selected_asset_id="generic_asset",
+                confidence=0.8,
+                selection_reason="Generic local selection.",
+            )
+            for window in windows
+        }
+
+        promoted = prefer_explicit_company_logos(windows, decisions, story)
+
+        self.assertEqual(promoted["window_1"].required_entity, "OpenAI")
+        self.assertEqual(promoted["window_1"].online_search_query, "OpenAI official logo")
+        self.assertEqual(promoted["window_2"].relevance_status, "relevant")
+        self.assertEqual(promoted["window_3"].required_entity, "Microsoft")
+
     def test_window_uses_full_containing_sentence_for_entity_context(self) -> None:
         story = {
             "title": "Microsoft responds",
@@ -504,6 +553,55 @@ class MediaSelectionTests(unittest.TestCase):
 
             self.assertEqual(sum(usage.values()), 6)
             self.assertTrue(all(count <= 2 for count in usage.values()))
+
+    def test_square_brand_logo_is_not_rejected_as_crop_risk(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logo = make_asset(
+                root,
+                "Online/wikimedia_openai_logo.png",
+                ["openai", "logo"],
+                "public_domain",
+            )
+            alternate = make_asset(
+                root,
+                "Generic/technology.png",
+                ["technology"],
+                "cleared",
+            )
+            logo["quality_flags"] = ["crop_risk", "square"]
+            window = {
+                "window_id": "logo_window",
+                "shortlist": [
+                    {
+                        **logo,
+                        "local_score": 10,
+                        "brand_logo": True,
+                        "online_fallback": True,
+                    },
+                    {**alternate, "local_score": 8},
+                ],
+            }
+            decisions = {
+                "logo_window": WindowDecision(
+                    window_id="logo_window",
+                    relevance_status="relevant",
+                    selected_asset_id=logo["asset_id"],
+                    confidence=0.9,
+                    selection_reason="Exact Wikimedia Commons company logo.",
+                )
+            }
+
+            selected = _enforce_selection_constraints(
+                [window],
+                decisions,
+                {logo["asset_id"]: logo, alternate["asset_id"]: alternate},
+                Counter(),
+                2,
+            )
+
+            self.assertEqual(selected[0]["selected_asset"]["asset_id"], logo["asset_id"])
+            self.assertTrue(selected[0]["selected_asset"]["brand_logo"])
 
     def test_raw_selector_decisions_are_cached_before_downstream_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -60,6 +60,45 @@ def page(
 
 
 class OnlineMediaStageTests(unittest.TestCase):
+    def test_logo_search_accepts_rasterized_commons_svg(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            svg_page = page(
+                20,
+                "OpenAI logo.svg",
+                "Official OpenAI logo.",
+            )
+            info = svg_page["imageinfo"][0]
+            info.update(
+                {
+                    "mime": "image/svg+xml",
+                    "width": 512,
+                    "height": 128,
+                    "thumbwidth": 1920,
+                    "thumbheight": 480,
+                    "url": "https://upload.wikimedia.org/openai-logo.svg",
+                    "thumburl": "https://upload.wikimedia.org/openai-logo-1920px.png",
+                }
+            )
+            fetch = unittest.mock.Mock(
+                return_value={"query": {"pages": [svg_page]}}
+            )
+            with patch("online_media_stage._fetch_json", fetch):
+                result = search_wikimedia_commons(
+                    query="OpenAI official logo",
+                    required_entity="OpenAI",
+                    context="OpenAI announced a policy change.",
+                    settings=settings(root),
+                )
+
+            self.assertEqual(result["candidate_count"], 1)
+            self.assertEqual(result["candidates"][0]["mime"], "image/png")
+            self.assertEqual(
+                result["candidates"][0]["source_mime"],
+                "image/svg+xml",
+            )
+            self.assertNotIn("filetype%3Abitmap", fetch.call_args.args[0])
+
     def test_search_rejects_wrong_entity_and_noncommercial_license(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

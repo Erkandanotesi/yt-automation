@@ -242,6 +242,7 @@ class EffectsStageTests(unittest.TestCase):
                                     "absolute_path": str(image),
                                     "sha256": sha256_file(image),
                                     "quality_flags": [],
+                                    "brand_logo": True,
                                 },
                             }
                         ],
@@ -253,6 +254,8 @@ class EffectsStageTests(unittest.TestCase):
 
             self.assertEqual(events[0]["timeline_start"], 11)
             self.assertEqual(events[0]["timeline_end"], 16)
+            self.assertTrue(events[0]["brand_logo"])
+            self.assertEqual(events[0]["motion"]["type"], "static")
 
     def test_plan_covers_motion_frame_glitch_sfx_and_ducked_music(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

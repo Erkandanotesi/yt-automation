@@ -271,6 +271,16 @@ If no acceptable local or Wikimedia result exists, FFmpeg creates a unique dark,
 context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
 chapter title remains visible, production continues without an API request, and no
 unrelated person, company, product, or event is implied.
+With `WIKIMEDIA_BRAND_LOGOS_ENABLED=true`, the first archive window that explicitly
+speaks each detected company name prefers an exact logo already in the local archive,
+or a commercially reusable Wikimedia Commons logo when no local logo is selected.
+Pronoun-only clauses do not inherit this rule, and each company is promoted at most
+once per story to avoid a logo-heavy video. Previously downloaded logo assets are
+reused from the media index; otherwise the
+normal Wikimedia search/download limits and attribution overlay still apply. Commons
+SVG logos are downloaded through Wikimedia's raster thumbnail service, then rendered
+uncropped and motionless on a light neutral 16:9 field. If no accepted logo exists, selection
+falls back safely to the strongest grounded contextual image without stopping the run.
 Folders named `Thumbnails` are excluded both when the media index is scanned and when
 an in-video shortlist is built. The second guard also blocks thumbnail files lingering
 in an older cached index; thumbnail creation and YouTube publishing remain unchanged.

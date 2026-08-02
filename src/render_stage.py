@@ -573,7 +573,39 @@ def _render_visual_segments(
         frames = max(1, round(duration * settings.fps))
         motion = event.get("motion", {})
         maximum_scale = float(motion.get("maximum_scale", 1.0))
-        if motion.get("type") in {"smooth_push_in", "slow_push_in"} and maximum_scale > 1.0:
+        command = [
+            str(_ffmpeg()),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            event["asset"]["file"],
+        ]
+        if event.get("brand_logo", False):
+            logo_width = max(1, round(settings.width * 0.72))
+            logo_height = max(1, round(settings.height * 0.52))
+            command.extend(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    (
+                        f"color=c=0xe9edf2:s={settings.width}x{settings.height}:"
+                        f"r={settings.fps}"
+                    ),
+                    "-filter_complex",
+                    (
+                        f"[0:v]scale={logo_width}:{logo_height}:"
+                        "force_original_aspect_ratio=decrease:flags=lanczos,"
+                        "format=rgba[logo];"
+                        "[1:v][logo]overlay=(W-w)/2:(H-h)/2:format=auto,"
+                        f"fps={settings.fps},format=yuv420p[vout]"
+                    ),
+                    "-map",
+                    "[vout]",
+                ]
+            )
+        elif motion.get("type") in {"smooth_push_in", "slow_push_in"} and maximum_scale > 1.0:
             vf = smooth_push_in_filter(
                 width=settings.width,
                 height=settings.height,
@@ -582,6 +614,7 @@ def _render_visual_segments(
                 frames=frames,
                 maximum_scale=maximum_scale,
             )
+            command.extend(["-vf", vf])
         else:
             vf = (
                 f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase:flags=lanczos,"
@@ -589,16 +622,9 @@ def _render_visual_segments(
                 f"tpad=stop_mode=clone:stop_duration={duration},"
                 f"fps={settings.fps},format=yuv420p"
             )
-        _run(
+            command.extend(["-vf", vf])
+        command.extend(
             [
-                str(_ffmpeg()),
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                event["asset"]["file"],
-                "-vf",
-                vf,
                 "-frames:v",
                 str(frames),
                 "-an",
@@ -614,7 +640,10 @@ def _render_visual_segments(
                 str(settings.fps),
                 "-y",
                 str(output),
-            ],
+            ]
+        )
+        _run(
+            command,
             f"Render visual segment {index}/{total}",
         )
         atomic_write_json(

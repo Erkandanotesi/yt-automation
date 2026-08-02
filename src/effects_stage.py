@@ -477,6 +477,7 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                     "timeline_end": narration_start + end,
                     "asset": asset,
                     "crop_risk": False,
+                    "brand_logo": False,
                     "attribution": None,
                 }
             )
@@ -503,6 +504,7 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                     "timeline_end": narration_start + end,
                     "asset": asset,
                     "crop_risk": "crop_risk" in selected.get("quality_flags", []),
+                    "brand_logo": bool(selected.get("brand_logo", False)),
                     "attribution": _attribution_record(selected),
                 }
             )
@@ -536,6 +538,7 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
                 "timeline_end": hold_end,
                 "asset": dict(source["asset"]),
                 "crop_risk": bool(source["crop_risk"]),
+                "brand_logo": bool(source.get("brand_logo", False)),
                 "attribution": source.get("attribution"),
             }
         )
@@ -549,6 +552,8 @@ def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) ->
             if event["source_type"] == "generated_hero"
             else settings.motion_scale
         )
+        if event.get("brand_logo", False):
+            maximum_scale = 1.0
         event["motion"] = {
             "type": "static" if is_hold or maximum_scale <= 1.0 else "smooth_push_in",
             "maximum_scale": 1.0 if is_hold else maximum_scale,

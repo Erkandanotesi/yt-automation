@@ -45,6 +45,7 @@ SUPPORTED_MIME_EXTENSIONS = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
+WIKIMEDIA_VECTOR_MIME = "image/svg+xml"
 STOP_WORDS = {
     "a",
     "an",
@@ -272,9 +273,14 @@ def _candidate_from_page(
     if not info_list:
         return None, {"title": page.get("title", ""), "reason": "missing_imageinfo"}
     info = info_list[0]
-    mime = str(info.get("mime", "")).lower()
-    if mime not in SUPPORTED_MIME_EXTENSIONS:
+    source_mime = str(info.get("mime", "")).lower()
+    vector_thumbnail = (
+        source_mime == WIKIMEDIA_VECTOR_MIME
+        and str(info.get("thumburl", "")).startswith("https://")
+    )
+    if source_mime not in SUPPORTED_MIME_EXTENSIONS and not vector_thumbnail:
         return None, {"title": page.get("title", ""), "reason": "unsupported_mime"}
+    mime = "image/png" if vector_thumbnail else source_mime
     metadata = info.get("extmetadata", {})
     license_info = _license_record(metadata)
     if not license_info["allowed"]:
@@ -283,9 +289,20 @@ def _candidate_from_page(
             "reason": "license_not_accepted",
             "license": license_info,
         }
-    width = int(info.get("width", 0) or 0)
-    height = int(info.get("height", 0) or 0)
-    if width < settings.minimum_width or height < settings.minimum_height:
+    width = int(
+        (info.get("thumbwidth") if vector_thumbnail else None)
+        or info.get("width", 0)
+        or 0
+    )
+    height = int(
+        (info.get("thumbheight") if vector_thumbnail else None)
+        or info.get("height", 0)
+        or 0
+    )
+    logo_query = "logo" in _terms(query)
+    minimum_width = min(settings.minimum_width, 256) if logo_query else settings.minimum_width
+    minimum_height = min(settings.minimum_height, 100) if logo_query else settings.minimum_height
+    if width < minimum_width or height < minimum_height:
         return None, {
             "title": page.get("title", ""),
             "reason": "resolution_too_small",
@@ -352,6 +369,7 @@ def _candidate_from_page(
         "download_url": download_url,
         "original_url": str(info.get("url", "")),
         "mime": mime,
+        "source_mime": source_mime,
         "width": width,
         "height": height,
         "aspect_ratio": round(aspect, 6),
@@ -384,12 +402,14 @@ def search_wikimedia_commons(
     context = re.sub(r"\s+", " ", context).strip()
     if not query or not required_entity:
         raise ValueError("Both query and required_entity are required.")
+    logo_query = "logo" in _terms(query)
+    search_expression = query if logo_query else f"filetype:bitmap {query}"
     params = {
         "action": "query",
         "format": "json",
         "formatversion": "2",
         "generator": "search",
-        "gsrsearch": f"filetype:bitmap {query}",
+        "gsrsearch": search_expression,
         "gsrnamespace": "6",
         "gsrlimit": str(settings.request_result_limit),
         "prop": "imageinfo|categories",
