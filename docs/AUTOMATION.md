@@ -111,6 +111,14 @@ low lexical diversity, and repeated boilerplate. If the full article fails, the 
 body is allowed only when it independently passes the same checks. Long aggregator
 headlines receive limited paraphrase tolerance when at least two significant title
 terms remain grounded in the article; short titles retain the stricter threshold.
+Consumer promotions are rejected deterministically before AI ranking and checked
+again after full-article extraction. The gate looks for shopping-focused headline
+structures such as deal roundups, currency/percentage discounts, lowest-price posts,
+coupons, and shopping guides, with affiliate disclosures, repeated purchase calls,
+and dense price lists retained as supporting evidence. Generic feed boilerplate such
+as `AD` or `REG AD`, an embedded deal widget inside an otherwise legitimate article,
+news about advertising systems, and corporate acquisition deals are not rejection
+signals by themselves. This prevents RSS ad fragments from suppressing real news.
 Ungrounded items in the model's audit metadata are discarded locally instead of
 spending another summary request when the narration itself passes its structural and
 direct-quote checks. Narration numbers are recorded in validation metadata but are not

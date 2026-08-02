@@ -741,6 +741,91 @@ def rough_score(candidate: dict, keywords: set[str]) -> float:
     return round(recency_score + keyword_score + title_score + content_score, 2)
 
 
+PROMOTIONAL_TITLE_PATTERNS = (
+    r"\b(?:best|top\s+\d+)\b.{0,35}\bdeals?\b",
+    r"\bdeals?\s+(?:writer|roundup|of the (?:day|week|month)|this week)\b",
+    r"\b(?:falls?|drops?|discounted|reduced)\s+to\s+[$£€]\s?\d",
+    r"\b(?:save\s+[$£€]\s?\d|[$£€]\s?\d[\d,.]*\s+off|"
+    r"\d+%\s+off|lowest price|best price|price drop)\b",
+    r"[$£€]\s?\d[\d,.]*\s+off\b",
+    r"\b(?:shopping|gift|buying) guide\b",
+    r"\bcoupon\b",
+)
+AFFILIATE_DISCLOSURE_PATTERNS = (
+    r"\bwe may earn (?:a )?commission from links\b",
+    r"\bmay (?:earn|receive) (?:an? )?affiliate commission\b",
+    r"\bcommission from (?:qualifying purchases|the links on this page)\b",
+)
+SHOPPING_CALL_TO_ACTION_PATTERNS = (
+    r"\bget (?:the )?deal\b",
+    r"\bbuy now\b",
+    r"\bshop now\b",
+    r"\bpre-?order here\b",
+    r"\bsee (?:the )?deal\b",
+)
+
+
+def promotional_content_reasons(
+    candidate: dict,
+    article_text: str | None = None,
+) -> list[str]:
+    """Identify consumer-sales content without relying on generic ad labels."""
+    title = re.sub(r"\s+", " ", str(candidate.get("title", ""))).strip()
+    body = re.sub(
+        r"\s+",
+        " ",
+        str(article_text if article_text is not None else candidate.get("rss_text", "")),
+    ).strip()
+    title_lower = title.casefold()
+    body_lower = body.casefold()
+    combined = f"{title_lower} {body_lower}"
+
+    title_matches = [
+        pattern
+        for pattern in PROMOTIONAL_TITLE_PATTERNS
+        if re.search(pattern, title_lower, flags=re.IGNORECASE)
+    ]
+    affiliate_matches = [
+        pattern
+        for pattern in AFFILIATE_DISCLOSURE_PATTERNS
+        if re.search(pattern, body_lower, flags=re.IGNORECASE)
+    ]
+    cta_count = sum(
+        len(re.findall(pattern, body_lower, flags=re.IGNORECASE))
+        for pattern in SHOPPING_CALL_TO_ACTION_PATTERNS
+    )
+    price_count = len(
+        re.findall(r"(?<!\w)[$£€]\s?\d[\d,.]*", combined)
+    )
+    discount_count = len(
+        re.findall(
+            r"\b(?:deal|discount|discounted|sale|save|coupon|off|lowest price)\b",
+            combined,
+        )
+    )
+    first_person_sales = bool(
+        re.search(
+            r"\b(?:i(?:'m| am) (?:a )?deals? writer|i(?:'ve| have) (?:vetted|found)|"
+            r"my (?:favorite|top) deals?)\b",
+            combined,
+        )
+    )
+
+    reasons: list[str] = []
+    title_confirmed = bool(title_matches)
+    if title_confirmed:
+        reasons.append("shopping_title_with_commerce_signals")
+    if title_confirmed and affiliate_matches:
+        reasons.append("affiliate_disclosure_with_sales_content")
+    if title_confirmed and cta_count >= 2:
+        reasons.append("repeated_shopping_calls_to_action")
+    if title_confirmed and price_count >= 4 and discount_count >= 2:
+        reasons.append("dense_prices_and_discounts")
+    if first_person_sales and (price_count >= 2 or discount_count >= 2):
+        reasons.append("first_person_deals_roundup")
+    return list(dict.fromkeys(reasons))
+
+
 def collect_candidates(feed_urls: list[str], used_urls: set[str]) -> list[dict]:
     now = datetime.now(timezone.utc)
     candidates: list[dict] = []
@@ -817,6 +902,14 @@ def collect_candidates(feed_urls: list[str], used_urls: set[str]) -> list[dict]:
                 "published": published,
                 "rss_text": rss_text[:4000],
             }
+            promotion_reasons = promotional_content_reasons(candidate)
+            if promotion_reasons:
+                LOGGER.info(
+                    "Promotional RSS candidate rejected: %s | reasons=%s",
+                    title,
+                    promotion_reasons,
+                )
+                continue
             candidate["rough_score"] = rough_score(candidate, keywords)
 
             candidates.append(candidate)
@@ -988,6 +1081,9 @@ CHANNEL PROFILE:
 Score relevance (30), impact (25), novelty (20), video potential (15), and
 source clarity (10). Reject ads, deals, minor accessories, opinion-only pieces,
 vague rumors, and duplicates; for duplicate events choose the strongest source.
+Treat affiliate shopping guides, deal roundups, coupon/discount posts, preorder
+promotions, and retailer price-drop articles as promotional content rather than news,
+even when they contain product specifications or editorial commentary.
 Use only supplied data. local_pre_score is a hint, not a verdict. Return valid
 candidate indexes in descending score order.
 
@@ -1010,6 +1106,12 @@ CANDIDATES:
                 continue
             if item.index in used_indexes:
                 continue
+            if promotional_content_reasons(ranking_pool[item.index]):
+                LOGGER.warning(
+                    "AI-ranked promotional candidate rejected locally: %s",
+                    ranking_pool[item.index]["title"],
+                )
+                continue
             used_indexes.add(item.index)
             valid.append(item)
 
@@ -1021,6 +1123,8 @@ CANDIDATES:
             if len(valid) >= target_count:
                 break
             if index in used_indexes:
+                continue
+            if promotional_content_reasons(candidate):
                 continue
             used_indexes.add(index)
             valid.append(
@@ -1041,7 +1145,11 @@ CANDIDATES:
         LOGGER.warning("Yerel ön puan sıralaması kullanılacak.")
 
         fallback: list[RankedNews] = []
-        for index, candidate in enumerate(ranking_pool[:target_count]):
+        for index, candidate in enumerate(ranking_pool):
+            if len(fallback) >= target_count:
+                break
+            if promotional_content_reasons(candidate):
+                continue
             fallback.append(
                 RankedNews(
                     index=index,
@@ -1958,6 +2066,19 @@ def main(argv: list[str] | None = None) -> int:
                     LOGGER.warning(
                         "Kaynak metin çok kısa olduğu için atlandı: %s",
                         candidate["title"],
+                    )
+                    continue
+
+                promotion_reasons = promotional_content_reasons(
+                    candidate,
+                    article_text,
+                )
+                if promotion_reasons:
+                    LOGGER.warning(
+                        "Promotional article rejected after extraction: %s | "
+                        "reasons=%s",
+                        candidate["title"],
+                        promotion_reasons,
                     )
                     continue
 

@@ -12,6 +12,96 @@ from file_utils import sha256_file
 
 
 class NewsPipelineConfigurationTests(unittest.TestCase):
+    def test_deals_roundup_and_affiliate_price_post_are_promotional(self) -> None:
+        roundup = {
+            "title": "I'm a Deals Writer, and These Are My Top 10 Tech Deals This Week",
+            "rss_text": (
+                "We may earn a commission from links on this page. As Lifehacker's "
+                "deals writer, I've gathered this week's sales highlights. "
+                "Laptop $999.96 Get Deal Get Deal. TV $548.99 Save $451. "
+                "Monitor $314.99 at Amazon with 43% off."
+            ),
+        }
+        price_post = {
+            "title": "Google Pixel Watch 4 LTE Falls to $349.99",
+            "rss_text": (
+                "We may earn a commission from links on this page. The watch is "
+                "$349.99, originally $449. Get Deal Get Deal at Amazon."
+            ),
+        }
+
+        self.assertTrue(news_pipeline.promotional_content_reasons(roundup))
+        self.assertTrue(news_pipeline.promotional_content_reasons(price_post))
+
+    def test_reg_ad_and_news_about_business_deals_are_not_promotion_signals(self) -> None:
+        ordinary_news = {
+            "title": "Microsoft changes privacy controls after regulator review",
+            "rss_text": (
+                "REG AD The regulator said Microsoft's advertising platforms must "
+                "offer clearer consent controls. No products are being sold here."
+            ),
+        }
+        corporate_transaction = {
+            "title": "Chip company signs $10 billion acquisition deal",
+            "rss_text": (
+                "The boards approved a corporate acquisition subject to regulatory "
+                "review and shareholder approval."
+            ),
+        }
+
+        self.assertEqual(
+            news_pipeline.promotional_content_reasons(ordinary_news),
+            [],
+        )
+        self.assertEqual(
+            news_pipeline.promotional_content_reasons(corporate_transaction),
+            [],
+        )
+
+    def test_ai_cannot_restore_a_locally_detected_promotional_candidate(self) -> None:
+        now = news_pipeline.datetime.now(news_pipeline.timezone.utc)
+        candidates = [
+            {
+                "title": "Top 10 Tech Deals This Week",
+                "source": "Deals Feed",
+                "published": now,
+                "rss_text": (
+                    "We may earn a commission from links. Laptop $999, TV $500, "
+                    "phone $300, watch $200. Get Deal Get Deal."
+                ),
+                "rough_score": 99,
+            },
+            {
+                "title": "Researchers disclose a major processor vulnerability",
+                "source": "Security Feed",
+                "published": now,
+                "rss_text": "Researchers documented the flaw and mitigations.",
+                "rough_score": 80,
+            },
+        ]
+        ai_result = news_pipeline.RankingResult(
+            selected=[
+                news_pipeline.RankedNews(
+                    index=0,
+                    score=95,
+                    reason="Incorrectly selected promotion.",
+                ),
+                news_pipeline.RankedNews(
+                    index=1,
+                    score=85,
+                    reason="Substantive security news.",
+                ),
+            ]
+        )
+        with (
+            patch.object(news_pipeline, "TOP_N", 1),
+            patch.object(news_pipeline, "RANKING_RESERVE", 1),
+            patch.object(news_pipeline, "structured_ai_call", return_value=ai_result),
+        ):
+            ranked = news_pipeline.rank_candidates(candidates, "Technology news")
+
+        self.assertEqual([item.index for item in ranked], [1])
+
     def test_tech_summary_prompt_uses_requested_copy(self) -> None:
         result = news_pipeline.NewsSummary(
             title_en="A factual technology story",
