@@ -60,16 +60,19 @@ class ContentValidationTests(unittest.TestCase):
                 source_text=source,
             )
 
-    def test_unsupported_number_is_rejected(self) -> None:
+    def test_unsupported_number_is_recorded_without_rewrite(self) -> None:
         narration, source = valid_material()
         words = narration.split()
         words[20] = "987654"
-        with self.assertRaisesRegex(ContentValidationError, "numbers absent"):
-            validate_narration(
-                title="Unsupported number",
-                narration=" ".join(words),
-                source_text=source,
-            )
+        result = validate_narration(
+            title="Audited number",
+            narration=" ".join(words),
+            source_text=source,
+            factual_review={"names_entities_checked": ["OpenAI"]},
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertIn("987654", result["checked_numbers"])
 
     def test_unsigned_narration_number_matches_source_currency_amount(self) -> None:
         narration, source = valid_material()
@@ -91,17 +94,20 @@ class ContentValidationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "passed")
 
-    def test_wrong_currency_symbol_remains_rejected(self) -> None:
+    def test_currency_mismatch_is_recorded_without_rewrite(self) -> None:
         narration, source = valid_material()
         narration = narration.replace("customers.", "customers with $22 billion records.", 1)
         source += " The filing reports a €22 billion amount."
 
-        with self.assertRaisesRegex(ContentValidationError, "numbers absent"):
-            validate_narration(
-                title="Wrong currency amount",
-                narration=narration,
-                source_text=source,
-            )
+        result = validate_narration(
+            title="Audited currency amount",
+            narration=narration,
+            source_text=source,
+            factual_review={"names_entities_checked": ["OpenAI"]},
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertIn("$22", result["checked_numbers"])
 
     def test_fabricated_direct_quote_is_rejected(self) -> None:
         narration, source = valid_material()

@@ -112,8 +112,10 @@ body is allowed only when it independently passes the same checks. Long aggregat
 headlines receive limited paraphrase tolerance when at least two significant title
 terms remain grounded in the article; short titles retain the stricter threshold.
 Ungrounded items in the model's audit metadata are discarded locally instead of
-spending another summary request when the narration itself passes its number and quote
-checks.
+spending another summary request when the narration itself passes its structural and
+direct-quote checks. Narration numbers are recorded in validation metadata but are not
+matched against source-number strings and never trigger a paid rewrite; factual number
+discipline therefore relies on the generation prompt and model review.
 
 `RSS_FEED_TIME_INTERVAL_HOURS` in `.env` controls the RSS publication-age window in
 whole hours. For example, `24` accepts feed entries published during the preceding
