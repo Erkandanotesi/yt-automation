@@ -9,11 +9,13 @@ from publish_stage import (
     PublishSettings,
     PublishingCopy,
     _local_publishing_fallback,
+    _publishing_prompt,
     archive_thumbnail_asset,
     build_chapters,
     build_description,
     chapter_block,
     prepare_ai_rendered_thumbnail,
+    thumbnail_generation_prompt,
 )
 
 
@@ -105,11 +107,63 @@ class PublishStageTests(unittest.TestCase):
 
         self.assertEqual(
             repaired.recommended_thumbnail_text,
-            "Claude Reached Production",
+            "Claude Reached",
         )
-        self.assertLessEqual(len(repaired.recommended_thumbnail_text), 42)
+        self.assertLessEqual(len(repaired.recommended_thumbnail_text), 18)
         self.assertIn(repaired.recommended_thumbnail_text, concept.text_options)
-        self.assertTrue(all(len(option) <= 42 for option in concept.text_options))
+        self.assertTrue(all(len(option) <= 18 for option in concept.text_options))
+
+    def test_verbose_editorial_title_is_trimmed_without_breaking_recommendation(self) -> None:
+        payload = publishing_copy().model_dump(mode="json")
+        verbose = (
+            "Google Is Building a Vast New Face Recognition Database for Advertising"
+        )
+        payload["title_candidates"][0]["title"] = verbose
+        payload["recommended_title"] = verbose
+
+        repaired = PublishingCopy.model_validate(payload)
+
+        self.assertLessEqual(len(repaired.recommended_title), 50)
+        self.assertIn(
+            repaired.recommended_title,
+            [item.title for item in repaired.title_candidates],
+        )
+
+    def test_prompts_demand_distinct_short_hooks_and_breathing_room(self) -> None:
+        project = {"stories": [{"order": 1, "title": "Google face data"}]}
+        lead = {
+            "order": 1,
+            "title": "Google face data",
+            "source_title": "Google seeks additional face data",
+            "score": 9,
+            "ranking_reason": "High audience impact.",
+        }
+        planned = {"images": []}
+        copy_prompt = _publishing_prompt(
+            project,
+            lead,
+            planned,
+            "Google requested face data from users.",
+            "Google requested face data from users for a supported feature.",
+        )
+        image_prompt = thumbnail_generation_prompt(
+            lead=lead,
+            planned=planned,
+            narration="Google requested face data from users.",
+            publishing_copy=publishing_copy(),
+            headline="YOUR FACE DATA",
+        )
+
+        self.assertIn("4 to 7 words", copy_prompt)
+        self.assertIn("2 or 3 word phrase", copy_prompt)
+        self.assertIn("YOUR FACE DATA", copy_prompt)
+        self.assertIn("Never tighten tracking", image_prompt)
+        self.assertIn("Do not impose", image_prompt)
+        self.assertNotIn("LEFT 46%", image_prompt)
+        self.assertIn("completely new composition", image_prompt)
+        self.assertIn("No previous", image_prompt)
+        self.assertIn("story image is supplied", image_prompt)
+        self.assertIn("visually magnetic at phone size", image_prompt)
 
     def test_local_copy_fallback_is_complete_and_grounded(self) -> None:
         project = {
@@ -191,7 +245,8 @@ class PublishStageTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(len(calls), 1)
             self.assertIn("OUTLOOK EMAIL TRAP", calls[0])
-            self.assertIn("LEFT 46%", calls[0])
+            self.assertIn("headline anchored on the left", calls[0])
+            self.assertNotIn("LEFT 46%", calls[0])
 
     def test_chapters_are_embedded_verbatim_in_description(self) -> None:
         project = {

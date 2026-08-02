@@ -213,8 +213,14 @@ inspected; press any key only when ready to close it.
    Per-image animation clips are deleted as soon as the base visual is built. Once
    the final master and preview pass QA, the remaining `08_render/intermediates/`
    directory is deleted. Final videos, previews, reports, and source assets remain.
-8. Publishing copy and one series-aligned AI thumbnail are generated or reused from
-   cache, then the complete `09_publish/` package is saved.
+8. Publishing copy uses short editorial hooks: titles target 4–7 words (50 characters
+   maximum), while thumbnail copy is a distinct 2–3 word phrase capped at 18
+   characters. One series-aligned AI thumbnail is generated or reused from cache.
+   Its typography keeps a consistent left-side anchor but uses a flexible text zone,
+   so the image model never compresses letter spacing to satisfy a rigid percentage.
+   Thumbnail generation is text-to-image only: existing story-image pixels are never
+   uploaded or reused, and the prompt requests a fresh, high-impact composition.
+   The complete `09_publish/` package is then saved.
 9. The launcher waits two minutes at the final upload decision and uploads by default.
    Complete one OAuth browser authorization first so later scheduled runs can use the
    cached refresh token without interaction.

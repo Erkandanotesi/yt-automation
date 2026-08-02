@@ -53,9 +53,19 @@ from youtube_upload import format_youtube_title, next_publish_slot  # noqa: E402
 SCHEMA_VERSION = 1
 STAGE_NAME = "publish"
 YOUTUBE_TITLE_LIMIT = 100
+EDITORIAL_TITLE_LIMIT = 50
 YOUTUBE_MINIMUM_CHAPTERS = 3
 YOUTUBE_MINIMUM_CHAPTER_SECONDS = 10
-THUMBNAIL_TEXT_LIMIT = 42
+THUMBNAIL_TEXT_LIMIT = 18
+PUBLISHING_PROMPT_VERSION = 2
+
+
+def _normalize_editorial_title(value: object) -> str:
+    compact = re.sub(r"\s+", " ", str(value or "")).strip(" -|:;,")
+    if len(compact) <= EDITORIAL_TITLE_LIMIT:
+        return compact
+    shortened = compact[: EDITORIAL_TITLE_LIMIT + 1].rsplit(" ", 1)[0]
+    return shortened.strip(" -|:;,") or compact[:EDITORIAL_TITLE_LIMIT].strip()
 
 
 def _normalize_thumbnail_text(value: object) -> str:
@@ -65,7 +75,7 @@ def _normalize_thumbnail_text(value: object) -> str:
     selected: list[str] = []
     for word in compact.split():
         candidate = " ".join([*selected, word])
-        if len(selected) >= 6 or len(candidate) > THUMBNAIL_TEXT_LIMIT:
+        if len(selected) >= 3 or len(candidate) > THUMBNAIL_TEXT_LIMIT:
             break
         selected.append(word)
     result = " ".join(selected)
@@ -155,12 +165,17 @@ class PublishSettings:
 class TitleCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: str = Field(min_length=15, max_length=YOUTUBE_TITLE_LIMIT)
+    title: str = Field(min_length=15, max_length=EDITORIAL_TITLE_LIMIT)
     rationale: str = Field(min_length=20, max_length=400)
     clarity: int = Field(ge=1, le=10)
     curiosity: int = Field(ge=1, le=10)
     specificity: int = Field(ge=1, le=10)
     factual_risk: int = Field(ge=1, le=10)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_title(cls, value: object) -> str:
+        return _normalize_editorial_title(value)
 
 
 class ThumbnailConcept(BaseModel):
@@ -194,7 +209,7 @@ class PublishingCopy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title_candidates: list[TitleCandidate] = Field(min_length=5, max_length=10)
-    recommended_title: str = Field(min_length=15, max_length=YOUTUBE_TITLE_LIMIT)
+    recommended_title: str = Field(min_length=15, max_length=EDITORIAL_TITLE_LIMIT)
     recommended_title_reason: str = Field(min_length=20, max_length=500)
     thumbnail_concepts: list[ThumbnailConcept] = Field(min_length=2, max_length=3)
     recommended_concept_id: str
@@ -211,6 +226,11 @@ class PublishingCopy(BaseModel):
     @classmethod
     def normalize_recommended_thumbnail_text(cls, value: object) -> str:
         return _normalize_thumbnail_text(value)
+
+    @field_validator("recommended_title", mode="before")
+    @classmethod
+    def normalize_recommended_title(cls, value: object) -> str:
+        return _normalize_editorial_title(value)
 
     @model_validator(mode="after")
     def validate_recommendations(self) -> "PublishingCopy":
@@ -364,18 +384,36 @@ Create a factual YouTube publishing-copy package for a complete technology-news 
 Story 01 is the highest-rated lead and must drive the title and thumbnail.
 
 STRICT RULES
-- Return 5 to 10 title candidates, each at most 100 characters.
+- Return 5 to 10 genuinely different title candidates. Target 4 to 7 words and
+  24 to 42 characters; 50 characters is the hard maximum.
+- Write titles like a sharp human editor: conversational, active, immediately clear,
+  and built around the surprising consequence or tension. Put the concrete subject
+  early and remove every word that does not earn its place.
+- Good style examples only: "Google Now Wants Your Face Data" and
+  "Is Big Tech Buying Washington?" Never copy their facts unless supported here.
+- Avoid article-summary phrasing and tired wrappers such as "What We Know",
+  "Explained", "Inside", "Everything You Need to Know", "Tech News", or "Update".
 - Do not make any claim stronger than the supplied original article.
 - Preserve uncertainty words such as reportedly, may, or believes when needed.
 - Put the important company/product/security subject early.
 - No fabricated quotation, number, victim, country, or attribution.
 - Thumbnail concepts must use only supported lead-story facts.
-- Thumbnail text must be 2 to 6 short words, at most 42 characters.
+- Design every thumbnail concept as a fresh, dedicated visual—not a reuse of a
+  storyboard image. Build one instantly readable moment of tension, consequence, or
+  surprise with a strong foreground subject, depth, and a vivid contrasting accent.
+- Avoid bland stock-photo staging, logo-only layouts, generic laptop screens, tiny UI,
+  empty backgrounds, and collections of unrelated objects.
+- Thumbnail text must be a punchy 2 or 3 word phrase, ideally 8 to 15 characters
+  and never more than 18 characters. It is a visual hook, not a sentence or title.
 - recommended_thumbnail_text must exactly equal one text_options entry from the
   recommended_concept_id. Do not paraphrase it into a separate value.
-- Thumbnail text must name the lead product, company, or concrete topic; reject
-  generic clickbait such as NO CLICK NEEDED unless a named topic is also present.
-- Recommended thumbnail text must complement, not fully repeat, the title.
+- Thumbnail text must identify the company, product, object, consequence, or personal
+  stake from the lead story. Prefer compact hooks like "YOUR FACE DATA",
+  "WINDOWS WARNING", or "WAYMO HALTED". Avoid compressed article headlines such as
+  "HEATHROW WINDOWS WARNING" or "WAYMO CHARGING HALTED". Reject vague filler such as
+  "TECH NEWS", "BIG UPDATE", or "THIS CHANGES EVERYTHING".
+- Recommended thumbnail text must complement the title and must not repeat the full
+  title. Distill its strongest concrete tension into fewer words.
 - Scores use 10=best for clarity/curiosity/specificity and 10=highest risk for factual_risk.
 - Lead description summarizes story 01. Episode description previews the other stories.
 - Tags must be useful search phrases without #. Hashtags must start with #.
@@ -417,26 +455,26 @@ def _local_publishing_fallback(
 
     base = _trim_words(
         str(lead.get("title") or lead.get("source_title") or "Technology News Update"),
-        YOUTUBE_TITLE_LIMIT,
+        EDITORIAL_TITLE_LIMIT,
     )
-    subject = _trim_words(base, 62)
+    subject = _trim_words(base, 34)
     title_texts = [
         base,
-        _trim_words(f"{subject}: What We Know", YOUTUBE_TITLE_LIMIT),
-        _trim_words(f"{subject} Explained | Tech Reports", YOUTUBE_TITLE_LIMIT),
-        _trim_words(f"Why {subject} Matters Now", YOUTUBE_TITLE_LIMIT),
-        _trim_words(f"Inside {subject} | Tech Reports", YOUTUBE_TITLE_LIMIT),
+        _trim_words(f"Why {subject} Matters Now", EDITORIAL_TITLE_LIMIT),
+        _trim_words(f"{subject}: The Real Stakes", EDITORIAL_TITLE_LIMIT),
+        _trim_words(f"What {subject} Means for You", EDITORIAL_TITLE_LIMIT),
+        _trim_words(f"{subject}: Why It Matters", EDITORIAL_TITLE_LIMIT),
     ]
     unique_titles: list[str] = []
     for title in title_texts:
         if len(title) < 15:
-            title = _trim_words(f"{title} | Technology News", YOUTUBE_TITLE_LIMIT)
+            title = _trim_words(f"{title} | Tech", EDITORIAL_TITLE_LIMIT)
         if title not in unique_titles:
             unique_titles.append(title)
     while len(unique_titles) < 5:
         suffix = len(unique_titles) + 1
         unique_titles.append(
-            _trim_words(f"{subject} | Tech News Report {suffix}", YOUTUBE_TITLE_LIMIT)
+            _trim_words(f"{subject}: Key Detail {suffix}", EDITORIAL_TITLE_LIMIT)
         )
 
     meaningful = [
@@ -637,26 +675,36 @@ the image pixels. Output native 1280x720, 16:9.
 EXACT HEADLINE TEXT (spell exactly; no other editorial headline):
 {headline.upper()}
 
-FIXED SERIES TEMPLATE: high-contrast black or near-black editorial background;
-huge heavy condensed uppercase headline inside the LEFT 46%, starting near x=55 and
-vertically centered; story depiction inside the RIGHT 54%; white headline letters
-with exactly one supported danger/number phrase emphasized in vivid red or yellow;
-crisp edges and a restrained black shadow. Keep this geometry identical across the
-series and readable at phone size.
+SERIES TEMPLATE: high-contrast black or near-black editorial background with the
+headline anchored on the left and one clear story subject on the right. Do not impose
+a fixed percentage split or fixed text-box width. Give the exact short phrase the
+space it naturally needs and move the visual boundary slightly when necessary. Set it
+on 2 or 3 balanced lines with generous outer margins, normal readable letter spacing,
+and comfortable space between lines. Never tighten tracking, narrow the glyphs,
+squeeze, stretch, crowd, or run text against an edge just to fit a rigid region. Use
+white letters and emphasize at most one key word in vivid red or yellow, with crisp
+edges and a restrained black shadow. Keep the left-text/right-subject visual rhythm
+consistent across the series and readable at phone size.
 
 LEAD STORY: {lead.get('title', '')}
 SOURCE TITLE: {lead.get('source_title', '')}
 APPROVED VISUAL: {concept.visual}
 APPROVED NARRATION EVIDENCE: {narration[:1800]}
-STORYBOARD CONTEXT: {json.dumps(planned.get('images', []), ensure_ascii=False)[:1800]}
+TEXT-ONLY STORY CONTEXT: {json.dumps(planned.get('images', []), ensure_ascii=False)[:1800]}
 
+Create a completely new composition specifically for this thumbnail. No previous
+story image is supplied or should be recreated, traced, composited, or imitated.
 Depict one clear, immediately understandable focal subject grounded only in the
-approved story. The scene may be dramatic and vivid but must remain bright enough to
-read; avoid crushed blacks. No collage, split panels, duration badge, channel logo,
-YouTube UI, watermark, TV frame, flags, weapons, fabricated numbers, unsupported
-victims, or unrelated technology. Generic interface labels inside a depicted device
-are acceptable, but add no second headline. Ensure the exact headline is perfectly
-spelled and fully inside the crop-safe area.
+approved story. Make it visually magnetic at phone size: show the central conflict or
+consequence, use foreground/background depth, a decisive gesture or physical action
+when supported, dramatic perspective, crisp separation, and one vivid color accent.
+The scene may be dramatic but must remain bright enough to read; avoid crushed blacks,
+passive stock-photo poses, generic screen-only scenes, logo-only art, tiny interface
+details, and empty filler space. No collage, split panels, duration badge, channel
+logo, YouTube UI, watermark, TV frame, flags, weapons, fabricated numbers,
+unsupported victims, or unrelated technology. Generic interface labels inside a
+depicted device are acceptable, but add no second headline. Ensure the exact headline
+is perfectly spelled and fully inside the crop-safe area.
 """.strip()
 
 
@@ -981,21 +1029,36 @@ def render_thumbnail_variants(
         ],
         "Render thumbnail contact sheet",
     )
+    if text_rendering == "ai_rendered":
+        headline_region = {
+            "side": "left",
+            "width_policy": "flexible_to_phrase",
+            "anchor": "consistent_left",
+            "maximum_lines": 3,
+            "tracking_policy": "never_compress_to_fit",
+        }
+        subject_region = {
+            "side": "right",
+            "boundary_policy": "may_shift_for_natural_headline_spacing",
+        }
+    else:
+        headline_region = {
+            "side": "left",
+            "maximum_width_percent": 46,
+            "text_origin": {"x": 55, "vertical_alignment": "center"},
+            "maximum_lines": 3,
+        }
+        subject_region = {"side": "right", "target_width_percent": 54}
     return {
         "alignment_template": {
             "template_id": (
-                "tech_reports_ai_headline_v1"
+                "tech_reports_ai_headline_v2"
                 if text_rendering == "ai_rendered"
                 else "tech_news_left_headline_v1"
             ),
             "canvas": {"width": 1280, "height": 720},
-            "headline_region": {
-                "side": "left",
-                "maximum_width_percent": 46,
-                "text_origin": {"x": 55, "vertical_alignment": "center"},
-                "maximum_lines": 3,
-            },
-            "subject_region": {"side": "right", "target_width_percent": 54},
+            "headline_region": headline_region,
+            "subject_region": subject_region,
             "palette": {
                 "background": "black_or_near_black",
                 "primary_text": "white",
@@ -1163,6 +1226,7 @@ def build_publish_package(
             "episode_stories": project["stories"],
             "model": settings.model,
             "reasoning_effort": settings.reasoning_effort,
+            "publishing_prompt_version": PUBLISHING_PROMPT_VERSION,
         }
     )
     publishing_copy: PublishingCopy | None = None
@@ -1306,7 +1370,11 @@ def build_publish_package(
         "phone_preview_created": Path(thumbnails["phone_preview_file"]).is_file(),
         "fixed_thumbnail_alignment_recorded": thumbnails["alignment_template"][
             "template_id"
-        ] in {"tech_news_left_headline_v1", "tech_reports_ai_headline_v1"},
+        ] in {
+            "tech_news_left_headline_v1",
+            "tech_reports_ai_headline_v1",
+            "tech_reports_ai_headline_v2",
+        },
         "thumbnail_archived_with_metadata": (
             Path(thumbnail_archive["file"]).is_file()
             and Path(thumbnail_archive["metadata_file"]).is_file()
