@@ -6,15 +6,10 @@
       <outline type="rss" text="AI | The Verge" title="AI | The Verge" xmlUrl="https://www.theverge.com/rss/ai-artificial-intelligence/index.xml" htmlUrl="https://www.theverge.com/rss/ai-artificial-intelligence/index.xml"/>
       <outline type="rss" text="WIRED Artificial Intelligence" title="WIRED Artificial Intelligence" xmlUrl="https://www.wired.com/feed/tag/ai/latest/rss" htmlUrl="https://www.wired.com/tag/artificial-intelligence/"/>
       <outline type="rss" text="AI | VentureBeat" title="AI | VentureBeat" xmlUrl="https://venturebeat.com/category/ai/feed/" htmlUrl="https://venturebeat.com/category/ai/"/>
-      <outline type="rss" text="Google AI" title="Google AI" xmlUrl="https://blog.google/technology/ai/rss/" htmlUrl="https://blog.google/technology/ai/"/>
-      <outline type="rss" text="OpenAI News" title="OpenAI News" xmlUrl="https://openai.com/news/rss.xml" htmlUrl="https://openai.com/news/"/>
     </outline>
     <outline text="Tech" title="Tech">
       <outline type="rss" text="Ars Technica - All content" title="Ars Technica - All content" xmlUrl="https://feeds.arstechnica.com/arstechnica/index" htmlUrl="https://feeds.arstechnica.com/arstechnica/index"/>
       <outline type="rss" text="TechCrunch" title="TechCrunch" xmlUrl="https://techcrunch.com/feed/" htmlUrl="https://techcrunch.com/"/>
-      <outline type="rss" text="MIT Technology Review" title="MIT Technology Review" xmlUrl="https://www.technologyreview.com/feed/" htmlUrl="https://www.technologyreview.com/"/>
-      <outline type="rss" text="IEEE Spectrum" title="IEEE Spectrum" xmlUrl="https://spectrum.ieee.org/feeds/feed.rss" htmlUrl="https://spectrum.ieee.org/"/>
-      <outline type="rss" text="NYT &gt; Technology" title="NYT &gt; Technology" xmlUrl="https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml" htmlUrl="https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml"/>
       <outline type="rss" text="The Register" title="The Register" xmlUrl="https://www.theregister.com/headlines.rss" htmlUrl="https://www.theregister.com/headlines.rss"/>
     </outline>
     <outline text="Cyber Security" title="Cyber Security">
