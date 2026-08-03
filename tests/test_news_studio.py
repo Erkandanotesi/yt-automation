@@ -138,12 +138,14 @@ class NewsStudioTests(unittest.TestCase):
             patch("news_studio.timed_choice", side_effect=["2", "u", "0"]),
             patch("news_studio.run_flow") as run,
             patch("news_studio.upload_project") as upload,
+            patch("news_studio._event") as event,
         ):
             exit_code = interactive()
 
         self.assertEqual(exit_code, 0)
         run.assert_not_called()
         upload.assert_not_called()
+        self.assertEqual(event.call_args.args[1]["decision"], "do_not_upload")
 
     def test_interactive_resume_passes_selected_section_to_first_flow(self) -> None:
         status = {
@@ -452,6 +454,7 @@ class NewsStudioTests(unittest.TestCase):
                 "news_studio.upload_project",
                 return_value={"status": "UPLOAD_COMPLETE"},
             ) as upload,
+            patch("news_studio._event"),
         ):
             exit_code = interactive()
 
@@ -484,7 +487,11 @@ class NewsStudioTests(unittest.TestCase):
         self.assertEqual(selected, "2")
 
     def test_enter_selects_timed_choice_default_immediately(self) -> None:
-        fake_msvcrt = SimpleNamespace(kbhit=lambda: True, getwch=lambda: "\r")
+        availability = iter([False, True])
+        fake_msvcrt = SimpleNamespace(
+            kbhit=lambda: next(availability, True),
+            getwch=lambda: "\r",
+        )
         with (
             patch("news_studio.sys.stdin.isatty", return_value=True),
             patch("news_studio.os.name", "nt"),
@@ -497,6 +504,34 @@ class NewsStudioTests(unittest.TestCase):
                 timeout_seconds=30,
             )
         self.assertEqual(selected, "1")
+
+    def test_stale_enter_cannot_trigger_next_menu_default(self) -> None:
+        availability = iter([False, True, True, False, True])
+        characters = iter(["1", "\r", "0"])
+        fake_msvcrt = SimpleNamespace(
+            kbhit=lambda: next(availability, True),
+            getwch=lambda: next(characters),
+        )
+        with (
+            patch("news_studio.sys.stdin.isatty", return_value=True),
+            patch("news_studio.os.name", "nt"),
+            patch.dict("sys.modules", {"msvcrt": fake_msvcrt}),
+        ):
+            first = timed_choice(
+                "Preview",
+                {"1": "approve", "0": "stop"},
+                default="1",
+                timeout_seconds=30,
+            )
+            second = timed_choice(
+                "Upload",
+                {"1": "upload", "0": "do not upload"},
+                default="1",
+                timeout_seconds=30,
+            )
+
+        self.assertEqual(first, "1")
+        self.assertEqual(second, "0")
 
     def test_manual_separator_mode_waits_for_enter_then_continues(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1475,6 +1475,16 @@ def timed_choice(
         raise ValueError("The timed-choice default must be one of the options.")
     if timeout_seconds < 0:
         raise ValueError("The timed-choice timeout cannot be negative.")
+    windows_console = None
+    if sys.stdin.isatty() and os.name == "nt":
+        import msvcrt
+
+        windows_console = msvcrt
+        # Single-key menus intentionally do not require Enter. Clear anything
+        # left by an earlier `key + Enter` response before showing a new menu;
+        # otherwise that stale Enter would silently select this menu's default.
+        while windows_console.kbhit():
+            windows_console.getwch()
     color = _console_color_enabled()
     print()
     print(_paint(prompt, ANSI_BOLD + ANSI_CYAN, enabled=color))
@@ -1493,12 +1503,10 @@ def timed_choice(
 
     selected: str | None = None
     deadline = time.monotonic() + timeout_seconds
-    if sys.stdin.isatty() and os.name == "nt":
-        import msvcrt
-
+    if windows_console is not None:
         while time.monotonic() < deadline:
-            if msvcrt.kbhit():
-                key = msvcrt.getwch()
+            if windows_console.kbhit():
+                key = windows_console.getwch()
                 if key == "\x03":
                     raise KeyboardInterrupt
                 if key in {"\r", "\n"}:
@@ -1818,6 +1826,14 @@ def interactive() -> int:
         {"1": "Upload to YouTube", "0": "Do not upload"},
         default="1",
         timeout_seconds=upload_timeout,
+    )
+    _event(
+        project_dir(video_number),
+        {
+            "type": "youtube_upload_decision",
+            "decision": "upload" if upload_choice == "1" else "do_not_upload",
+            "source": "interactive",
+        },
     )
     if upload_choice == "1":
         uploaded = upload_project(video_number)
