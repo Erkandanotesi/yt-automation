@@ -178,10 +178,10 @@ class EffectsSettings:
                 os.getenv("BACKGROUND_MUSIC_TARGET_LUFS", "-20")
             ),
             music_speech_gain_db=float(
-                os.getenv("BACKGROUND_MUSIC_SPEECH_GAIN_DB", "-22")
+                os.getenv("BACKGROUND_MUSIC_SPEECH_GAIN_DB", "-24")
             ),
             music_separator_gain_db=float(
-                os.getenv("BACKGROUND_MUSIC_SEPARATOR_GAIN_DB", "-16")
+                os.getenv("BACKGROUND_MUSIC_SEPARATOR_GAIN_DB", "-18")
             ),
             music_loop_crossfade_seconds=float(
                 os.getenv("BACKGROUND_MUSIC_LOOP_CROSSFADE_SECONDS", "0.35")
