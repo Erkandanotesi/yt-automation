@@ -236,6 +236,53 @@ class RenderStageTests(unittest.TestCase):
             self.assertIn("adelay=3000|3000[timeline_delayed_shutter_0]", filters)
             self.assertIn("amix=inputs=4", filters)
 
+    def test_story_music_is_trimmed_delayed_and_crossfaded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = {
+                "duration_seconds": 20,
+                "narration": [
+                    {"file": str(root / "voice.mp3"), "start": 0, "duration": 20}
+                ],
+                "separators": [],
+                "background_music": {
+                    "tracks": [
+                        {
+                            "track_file": str(root / "long.mp3"),
+                            "timeline_start": 0,
+                            "segment_duration_seconds": 10.5,
+                            "fade_in_seconds": 1,
+                            "fade_out_seconds": 1,
+                        },
+                        {
+                            "track_file": str(root / "short.mp3"),
+                            "timeline_start": 9.5,
+                            "segment_duration_seconds": 10.5,
+                            "fade_in_seconds": 1,
+                            "fade_out_seconds": 1,
+                        },
+                    ],
+                    "normalization": {"target_lufs": -20},
+                    "ducking": {"speech_gain_factor": 0.063096},
+                },
+                "glitch_events": [],
+                "glitch_sfx": {},
+                "timeline_sfx": {"assets": {}, "events": []},
+            }
+            with (
+                patch("render_stage._ffmpeg", return_value=Path("ffmpeg")),
+                patch("render_stage._run") as run,
+            ):
+                _mix_audio_track(root, plan, [], RenderSettings())
+
+            command = run.call_args.args[0]
+            filters = command[command.index("-filter_complex") + 1]
+            self.assertEqual(command.count("-stream_loop"), 2)
+            self.assertIn("atrim=duration=10.5", filters)
+            self.assertIn("afade=t=out:st=9.5:d=1.0", filters)
+            self.assertIn("adelay=9500|9500[music1]", filters)
+            self.assertIn("[voice0][music0][music1]amix=inputs=3", filters)
+
     def test_skipped_separator_plan_uses_images_from_program_start(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 5"

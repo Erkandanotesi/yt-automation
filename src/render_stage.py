@@ -1294,11 +1294,25 @@ def _mix_audio_track(
         command.extend(["-i", str(path)])
     next_input_index = separator_start_index + len(separators)
     music = plan.get("background_music")
-    music_index = -1
-    if music and music.get("track_file"):
-        music_index = next_input_index
-        command.extend(["-stream_loop", "-1", "-i", music["track_file"]])
-        next_input_index += 1
+    music_inputs: list[tuple[int, dict]] = []
+    if music:
+        playlist = music.get("tracks") or []
+        if playlist:
+            for track in playlist:
+                music_inputs.append((next_input_index, track))
+                command.extend(["-stream_loop", "-1", "-i", track["track_file"]])
+                next_input_index += 1
+        elif music.get("track_file"):
+            # Backward compatibility for effects plans made before per-story music.
+            music_inputs.append((next_input_index, {
+                "track_file": music["track_file"],
+                "timeline_start": 0.0,
+                "segment_duration_seconds": float(plan["duration_seconds"]),
+                "fade_in_seconds": music["fade_in_seconds"],
+                "fade_out_seconds": music["fade_out_seconds"],
+            }))
+            command.extend(["-stream_loop", "-1", "-i", music["track_file"]])
+            next_input_index += 1
     sfx = plan.get("glitch_sfx") or {}
     sfx_index = -1
     if sfx.get("file") and plan.get("glitch_events"):
@@ -1342,18 +1356,25 @@ def _mix_audio_track(
             f"volume={separator_gain:.6f},adelay={delay}|{delay}[{label}]"
         )
         labels.append(f"[{label}]")
-    if music_index >= 0:
-        duration = float(plan["duration_seconds"])
+    if music_inputs:
         speech_factor = float(music["ducking"]["speech_gain_factor"])
-        filters.append(
-            f"[{music_index}:a]atrim=duration={duration},asetpts=PTS-STARTPTS,"
-            "aresample=48000,aformat=channel_layouts=stereo,"
-            f"loudnorm=I={music['normalization']['target_lufs']}:TP=-2:LRA=7,"
-            f"volume={speech_factor:.6f},afade=t=in:st=0:d={music['fade_in_seconds']},"
-            f"afade=t=out:st={max(0.0, duration - float(music['fade_out_seconds']))}:"
-            f"d={music['fade_out_seconds']}[music]"
-        )
-        labels.append("[music]")
+        for playlist_index, (input_index, track) in enumerate(music_inputs):
+            segment_duration = float(track["segment_duration_seconds"])
+            timeline_start = float(track.get("timeline_start", 0.0))
+            fade_in = min(float(track["fade_in_seconds"]), segment_duration / 2)
+            fade_out = min(float(track["fade_out_seconds"]), segment_duration / 2)
+            delay = round(timeline_start * 1000)
+            label = f"music{playlist_index}"
+            filters.append(
+                f"[{input_index}:a]atrim=duration={segment_duration},"
+                "asetpts=PTS-STARTPTS,aresample=48000,"
+                "aformat=channel_layouts=stereo,"
+                f"loudnorm=I={music['normalization']['target_lufs']}:TP=-2:LRA=7,"
+                f"volume={speech_factor:.6f},afade=t=in:st=0:d={fade_in},"
+                f"afade=t=out:st={max(0.0, segment_duration - fade_out)}:d={fade_out},"
+                f"adelay={delay}|{delay}[{label}]"
+            )
+            labels.append(f"[{label}]")
     if sfx_index >= 0:
         glitches = plan["glitch_events"]
         filters.append(

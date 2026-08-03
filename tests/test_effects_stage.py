@@ -14,6 +14,7 @@ from effects_stage import (
     build_timeline_sfx,
     build_visual_events,
     render_reference_proof,
+    select_music_tracks,
     validate_visual_cadence,
     validate_visual_coverage,
 )
@@ -158,6 +159,29 @@ def write_plan_fixture(root: Path) -> dict[str, Path]:
 
 
 class EffectsStageTests(unittest.TestCase):
+    def test_music_playlist_is_reproducibly_random_and_unique_per_story(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            music_dir = root / "music"
+            music_dir.mkdir()
+            for index in range(7):
+                (music_dir / f"song_{index}.mp3").write_bytes(bytes([index + 1]))
+            settings = replace(fixture_settings(root), music_directory=music_dir)
+
+            first, first_seed = select_music_tracks(
+                settings, story_count=5, video_number=16
+            )
+            second, second_seed = select_music_tracks(
+                settings, story_count=5, video_number=16
+            )
+
+            self.assertEqual(first_seed, second_seed)
+            self.assertEqual(
+                [track.name for track, _ in first],
+                [track.name for track, _ in second],
+            )
+            self.assertEqual(len({track for track, _ in first}), 5)
+
     def test_shutter_counts_images_only_and_moves_after_separator(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

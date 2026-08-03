@@ -539,18 +539,20 @@ Build the initial version with FFmpeg filters and reusable overlay assets. Match
 screenshot’s “Shutter Frame” and “Tape Dropouts” feel using a short approved reference
 render before applying it to a complete video.
 
-### Repeated background music
+### Per-section background music
 
-1. Add a licensed background track to `Assets/Audio/background_music/`.
-2. Loop it seamlessly for the complete program duration.
-3. Keep it under all voiceover and separator sections.
+1. Add licensed background tracks to `Assets/Audio/background_music/`.
+2. Shuffle them reproducibly for each video and assign a different track to each
+   news section whenever the library contains enough tracks.
+3. Trim long tracks at the section boundary and loop short tracks only inside their
+   assigned section.
 4. Apply loudness normalization.
 5. Duck the music automatically while narration is active.
 6. Permit slightly higher music during separators if it does not conflict with their
    audio.
-7. Add short fades at the start/end and crossfade loop boundaries if the source loop is
-   not seamless.
-8. Record the track, license, gain, loop points, and mix settings in the manifest.
+7. Crossfade adjacent section tracks, and add short fades at the program start/end.
+8. Record every assignment, license, checksum, timeline window, and mix setting in the
+   manifest.
 
 Starting mix targets should be treated as test values, not laws:
 
@@ -589,10 +591,11 @@ Starting mix targets should be treated as test values, not laws:
   voice/SFX, then repeated music from top to bottom.
 - Glitch accents occur only at separator exits and selected cuts, are spaced apart,
   and cover less than 3% of the program. The paired glitch SFX is generated locally.
-- User-supplied background music is normalized, crossfaded across loop boundaries,
-  faded at program edges, ducked to -22 dB under narration, and allowed up to -16 dB
-  during separators. Track checksum, license metadata, duration, and loop count are
-  recorded.
+- User-supplied background music is reproducibly shuffled per video. Each story gets a
+  different song when enough tracks exist; long songs are trimmed, short songs repeat
+  only inside that story, and adjacent songs overlap with a one-second fade-out/fade-in.
+  Every assignment, checksum, license, source duration, timeline window, and loop count
+  is recorded.
 - `effects_video.bat` produces the plan and a real 60-second H.264/AAC reference
   render with motion, TV frame, glitch/SFX, captions, voice, and repeated music.
 - Three Milestone 6 tests include a real FFmpeg audio/video render; the full suite is

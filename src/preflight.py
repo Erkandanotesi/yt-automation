@@ -497,6 +497,8 @@ def collect_checks() -> list[Check]:
                 f"paper SFX={effects_settings.paper_sfx_file.name}; "
                 f"shutter SFX={effects_settings.shutter_sfx_file.name}; "
                 f"music tracks={len(music_files)}; "
+                "music section crossfade="
+                f"{effects_settings.music_section_crossfade_seconds:g}s; "
                 f"reference={effects_settings.editing_reference_file.name}"
             ),
         )

@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import random
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -107,6 +108,7 @@ class EffectsSettings:
     music_speech_gain_db: float = -22.0
     music_separator_gain_db: float = -16.0
     music_loop_crossfade_seconds: float = 0.35
+    music_section_crossfade_seconds: float = 1.0
     music_fade_seconds: float = 1.0
     proof_width: int = 960
     proof_height: int = 540
@@ -190,6 +192,9 @@ class EffectsSettings:
             music_loop_crossfade_seconds=float(
                 os.getenv("BACKGROUND_MUSIC_LOOP_CROSSFADE_SECONDS", "0.35")
             ),
+            music_section_crossfade_seconds=float(
+                os.getenv("BACKGROUND_MUSIC_SECTION_CROSSFADE_SECONDS", "1.0")
+            ),
             music_fade_seconds=float(
                 os.getenv("BACKGROUND_MUSIC_FADE_SECONDS", "1")
             ),
@@ -242,6 +247,10 @@ class EffectsSettings:
             raise ValueError("Music must be quieter under speech than separators.")
         if not 0 <= self.music_loop_crossfade_seconds <= 2:
             raise ValueError("Music loop crossfade must be between 0 and 2 seconds.")
+        if not 0.1 <= self.music_section_crossfade_seconds <= 4:
+            raise ValueError(
+                "Music section crossfade must be between 0.1 and 4 seconds."
+            )
         if self.proof_width % 2 or self.proof_height % 2:
             raise ValueError("Proof width and height must be even.")
 
@@ -414,6 +423,69 @@ def select_music_track(settings: EffectsSettings) -> tuple[Path, dict]:
         "seamless_loop": False,
     }
     return track, metadata
+
+
+def _music_candidates(settings: EffectsSettings) -> list[Path]:
+    if settings.music_file is not None:
+        candidates = [settings.music_file]
+    else:
+        candidates = sorted(
+            (
+                path.resolve()
+                for path in settings.music_directory.iterdir()
+                if path.is_file() and path.suffix.lower() in SUPPORTED_AUDIO
+            ),
+            key=lambda path: (
+                path.name == "automation_ambient_bed.wav",
+                path.name.lower(),
+            ),
+        )
+    candidates = [path for path in candidates if path.is_file()]
+    if not candidates:
+        raise FileNotFoundError(
+            f"No background music found in {settings.music_directory}."
+        )
+    return candidates
+
+
+def _music_metadata(track: Path) -> dict:
+    sidecar = _license_sidecar(track)
+    if sidecar.is_file():
+        return load_json(sidecar, "Music license metadata")
+    return {
+        "title": track.stem,
+        "creator": "user supplied",
+        "license": "user confirmed for project use",
+        "seamless_loop": False,
+    }
+
+
+def select_music_tracks(
+    settings: EffectsSettings,
+    *,
+    story_count: int,
+    video_number: int,
+) -> tuple[list[tuple[Path, dict]], str]:
+    """Return a reproducible random playlist, unique until the library is exhausted."""
+    candidates = _music_candidates(settings)
+    seed_material = json.dumps(
+        {
+            "video_number": video_number,
+            "tracks": [f"{path.name}:{path.stat().st_size}" for path in candidates],
+        },
+        sort_keys=True,
+    )
+    seed = json_fingerprint({"music_playlist": seed_material})
+    rng = random.Random(int(seed[:16], 16))
+    selected: list[Path] = []
+    while len(selected) < story_count:
+        cycle = list(candidates)
+        rng.shuffle(cycle)
+        if selected and len(cycle) > 1 and cycle[0] == selected[-1]:
+            cycle[0], cycle[1] = cycle[1], cycle[0]
+        selected.extend(cycle)
+    selected = selected[:story_count]
+    return [(track, _music_metadata(track)) for track in selected], seed
 
 
 def _require_inputs(video_dir: Path) -> tuple[dict, dict, dict, dict]:
@@ -856,23 +928,63 @@ def _db_factor(value: float) -> float:
 
 
 def _music_plan(
-    track: Path,
-    metadata: dict,
+    selected_tracks: list[tuple[Path, dict]],
+    selection_seed: str,
     timing: dict,
     settings: EffectsSettings,
 ) -> dict:
-    probe = probe_media(track)
-    track_duration = float(probe["duration_seconds"])
-    if track_duration <= 0:
-        raise RuntimeError(f"Background music has no measurable duration: {track}")
     duration = float(timing["duration_seconds"])
-    seamless = bool(metadata.get("seamless_loop", False))
-    crossfade = 0.0 if seamless else min(
-        settings.music_loop_crossfade_seconds,
-        max(0.0, track_duration / 4),
-    )
-    effective = max(0.1, track_duration - crossfade)
-    loops = max(1, math.ceil(max(0.0, duration - crossfade) / effective))
+    stories = timing.get("stories", [])
+    if not stories:
+        raise RuntimeError("Background music requires at least one story.")
+    if len(selected_tracks) != len(stories):
+        raise RuntimeError("Background-music playlist does not match the story count.")
+    section_crossfade = settings.music_section_crossfade_seconds
+    tracks: list[dict] = []
+    for index, (story, selected) in enumerate(zip(stories, selected_tracks)):
+        track, metadata = selected
+        track_duration = float(probe_media(track)["duration_seconds"])
+        if track_duration <= 0:
+            raise RuntimeError(f"Background music has no measurable duration: {track}")
+        story_start = float(story["narration"]["start"])
+        next_start = (
+            float(stories[index + 1]["narration"]["start"])
+            if index + 1 < len(stories)
+            else duration
+        )
+        timeline_start = (
+            0.0
+            if index == 0
+            else max(0.0, story_start - section_crossfade / 2)
+        )
+        timeline_end = duration if index + 1 == len(stories) else min(
+            duration, next_start + section_crossfade / 2
+        )
+        segment_duration = max(0.1, timeline_end - timeline_start)
+        tracks.append({
+            "story_id": story["story_id"],
+            "story_order": int(story["order"]),
+            "track_file": str(track),
+            "track_sha256": sha256_file(track),
+            "license_metadata_file": (
+                str(_license_sidecar(track)) if _license_sidecar(track).is_file() else None
+            ),
+            "license": metadata,
+            "track_duration_seconds": round(track_duration, 6),
+            "timeline_start": round(timeline_start, 6),
+            "timeline_end": round(timeline_end, 6),
+            "segment_duration_seconds": round(segment_duration, 6),
+            "loop_count": max(1, math.ceil(segment_duration / track_duration)),
+            "fade_in_seconds": round(
+                settings.music_fade_seconds if index == 0 else section_crossfade, 3
+            ),
+            "fade_out_seconds": round(
+                settings.music_fade_seconds
+                if index + 1 == len(stories)
+                else section_crossfade,
+                3,
+            ),
+        })
     speech_windows = [
         {
             "start": round(float(story["narration"]["start"]), 6),
@@ -880,19 +992,25 @@ def _music_plan(
         }
         for story in timing.get("stories", [])
     ]
+    first = tracks[0]
     return {
         "enabled": True,
-        "track_file": str(track),
-        "track_sha256": sha256_file(track),
-        "license_metadata_file": (
-            str(_license_sidecar(track)) if _license_sidecar(track).is_file() else None
+        "mode": "per_story_shuffled_playlist",
+        "selection_seed": selection_seed,
+        "tracks": tracks,
+        "track_count": len(tracks),
+        "unique_track_count": len({item["track_sha256"] for item in tracks}),
+        "different_track_per_story": (
+            len({item["track_sha256"] for item in tracks}) == len(tracks)
         ),
-        "license": metadata,
-        "track_duration_seconds": round(track_duration, 6),
+        # Legacy fields keep older render/proof consumers safe.
+        "track_file": first["track_file"],
+        "track_sha256": first["track_sha256"],
+        "track_duration_seconds": first["track_duration_seconds"],
         "program_duration_seconds": round(duration, 6),
-        "loop_count": loops,
-        "loop_mode": "seamless_repeat" if seamless else "acrossfade",
-        "crossfade_seconds": round(crossfade, 3),
+        "loop_count": sum(item["loop_count"] for item in tracks),
+        "loop_mode": "trim_or_repeat_each_story_track",
+        "crossfade_seconds": round(section_crossfade, 3),
         "fade_in_seconds": settings.music_fade_seconds,
         "fade_out_seconds": settings.music_fade_seconds,
         "normalization": {
@@ -1566,7 +1684,12 @@ def render_project_reference_proof(
     separator_file = Path(first_separator["file"]) if first_separator.get("file") else None
     separator_duration = first_separator.get("duration")
     generated = ensure_default_audio_assets(settings)
-    music_file, _ = select_music_track(settings)
+    music_plan = effects_plan.get("audio", {}).get("background_music", {})
+    proof_tracks = music_plan.get("tracks") or []
+    if proof_tracks:
+        music_file = Path(proof_tracks[0]["track_file"])
+    else:
+        music_file, _ = select_music_track(settings)
     captions_manifest = load_json(
         video_dir / "06_captions" / "captions.json",
         "Caption manifest",
@@ -1628,8 +1751,12 @@ def build_effects_plan(
     image_tv_effect = _image_tv_effect_plan(settings)
     music = None
     if settings.music_enabled:
-        track, metadata = select_music_track(settings)
-        music = _music_plan(track, metadata, timing, settings)
+        selected_tracks, selection_seed = select_music_tracks(
+            settings,
+            story_count=len(timing.get("stories", [])),
+            video_number=video_number,
+        )
+        music = _music_plan(selected_tracks, selection_seed, timing, settings)
     sfx_file = generated["sfx"]
     sfx = {
         "file": str(sfx_file),
@@ -1779,7 +1906,9 @@ def build_effects_plan(
             ),
             "music_covers_complete_timeline": not settings.music_enabled or (
                 music is not None
-                and music["loop_count"] * music["track_duration_seconds"] >= duration
+                and bool(music.get("tracks"))
+                and float(music["tracks"][0]["timeline_start"]) <= 0
+                and float(music["tracks"][-1]["timeline_end"]) >= duration
             ),
             "music_ducking_windows_match_narration": not settings.music_enabled or (
                 len(music["ducking"]["speech_windows"]) == len(narrations)
@@ -1844,8 +1973,12 @@ def effects_status(video_number: int, settings: EffectsSettings | None = None) -
         image_tv_effect = _image_tv_effect_plan(settings)
         music = None
         if settings.music_enabled:
-            track, metadata = select_music_track(settings)
-            music = _music_plan(track, metadata, timing, settings)
+            selected_tracks, selection_seed = select_music_tracks(
+                settings,
+                story_count=len(timing.get("stories", [])),
+                video_number=video_number,
+            )
+            music = _music_plan(selected_tracks, selection_seed, timing, settings)
         sfx_file = generated["sfx"]
         sfx = {
             "file": str(sfx_file),
@@ -1929,7 +2062,10 @@ def main() -> int:
         print(
             f"Visuals={len(plan['visual_events'])} | "
             f"glitches={len(plan['glitch_events'])} | "
-            f"music loops={plan['audio']['background_music'].get('loop_count', 0)}"
+            "music tracks="
+            f"{plan['audio']['background_music'].get('track_count', 0)} | "
+            "section crossfade="
+            f"{plan['audio']['background_music'].get('crossfade_seconds', 0)}s"
         )
         return 0
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
