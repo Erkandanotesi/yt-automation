@@ -298,7 +298,9 @@ def collect_checks() -> list[Check]:
             (
                 f"archive={NEWS_ARCHIVE_ROOT}; exact SHA-256 first; "
                 f"AI candidates={news_archive_settings.candidate_limit}; "
-                f"local threshold={news_archive_settings.local_similarity_threshold:g}"
+                f"local threshold={news_archive_settings.local_similarity_threshold:g}; "
+                "AI duplicate confidence="
+                f"{news_archive_settings.ai_duplicate_min_confidence:g}"
             ),
         )
 

@@ -403,6 +403,9 @@ class NewsDuplicateReview(BaseModel):
     is_duplicate: bool
     duplicate_archive_id: str = ""
     confidence: float = Field(ge=0, le=1)
+    same_discrete_event: bool
+    core_facts_match: bool
+    materially_new_development: bool
     reason: str
 
 
@@ -1024,12 +1027,22 @@ Compare NEW_FILE with PREVIOUS_FILES and decide whether NEW_FILE reports the
 same underlying news event as any previous file.
 
 Rules:
-- Reworded, syndicated, translated, or independently reported coverage of the
-  same announcement, incident, lawsuit, launch, disclosure, or decision is a
-  duplicate.
-- Sharing a company, product, person, or broad topic is not enough.
-- A genuine follow-up with a materially new event or new facts is not a
-  duplicate, even when it refers to an older event.
+- This is a deliberately relaxed duplicate gate. Default to NOT duplicate when
+  there is uncertainty.
+- Sharing context, subject matter, a company, product, person, industry, policy
+  debate, or an ongoing storyline is NEVER enough for rejection.
+- Set same_discrete_event=true only when both files describe the very same
+  identifiable announcement, incident, ruling, launch, disclosure, or decision.
+- Set core_facts_match=true only when the principal actors, action, object, time,
+  and outcome substantially match. A thematic resemblance is false.
+- Set materially_new_development=true when NEW_FILE adds a later action, outcome,
+  official response, ruling, release, breach, correction, or other development
+  that can stand as new news. Such a file is not a duplicate.
+- Reworded, syndicated, or translated copies may be duplicates only when
+  same_discrete_event and core_facts_match are both true and there is no
+  materially new development.
+- is_duplicate may be true only when those strict conditions are met with at
+  least 0.90 confidence. Otherwise it must be false.
 - Base the decision only on the supplied file contents and metadata.
 - If is_duplicate is true, duplicate_archive_id must be exactly one of:
   {json.dumps(previous_ids, ensure_ascii=False)}
@@ -1080,7 +1093,9 @@ CHANNEL PROFILE:
 
 Score relevance (30), impact (25), novelty (20), video potential (15), and
 source clarity (10). Reject ads, deals, minor accessories, opinion-only pieces,
-vague rumors, and duplicates; for duplicate events choose the strongest source.
+and vague rumors. Similar context, subject matter, company, product, or ongoing
+storyline is allowed and must not be treated as duplication. Only collapse candidates
+that clearly report the exact same discrete event; then choose the strongest source.
 Treat affiliate shopping guides, deal roundups, coupon/discount posts, preorder
 promotions, and retailer price-drop articles as promotional content rather than news,
 even when they contain product specifications or editorial commentary.
@@ -1981,7 +1996,7 @@ def main(argv: list[str] | None = None) -> int:
         archive = NewsArchive(
             ArchiveSettings.from_environment(
                 cache_namespace=(
-                    f"news-duplicate-v1:{PROVIDER}:"
+                    f"news-duplicate-v2-relaxed:{PROVIDER}:"
                     f"{OPENAI_MODEL if PROVIDER == 'openai' else GEMINI_MODEL}"
                 )
             )

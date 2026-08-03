@@ -97,7 +97,8 @@ def local_similarity(
 class ArchiveSettings:
     root: Path = NEWS_ARCHIVE_ROOT
     candidate_limit: int = 3
-    local_similarity_threshold: float = 0.16
+    local_similarity_threshold: float = 0.30
+    ai_duplicate_min_confidence: float = 0.90
     ai_text_character_limit: int = 12000
     cache_namespace: str = "default"
 
@@ -107,7 +108,10 @@ class ArchiveSettings:
             root=NEWS_ARCHIVE_ROOT,
             candidate_limit=int(os.getenv("NEWS_DUPLICATE_CANDIDATE_LIMIT", "3")),
             local_similarity_threshold=float(
-                os.getenv("NEWS_DUPLICATE_LOCAL_THRESHOLD", "0.16")
+                os.getenv("NEWS_DUPLICATE_LOCAL_THRESHOLD", "0.30")
+            ),
+            ai_duplicate_min_confidence=float(
+                os.getenv("NEWS_DUPLICATE_AI_MIN_CONFIDENCE", "0.90")
             ),
             ai_text_character_limit=int(
                 os.getenv("NEWS_DUPLICATE_AI_TEXT_LIMIT", "12000")
@@ -120,6 +124,10 @@ class ArchiveSettings:
             raise ValueError("News duplicate candidate limit must be between 1 and 10.")
         if not 0 <= self.local_similarity_threshold <= 1:
             raise ValueError("News duplicate similarity threshold must be between 0 and 1.")
+        if not 0.5 <= self.ai_duplicate_min_confidence <= 1:
+            raise ValueError(
+                "News duplicate AI minimum confidence must be between 0.5 and 1."
+            )
         if self.ai_text_character_limit < 1000:
             raise ValueError("News duplicate AI text limit must be at least 1000 characters.")
 
@@ -381,18 +389,48 @@ class NewsArchive:
                         item["archive_id"] for item in payload["previous_files"]
                     }
                     duplicate_id = str(ai_decision.get("duplicate_archive_id", ""))
-                    is_duplicate = bool(ai_decision.get("is_duplicate", False))
-                    if is_duplicate and duplicate_id not in allowed_ids:
+                    raw_duplicate = bool(ai_decision.get("is_duplicate", False))
+                    if raw_duplicate and duplicate_id not in allowed_ids:
                         raise RuntimeError("AI duplicate decision referenced an unknown archive ID.")
                     confidence = float(ai_decision.get("confidence", 0.0))
                     if not 0 <= confidence <= 1:
                         raise RuntimeError("AI duplicate confidence must be between 0 and 1.")
+                    same_event = bool(
+                        ai_decision.get("same_discrete_event", raw_duplicate)
+                    )
+                    core_facts_match = bool(
+                        ai_decision.get("core_facts_match", raw_duplicate)
+                    )
+                    materially_new = bool(
+                        ai_decision.get("materially_new_development", False)
+                    )
+                    is_duplicate = bool(
+                        raw_duplicate
+                        and same_event
+                        and core_facts_match
+                        and not materially_new
+                        and confidence >= self.settings.ai_duplicate_min_confidence
+                    )
+                    reason = str(ai_decision.get("reason", "")).strip()
+                    if raw_duplicate and not is_duplicate:
+                        reason = (
+                            "Allowed by the relaxed duplicate gate: related context is "
+                            "not sufficient without a high-confidence match to the same "
+                            f"discrete event and core facts. AI review: {reason}"
+                        )
                     decision = {
                         "is_duplicate": is_duplicate,
                         "method": "ai_cross_feed_comparison",
                         "confidence": confidence,
                         "duplicate_archive_id": duplicate_id if is_duplicate else "",
-                        "reason": str(ai_decision.get("reason", "")).strip(),
+                        "reason": reason,
+                        "raw_ai_duplicate": raw_duplicate,
+                        "same_discrete_event": same_event,
+                        "core_facts_match": core_facts_match,
+                        "materially_new_development": materially_new,
+                        "minimum_confidence_required": (
+                            self.settings.ai_duplicate_min_confidence
+                        ),
                         "ai_request_performed": True,
                         "cache_hit": False,
                     }

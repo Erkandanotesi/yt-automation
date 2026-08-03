@@ -96,9 +96,11 @@ Duplicate checks are deliberately layered:
 
 1. Identical normalized source hashes are rejected locally with no provider request.
 2. Unrelated files are cleared locally with no provider request.
-3. For plausible cross-feed matches, the new file and up to three strongest previous
-   files are sent in one structured AI request. The AI must distinguish the same event
-   from a genuinely new follow-up.
+3. Only strongly plausible cross-feed matches reach AI. Similar context, companies,
+   products, people, industries, or ongoing storylines are explicitly allowed. AI may
+   reject a candidate only when the discrete event and its core facts match, there is
+   no materially new development, and confidence is at least 0.90. Ambiguous reviews
+   default to acceptance.
 4. The decision is cached by the new/prior content hashes and model namespace, so an
    interrupted or repeated run does not pay for the same comparison twice.
 

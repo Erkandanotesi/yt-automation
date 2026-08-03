@@ -101,6 +101,9 @@ class NewsArchiveTests(unittest.TestCase):
                     "is_duplicate": True,
                     "duplicate_archive_id": first["record"]["archive_id"],
                     "confidence": 0.98,
+                    "same_discrete_event": True,
+                    "core_facts_match": True,
+                    "materially_new_development": False,
                     "reason": "Both files report the same Nvidia Atlas announcement.",
                 }
 
@@ -125,6 +128,47 @@ class NewsArchiveTests(unittest.TestCase):
             self.assertTrue(second["decision"]["is_duplicate"])
             self.assertTrue(repeated["decision"]["cache_hit"])
             self.assertFalse(repeated["decision"]["ai_request_performed"])
+
+    def test_same_context_is_allowed_even_if_ai_calls_it_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive = self.archive(Path(directory))
+            first = self.inspect(
+                archive,
+                url="https://first.example/openai-privacy-controls",
+                title="OpenAI introduces privacy controls for ChatGPT",
+                text=(
+                    "OpenAI introduced privacy controls that let ChatGPT users manage "
+                    "training data and conversation retention. " * 16
+                ),
+            )
+            archive.mark_used(
+                archive_id=first["record"]["archive_id"],
+                video_name="Video 5",
+                order=1,
+                narration="OpenAI introduced new ChatGPT privacy controls.",
+            )
+            result = self.inspect(
+                archive,
+                url="https://second.example/openai-account-export",
+                title="OpenAI changes ChatGPT account export system",
+                text=(
+                    "OpenAI changed the ChatGPT account export system after users "
+                    "reported delays receiving downloadable account archives. " * 16
+                ),
+                compare_with_ai=lambda payload: {
+                    "is_duplicate": True,
+                    "duplicate_archive_id": first["record"]["archive_id"],
+                    "confidence": 0.97,
+                    "same_discrete_event": False,
+                    "core_facts_match": False,
+                    "materially_new_development": True,
+                    "reason": "Both concern OpenAI, ChatGPT, and user data.",
+                },
+            )
+
+            self.assertFalse(result["decision"]["is_duplicate"])
+            self.assertTrue(result["decision"]["raw_ai_duplicate"])
+            self.assertIn("relaxed duplicate gate", result["decision"]["reason"])
 
     def test_unrelated_story_avoids_ai_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
