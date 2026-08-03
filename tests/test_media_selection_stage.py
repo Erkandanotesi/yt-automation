@@ -15,6 +15,7 @@ from media_selection_stage import (
     StoryMediaDecisions,
     WindowDecision,
     _create_context_safe_fallback_asset,
+    _effective_hero_images,
     _enforce_selection_constraints,
     _load_selector_cache,
     _resolve_context_safe_fallbacks,
@@ -410,6 +411,31 @@ class MediaSelectionTests(unittest.TestCase):
             )
 
             self.assertEqual([item["asset_id"] for item in result], [own["asset_id"]])
+
+    def test_effective_hero_hold_never_exceeds_visual_ceiling(self) -> None:
+        images = _effective_hero_images(
+            {
+                "images": [
+                    {
+                        "image_index": 1,
+                        "time_range": {"start": 2.0, "end": 15.0},
+                        "validation": {"status": "passed"},
+                    },
+                    {
+                        "image_index": 2,
+                        "time_range": {"start": 16.0, "end": 21.0},
+                        "validation": {"status": "passed"},
+                    },
+                ]
+            },
+            9.0,
+        )
+
+        self.assertEqual(images[0]["time_range"]["end"], 11.0)
+        self.assertLessEqual(
+            images[0]["time_range"]["end"] - images[0]["time_range"]["start"],
+            9.0,
+        )
 
     def test_asset_already_used_twice_can_be_removed_before_ai_selection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

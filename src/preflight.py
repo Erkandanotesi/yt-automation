@@ -489,6 +489,7 @@ def collect_checks() -> list[Check]:
             ),
             (
                 f"motion={effects_settings.motion_scale:.3f}; "
+                f"max hold={effects_settings.maximum_visual_hold_seconds:g}s; "
                 f"TV frame={effects_settings.tv_frame_file}; "
                 f"animated TV effect={effects_settings.image_tv_effect_file} "
                 f"at {effects_settings.image_tv_effect_opacity:.0%}; "

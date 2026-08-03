@@ -81,6 +81,7 @@ class EffectsSettings:
     fps: int = 30
     motion_scale: float = 1.020
     hero_motion_scale: float = 1.015
+    maximum_visual_hold_seconds: float = 9.0
     tv_frame_enabled: bool = True
     tv_frame_file: Path = TV_FRAME_FILE
     tv_frame_opacity: float = 1.0
@@ -127,6 +128,9 @@ class EffectsSettings:
             motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.025")),
             hero_motion_scale=float(
                 os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.01875")
+            ),
+            maximum_visual_hold_seconds=float(
+                os.getenv("EFFECTS_MAX_VISUAL_HOLD_SECONDS", "9")
             ),
             tv_frame_enabled=_bool_env("TV_FRAME_ENABLED", True),
             tv_frame_file=_path_env(
@@ -209,6 +213,10 @@ class EffectsSettings:
         if not 1.0 <= self.hero_motion_scale <= 1.10:
             raise ValueError(
                 "EFFECTS_HERO_MOTION_SCALE must be between 1.0 and 1.10."
+            )
+        if not 3 <= self.maximum_visual_hold_seconds <= 15:
+            raise ValueError(
+                "EFFECTS_MAX_VISUAL_HOLD_SECONDS must be between 3 and 15."
             )
         if not 0 <= self.tv_frame_opacity <= 1:
             raise ValueError("TV_FRAME_OPACITY must be between 0 and 1.")
@@ -608,6 +616,73 @@ def validate_visual_coverage(events: list[dict], timing: dict) -> dict:
             }
         )
     return {"status": "passed" if not errors else "failed", "errors": errors, "stories": story_results}
+
+
+def validate_visual_cadence(
+    events: list[dict],
+    maximum_hold_seconds: float,
+) -> dict:
+    """Reject long still holds, including adjacent reuse of identical pixels."""
+    visible = [
+        event
+        for event in events
+        if event.get("source_type") != "inter_story_hold"
+    ]
+    long_events = []
+    for event in visible:
+        duration = float(event["timeline_end"]) - float(event["timeline_start"])
+        if duration > maximum_hold_seconds + 0.03:
+            long_events.append(
+                {
+                    "event_id": event.get("event_id", ""),
+                    "story_id": event.get("story_id", ""),
+                    "duration": round(duration, 3),
+                    "asset": event.get("asset", {}).get("file", ""),
+                }
+            )
+
+    repeated_runs = []
+    by_story: dict[str, list[dict]] = {}
+    for event in visible:
+        by_story.setdefault(str(event.get("story_id", "")), []).append(event)
+    for story_id, story_events in by_story.items():
+        ordered = sorted(story_events, key=lambda item: float(item["timeline_start"]))
+        run_start = run_end = 0.0
+        run_sha = ""
+        run_count = 0
+
+        def record_run() -> None:
+            if (
+                run_count > 1
+                and run_sha
+                and run_end - run_start > maximum_hold_seconds + 0.03
+            ):
+                repeated_runs.append(
+                    {
+                        "story_id": story_id,
+                        "duration": round(run_end - run_start, 3),
+                        "sha256": run_sha,
+                        "event_count": run_count,
+                    }
+                )
+
+        for event in ordered:
+            start = float(event["timeline_start"])
+            end = float(event["timeline_end"])
+            checksum = str(event.get("asset", {}).get("sha256", ""))
+            if checksum and checksum == run_sha and abs(start - run_end) <= 0.03:
+                run_end = end
+                run_count += 1
+            else:
+                record_run()
+                run_start, run_end, run_sha, run_count = start, end, checksum, 1
+        record_run()
+    return {
+        "status": "passed" if not long_events and not repeated_runs else "failed",
+        "maximum_hold_seconds": maximum_hold_seconds,
+        "long_events": long_events,
+        "repeated_asset_runs": repeated_runs,
+    }
 
 
 def build_glitch_events(
@@ -1040,14 +1115,23 @@ def render_reference_proof(
     separator_file: Path | None = None,
     separator_duration_seconds: float | None = None,
     captions_file: Path | None = None,
+    image_durations: list[float] | None = None,
 ) -> dict:
     """Render a compact real-filter proof without completing Milestone 8."""
     ffmpeg = find_executable("ffmpeg")
     if ffmpeg is None:
         raise RuntimeError("FFmpeg is required for the effects reference proof.")
-    if len(images) < 3:
+    selected_images = images if image_durations is not None else images[:3]
+    if image_durations is None and len(selected_images) < 3:
         raise ValueError("The reference proof requires three images.")
-    inputs = [*images[:3], narration_file, music_file]
+    if image_durations is not None:
+        if not selected_images or len(selected_images) != len(image_durations):
+            raise ValueError("Actual-timeline proof images and durations must match.")
+        if any(duration <= 0 for duration in image_durations):
+            raise ValueError("Actual-timeline proof image durations must be positive.")
+        if abs(sum(image_durations) - duration_seconds) > 0.1:
+            raise ValueError("Actual-timeline proof images must cover the proof duration.")
+    inputs = [*selected_images, narration_file, music_file]
     if settings.glitch_enabled:
         inputs.append(sfx_file)
     if paper_sfx_file is not None:
@@ -1097,11 +1181,10 @@ def render_reference_proof(
         max(0.1, float(requested_separator_duration)),
         duration_seconds - 3.0,
     )
-    image_duration = duration_seconds / 3
+    durations = image_durations or [duration_seconds / 3] * 3
     width = settings.proof_width
     height = settings.proof_height
     fps = settings.fps
-    frames = max(2, round(image_duration * fps))
     command = [str(ffmpeg), "-hide_banner", "-loglevel", "error"]
     separator_has_audio = False
     if separator_file is None:
@@ -1120,11 +1203,11 @@ def render_reference_proof(
             for stream in separator_probe.get("streams", [])
         )
         command.extend(["-i", str(separator_file)])
-    for image in images[:3]:
+    for image, image_duration in zip(selected_images, durations, strict=True):
         command.extend(
             ["-loop", "1", "-framerate", str(fps), "-t", str(image_duration), "-i", str(image)]
         )
-    next_input_index = len(images[:3]) + 1
+    next_input_index = len(selected_images) + 1
     overlay_index = -1
     if settings.tv_frame_enabled:
         overlay_index = next_input_index
@@ -1163,8 +1246,9 @@ def render_reference_proof(
             f"trim=duration={separator_duration},setpts=PTS-STARTPTS[v0]"
         )
     ]
-    for offset in range(1, 4):
+    for offset, image_duration in enumerate(durations, start=1):
         scale = settings.motion_scale
+        frames = max(2, round(image_duration * fps))
         motion_filter = smooth_push_in_filter(
             width=width,
             height=height,
@@ -1177,15 +1261,19 @@ def render_reference_proof(
             f"[{offset}:v]{motion_filter},"
             f"trim=duration={image_duration},setpts=PTS-STARTPTS[v{offset}]"
         )
-    filters.append("[v1][v2][v3]concat=n=3:v=1:a=0[vbase]")
+    filters.append(
+        "".join(f"[v{index}]" for index in range(1, len(durations) + 1))
+        + f"concat=n={len(durations)}:v=1:a=0[vbase]"
+    )
     filters.append(
         f"[vbase][v0]overlay=0:0:eof_action=pass:enable='between(t,0,{separator_duration:.3f})'[vstory]"
     )
-    glitch_starts = [
-        separator_duration,
-        image_duration,
-        2 * image_duration,
-    ]
+    cumulative_starts = []
+    cursor = 0.0
+    for image_duration in durations[:-1]:
+        cursor += image_duration
+        cumulative_starts.append(cursor)
+    glitch_starts = sorted({separator_duration, *cumulative_starts})
     current_video = "vstory"
     if settings.glitch_enabled:
         enable = "+".join(
@@ -1246,7 +1334,10 @@ def render_reference_proof(
         audio_inputs.insert(0, "[separator_audio]")
     if sfx_index >= 0:
         sfx_factor = _db_factor(settings.sfx_gain_db)
-        filters.append(f"[{sfx_index}:a]asplit=3[sfx0][sfx1][sfx2]")
+        filters.append(
+            f"[{sfx_index}:a]asplit={len(glitch_starts)}"
+            + "".join(f"[sfx{index}]" for index in range(len(glitch_starts)))
+        )
         sfx_labels = []
         for index, start in enumerate(glitch_starts):
             delay = round(start * 1000)
@@ -1266,7 +1357,7 @@ def render_reference_proof(
         )
         audio_inputs.append("[paper]")
     if shutter_sfx_index >= 0:
-        shutter_start = 2 * image_duration
+        shutter_start = sum(durations[:2]) if len(durations) >= 3 else duration_seconds
         shutter_delay = round(shutter_start * 1000)
         shutter_factor = _db_factor(settings.shutter_sfx_gain_db)
         filters.append(
@@ -1325,7 +1416,9 @@ def render_reference_proof(
         "duration_seconds": round(actual_duration, 6),
         "resolution": f"{width}x{height}",
         "fps": fps,
-        "images": [str(path) for path in images[:3]],
+        "images": [str(path) for path in selected_images],
+        "image_durations": [round(value, 6) for value in durations],
+        "uses_actual_visual_timeline": image_durations is not None,
         "separator_file": str(separator_file) if separator_file is not None else None,
         "separator_audio_included": separator_has_audio,
         "narration_file": str(narration_file),
@@ -1434,6 +1527,40 @@ def render_project_reference_proof(
     stories = timing.get("stories", [])
     if not stories:
         raise RuntimeError("Story timing contains no stories for the reference proof.")
+    effects_plan = load_json(
+        video_dir / "07_effects" / "effects_plan.json",
+        "Effects plan",
+    )
+    if effects_plan.get("quality", {}).get("status") != "passed":
+        raise RuntimeError("A passing effects plan is required for the reference proof.")
+    proof_duration = min(
+        float(duration_seconds),
+        float(effects_plan.get("duration_seconds", duration_seconds)),
+    )
+    proof_events = [
+        event
+        for event in effects_plan.get("visual_events", [])
+        if float(event.get("timeline_start", 0)) < proof_duration - 0.001
+        and float(event.get("timeline_end", 0)) > 0.001
+    ]
+    proof_events.sort(key=lambda item: float(item["timeline_start"]))
+    reference_images: list[Path] = []
+    image_durations: list[float] = []
+    cursor = 0.0
+    for event in proof_events:
+        start = max(0.0, float(event["timeline_start"]))
+        end = min(proof_duration, float(event["timeline_end"]))
+        if start > cursor + 0.03:
+            raise RuntimeError(
+                f"Reference proof visual timeline has a gap at {cursor:.3f}-{start:.3f}."
+            )
+        if end <= start + 0.001:
+            continue
+        reference_images.append(Path(event["asset"]["file"]))
+        image_durations.append(end - start)
+        cursor = end
+    if cursor < proof_duration - 0.03:
+        raise RuntimeError("Reference proof visual timeline does not cover 60 seconds.")
     narration_file = Path(stories[0]["audio_file"])
     first_separator = stories[0].get("separator") or {}
     separator_file = Path(first_separator["file"]) if first_separator.get("file") else None
@@ -1446,16 +1573,6 @@ def render_project_reference_proof(
     )
     captions_file = Path(captions_manifest["combined_srt_file"])
     output = video_dir / "07_effects" / "milestone6_reference_60s.mp4"
-    generated_images = sorted(
-        path.resolve()
-        for path in (video_dir / "05_visuals" / "generated").glob("*")
-        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
-    )
-    reference_images = (
-        generated_images[:3]
-        if len(generated_images) >= 3
-        else _discover_reference_images()
-    )
     report = render_reference_proof(
         output_path=output,
         images=reference_images,
@@ -1469,12 +1586,13 @@ def render_project_reference_proof(
             settings.shutter_sfx_file if settings.shutter_sfx_enabled else None
         ),
         settings=settings,
-        duration_seconds=duration_seconds,
+        duration_seconds=proof_duration,
         separator_file=separator_file,
         separator_duration_seconds=(
             float(separator_duration) if separator_duration is not None else None
         ),
         captions_file=captions_file,
+        image_durations=image_durations,
     )
     effects_plan = video_dir / "07_effects" / "effects_plan.json"
     report["effects_plan_sha256"] = sha256_file(effects_plan)
@@ -1523,6 +1641,15 @@ def build_effects_plan(
     coverage = validate_visual_coverage(visuals, timing)
     if coverage["status"] != "passed":
         raise RuntimeError(f"Effects visual coverage failed: {coverage['errors']}")
+    cadence = validate_visual_cadence(
+        visuals,
+        settings.maximum_visual_hold_seconds,
+    )
+    if cadence["status"] != "passed":
+        raise RuntimeError(
+            "Effects visual cadence failed; rebuild archive visuals with shorter "
+            f"windows: {cadence}"
+        )
     timeline_sfx = build_timeline_sfx(timing, visuals, settings)
     timing_path = video_dir / "story_timing.json"
     media_path = video_dir / "05_visuals" / "media_plan.json"
@@ -1621,6 +1748,7 @@ def build_effects_plan(
         "quality": {
             "status": "passed",
             "visual_coverage": coverage,
+            "visual_cadence": cadence,
             "motion_is_deterministic": True,
             "motion_is_consistent": all(
                 item["motion"]["type"] in {"smooth_push_in", "slow_push_in", "static"}

@@ -285,8 +285,8 @@ carried across pronouns and split sentences, while choices below
 `MEDIA_MIN_AI_CONFIDENCE=0.45` are rejected in favor of the online-provider path.
 This improves precision without adding a vision request or another paid AI call.
 Visual timing stays precise without discarding grammatical context. Long AI-hero beats
-and archive windows target 12 seconds and are capped by
-`MEDIA_MAX_WINDOW_SECONDS` (18 seconds by default),
+and archive windows target 7 seconds and are capped by
+`MEDIA_MAX_WINDOW_SECONDS` (9 seconds by default),
 prefer cuts at periods, commas, semicolons, colons, question marks, and exclamation
 marks, and fall back to aligned phrase boundaries when needed. The selector receives
 both the exact timed clause and its complete containing sentence, so a long sentence
@@ -320,6 +320,15 @@ response without paying for the same selector request again.
 SHA-256-based cap across the complete video, including generated hero images, local
 archive images, Pexels downloads, and Wikimedia downloads. Selection repairs and cached story resumes
 must respect the same limit.
+Current-video hero checksums are reserved exclusively for their authored hero slots,
+so an archived copy of the same generated pixels cannot reappear in an archive window.
+`EFFECTS_MAX_VISUAL_HOLD_SECONDS=9` is an independent final cadence gate: effects and
+render preparation stop if any still event, or any adjacent run of identical pixels,
+exceeds nine seconds. Full containing sentences still accompany shorter timed clauses
+in the selector prompt, preserving relevance without creating long on-screen holds.
+The 60-second review proof now reads the actual effects-plan visual events and their
+real durations. It no longer substitutes three demonstration images lasting twenty
+seconds each, so cancelling or approving from the preview reflects production cadence.
 
 ## Environment-file health
 

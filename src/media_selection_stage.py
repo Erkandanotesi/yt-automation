@@ -99,9 +99,9 @@ class MediaSelectionSettings:
     model: str = "gpt-5.6-luna"
     reasoning_effort: str = "medium"
     shortlist_size: int = 8
-    minimum_window_seconds: float = 7.0
-    target_window_seconds: float = 12.0
-    maximum_window_seconds: float = 18.0
+    minimum_window_seconds: float = 5.0
+    target_window_seconds: float = 7.0
+    maximum_window_seconds: float = 9.0
     minimum_local_score: float = 1.0
     api_retries: int = 2
     timeout_seconds: float = 120.0
@@ -129,13 +129,13 @@ class MediaSelectionSettings:
             ).strip().lower(),
             shortlist_size=int(os.getenv("MEDIA_SHORTLIST_SIZE", "8")),
             minimum_window_seconds=float(
-                os.getenv("MEDIA_MIN_WINDOW_SECONDS", "7")
+                os.getenv("MEDIA_MIN_WINDOW_SECONDS", "5")
             ),
             target_window_seconds=float(
-                os.getenv("MEDIA_TARGET_WINDOW_SECONDS", "12")
+                os.getenv("MEDIA_TARGET_WINDOW_SECONDS", "7")
             ),
             maximum_window_seconds=float(
-                os.getenv("MEDIA_MAX_WINDOW_SECONDS", "18")
+                os.getenv("MEDIA_MAX_WINDOW_SECONDS", "9")
             ),
             minimum_local_score=float(
                 os.getenv("MEDIA_MIN_LOCAL_SCORE", "1")
@@ -571,8 +571,11 @@ def infer_scene_intent(text: str) -> str:
     return "neutral_technology_context"
 
 
-def _effective_hero_images(storyboard_story: dict) -> list[dict]:
-    """Bridge sub-two-second gaps to avoid contextless image flashes."""
+def _effective_hero_images(
+    storyboard_story: dict,
+    maximum_hold_seconds: float,
+) -> list[dict]:
+    """Clamp hero holds and bridge only gaps that preserve the hard ceiling."""
     images = [
         {
             **image,
@@ -586,11 +589,19 @@ def _effective_hero_images(storyboard_story: dict) -> list[dict]:
         if image.get("validation", {}).get("status") == "passed"
     ]
     images.sort(key=lambda item: float(item["time_range"]["start"]))
+    for image in images:
+        start = float(image["time_range"]["start"])
+        end = float(image["time_range"]["end"])
+        image["time_range"]["end"] = min(end, start + maximum_hold_seconds)
     for current, following in zip(images, images[1:]):
+        current_start = float(current["time_range"]["start"])
         current_end = float(current["time_range"]["end"])
         following_start = float(following["time_range"]["start"])
         gap = following_start - current_end
-        if 0 < gap < 2.0:
+        if (
+            0 < gap < 2.0
+            and following_start - current_start <= maximum_hold_seconds + 0.001
+        ):
             current["time_range"]["end"] = following_start
             current["bridged_gap_seconds"] = round(gap, 6)
     return images
@@ -608,7 +619,10 @@ def build_archive_windows(
             float(image["time_range"]["start"]),
             float(image["time_range"]["end"]),
         )
-        for image in _effective_hero_images(storyboard_story)
+        for image in _effective_hero_images(
+            storyboard_story,
+            settings.maximum_window_seconds,
+        )
     ]
     if not hero_ranges:
         raise RuntimeError(
@@ -2314,8 +2328,9 @@ def run_media_selection(
     video_usage_counts: Counter[str] = Counter()
     current_hero_owners: dict[str, set[str]] = {}
 
-    # Generated hero images are also on-screen images, so their appearances count
-    # toward the same per-video cap as archive and Wikimedia selections.
+    # Generated hero images are reserved exclusively for their authored hero slots.
+    # Their checksums remain counted for the video cap, but never enter archive
+    # shortlists (including global archived copies of the same pixels).
     for storyboard_story in storyboard.get("stories", []):
         for image in storyboard_story.get("images", []):
             checksum = str(image.get("generation", {}).get("file_sha256", ""))
@@ -2365,11 +2380,7 @@ def run_media_selection(
                 settings,
                 already_used_sha=used_sha,
                 previous_sha=previous_sha,
-                excluded_sha={
-                    checksum
-                    for checksum, owners in current_hero_owners.items()
-                    if story["story_id"] not in owners
-                }
+                excluded_sha=set(current_hero_owners)
                 | {
                     checksum
                     for checksum, count in video_usage_counts.items()
@@ -2514,7 +2525,10 @@ def run_media_selection(
                 int(story["order"]),
                 selected_windows,
             )
-        effective_hero_images = _effective_hero_images(storyboard_story)
+        effective_hero_images = _effective_hero_images(
+            storyboard_story,
+            settings.maximum_window_seconds,
+        )
         hero_ranges = [
             (
                 float(image["time_range"]["start"]),

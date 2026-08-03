@@ -14,6 +14,7 @@ from effects_stage import (
     build_timeline_sfx,
     build_visual_events,
     render_reference_proof,
+    validate_visual_cadence,
     validate_visual_coverage,
 )
 from file_utils import sha256_file
@@ -377,6 +378,40 @@ class EffectsStageTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertTrue(result["stories"][0]["overlaps"])
 
+    def test_visual_cadence_rejects_long_and_adjacent_identical_holds(self) -> None:
+        events = [
+            {
+                "event_id": "one",
+                "story_id": "story_1",
+                "source_type": "archive",
+                "timeline_start": 0,
+                "timeline_end": 10,
+                "asset": {"file": "long.png", "sha256": "a" * 64},
+            },
+            {
+                "event_id": "two",
+                "story_id": "story_2",
+                "source_type": "archive",
+                "timeline_start": 20,
+                "timeline_end": 25,
+                "asset": {"file": "repeat.png", "sha256": "b" * 64},
+            },
+            {
+                "event_id": "three",
+                "story_id": "story_2",
+                "source_type": "generated_hero",
+                "timeline_start": 25,
+                "timeline_end": 30,
+                "asset": {"file": "repeat-copy.png", "sha256": "b" * 64},
+            },
+        ]
+
+        result = validate_visual_cadence(events, 9)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["long_events"][0]["event_id"], "one")
+        self.assertEqual(result["repeated_asset_runs"][0]["duration"], 10)
+
     def test_real_ffmpeg_reference_proof_contains_video_and_audio(self) -> None:
         ffmpeg = find_executable("ffmpeg")
         if ffmpeg is None:
@@ -435,8 +470,11 @@ class EffectsStageTests(unittest.TestCase):
                 sfx_file=audio_files["sfx"],
                 settings=settings,
                 duration_seconds=6,
+                image_durations=[2, 2, 2],
             )
             self.assertEqual(report["quality"]["status"], "passed")
+            self.assertTrue(report["uses_actual_visual_timeline"])
+            self.assertEqual(report["image_durations"], [2, 2, 2])
             self.assertTrue((root / "proof.mp4").is_file())
             self.assertAlmostEqual(report["duration_seconds"], 6, delta=0.15)
 
