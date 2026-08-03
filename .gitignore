@@ -27,6 +27,7 @@ data/news_archive/*
 data/indexes/media_index.json
 data/indexes/media_index_report.json
 data/indexes/online_searches/
+data/*feed_audit*.json
 
 # Legacy/generated video projects do not belong in the code repository
 Video*/

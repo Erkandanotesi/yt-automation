@@ -5,13 +5,62 @@ import unittest
 import json
 from pathlib import Path
 from unittest.mock import patch
+from xml.etree import ElementTree as ET
 
 import news_pipeline
-from file_locations import AUTOMATION_ROOT
+from file_locations import AUTOMATION_ROOT, TECH_FEEDS_FILE
 from file_utils import sha256_file
 
 
 class NewsPipelineConfigurationTests(unittest.TestCase):
+    def test_tech_feed_list_excludes_audited_bad_sources(self) -> None:
+        root = ET.parse(TECH_FEEDS_FILE).getroot()
+        urls = {
+            element.attrib["xmlUrl"]
+            for element in root.iter()
+            if element.attrib.get("xmlUrl")
+        }
+        blocked = {
+            "https://aiweekly.co/feed",
+            "https://www.cnet.com/rss/news/",
+            "https://www.youtube.com/feeds/videos.xml?user=CNETTV",
+            "https://news.ycombinator.com/rss",
+            "https://lifehacker.com/rss",
+            "https://readwrite.com/feed/",
+            "https://rss.slashdot.org/Slashdot/slashdotMain",
+            "https://stratechery.com/feed/",
+            "https://theverge.com/rss/tech/index.xml",
+            "https://www.engadget.com/rss.xml",
+        }
+        self.assertTrue(blocked.isdisjoint(urls))
+        self.assertIn(
+            "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+            urls,
+        )
+        self.assertIn(
+            "https://www.theverge.com/rss/cyber-security/index.xml",
+            urls,
+        )
+
+    def test_clustered_newsletters_are_rejected_but_atomic_news_is_allowed(self) -> None:
+        clustered_titles = (
+            "AI Weekly Issue #517: What happened across the industry",
+            "The Download: tricking LLMs, and reviving geothermal plants",
+            "Open Model Wars + Google Memoir + Substack Slop Fight",
+            "The latest AI news we announced in June 2026",
+        )
+        for title in clustered_titles:
+            self.assertTrue(
+                news_pipeline.clustered_content_reasons({"title": title}),
+                title,
+            )
+        self.assertEqual(
+            news_pipeline.clustered_content_reasons({
+                "title": "Judge denies xAI request to block Minnesota law"
+            }),
+            [],
+        )
+
     def test_deals_roundup_and_affiliate_price_post_are_promotional(self) -> None:
         roundup = {
             "title": "I'm a Deals Writer, and These Are My Top 10 Tech Deals This Week",

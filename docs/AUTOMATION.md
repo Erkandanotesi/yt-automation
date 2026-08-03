@@ -38,6 +38,7 @@ Tech News/
 |   |   |-- file_locations.py        # single source of truth for every path
 |   |   |-- news_studio.py           # Milestone 10 orchestrator
 |   |   |-- news_pipeline.py
+|   |   |-- feed_audit.py            # provider-free live RSS quality audit
 |   |   |-- news_archive.py          # persistent hash + AI duplicate guard
 |   |   |-- env_doctor.py            # secret-safe .env encoding/duplicate repair
 |   |   |-- elevenlabs_tts.py
@@ -138,6 +139,10 @@ and dense price lists retained as supporting evidence. Generic feed boilerplate 
 as `AD` or `REG AD`, an embedded deal widget inside an otherwise legitimate article,
 news about advertising systems, and corporate acquisition deals are not rejection
 signals by themselves. This prevents RSS ad fragments from suppressing real news.
+Newsletter issues and multi-story digest entries are also rejected locally before
+ranking. Recognized forms include numbered issues, daily/weekly briefings,
+`The Download:`-style bundles, several headlines joined with plus signs, and explicit
+roundup titles. This keeps one selector candidate equal to one news event.
 Ungrounded items in the model's audit metadata are discarded locally instead of
 spending another summary request when the narration itself passes its structural and
 direct-quote checks. Narration numbers are recorded in validation metadata but are not
@@ -165,6 +170,16 @@ Rejected sources never occupy a video slot. The news stage immediately tries the
 next ranked RSS candidate from a 15-story reserve prepared in the same ranking call.
 If the feeds still cannot supply the requested number of valid articles, the project
 is marked incomplete; broken material is never used merely to fill the quota.
+
+Run a provider-free live feed audit with:
+
+```text
+.venv\Scripts\python.exe src\feed_audit.py --sample-size 20
+```
+
+It checks RSS health, recent-title technology relevance, commerce signals, and
+clustered-newsletter signals without calling OpenAI or ElevenLabs. The regenerable
+report is written to `data/feed_audit_latest.json` and excluded from Git.
 
 Accepted source prose is normalized into short article paragraphs before it is saved
 as `Haberler/*-orijinal.txt`. Whitespace-only formatting does not change duplicate

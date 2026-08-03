@@ -766,6 +766,30 @@ SHOPPING_CALL_TO_ACTION_PATTERNS = (
     r"\bpre-?order here\b",
     r"\bsee (?:the )?deal\b",
 )
+CLUSTERED_NEWS_TITLE_PATTERNS = (
+    r"\b(?:weekly|newsletter|digest)\b.{0,30}\bissue\s*#?\d+\b",
+    r"\bthe download\s*:",
+    r"\b(?:daily|weekly|monthly)\s+(?:digest|roundup|briefing)\b",
+    r"\bthis week in\b",
+    r"\btoday in\b.{0,55}\bnews\b.{0,12}\blive\b",
+    r"\b(?:latest|top)\s+\d+\s+(?:tech|ai|technology\s+)?(?:news|stories|headlines)\b",
+    r"\b(?:and|plus)\s+\d+\s+more\b",
+    r"\bthe latest\b.{0,35}\bnews we announced\b",
+)
+
+
+def clustered_content_reasons(candidate: dict) -> list[str]:
+    """Identify newsletter/digest entries that combine unrelated events."""
+    title = re.sub(r"\s+", " ", str(candidate.get("title", ""))).strip()
+    title_lower = title.casefold()
+    reasons = [
+        "multi_story_roundup_title"
+        for pattern in CLUSTERED_NEWS_TITLE_PATTERNS
+        if re.search(pattern, title_lower, flags=re.IGNORECASE)
+    ]
+    if title_lower.count(" + ") >= 2:
+        reasons.append("multiple_headlines_joined_in_title")
+    return list(dict.fromkeys(reasons))
 
 
 def promotional_content_reasons(
@@ -911,6 +935,14 @@ def collect_candidates(feed_urls: list[str], used_urls: set[str]) -> list[dict]:
                     "Promotional RSS candidate rejected: %s | reasons=%s",
                     title,
                     promotion_reasons,
+                )
+                continue
+            cluster_reasons = clustered_content_reasons(candidate)
+            if cluster_reasons:
+                LOGGER.info(
+                    "Clustered multi-story RSS candidate rejected: %s | reasons=%s",
+                    title,
+                    cluster_reasons,
                 )
                 continue
             candidate["rough_score"] = rough_score(candidate, keywords)
@@ -1099,6 +1131,8 @@ that clearly report the exact same discrete event; then choose the strongest sou
 Treat affiliate shopping guides, deal roundups, coupon/discount posts, preorder
 promotions, and retailer price-drop articles as promotional content rather than news,
 even when they contain product specifications or editorial commentary.
+Reject newsletter issues, daily or weekly digests, and roundup entries that combine
+multiple independent news events. Select atomic single-event news articles.
 Use only supplied data. local_pre_score is a hint, not a verdict. Return valid
 candidate indexes in descending score order.
 
@@ -1121,7 +1155,9 @@ CANDIDATES:
                 continue
             if item.index in used_indexes:
                 continue
-            if promotional_content_reasons(ranking_pool[item.index]):
+            if promotional_content_reasons(
+                ranking_pool[item.index]
+            ) or clustered_content_reasons(ranking_pool[item.index]):
                 LOGGER.warning(
                     "AI-ranked promotional candidate rejected locally: %s",
                     ranking_pool[item.index]["title"],
@@ -1139,7 +1175,9 @@ CANDIDATES:
                 break
             if index in used_indexes:
                 continue
-            if promotional_content_reasons(candidate):
+            if promotional_content_reasons(
+                candidate
+            ) or clustered_content_reasons(candidate):
                 continue
             used_indexes.add(index)
             valid.append(
@@ -1163,7 +1201,9 @@ CANDIDATES:
         for index, candidate in enumerate(ranking_pool):
             if len(fallback) >= target_count:
                 break
-            if promotional_content_reasons(candidate):
+            if promotional_content_reasons(
+                candidate
+            ) or clustered_content_reasons(candidate):
                 continue
             fallback.append(
                 RankedNews(
@@ -2094,6 +2134,16 @@ def main(argv: list[str] | None = None) -> int:
                         "reasons=%s",
                         candidate["title"],
                         promotion_reasons,
+                    )
+                    continue
+
+                cluster_reasons = clustered_content_reasons(candidate)
+                if cluster_reasons:
+                    LOGGER.warning(
+                        "Clustered multi-story article rejected after extraction: %s | "
+                        "reasons=%s",
+                        candidate["title"],
+                        cluster_reasons,
                     )
                     continue
 
