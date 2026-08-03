@@ -174,7 +174,7 @@ class MediaSelectionTests(unittest.TestCase):
         self.assertFalse(_is_pexels_asset(local))
         self.assertTrue(_is_pexels_asset(pexels))
 
-    def test_same_story_hero_can_be_reused_but_other_story_hero_cannot(self) -> None:
+    def test_current_video_heroes_are_excluded_from_all_archive_windows(self) -> None:
         owners = {
             "own-checksum": {"story_google_earth"},
             "other-checksum": {"story_spaceflight"},
@@ -182,7 +182,7 @@ class MediaSelectionTests(unittest.TestCase):
 
         exclusions = _hero_exclusions_for_story(owners, "story_google_earth")
 
-        self.assertNotIn("own-checksum", exclusions)
+        self.assertIn("own-checksum", exclusions)
         self.assertIn("other-checksum", exclusions)
 
     def test_pexels_planner_prompt_preserves_google_earth_visual_context(self) -> None:

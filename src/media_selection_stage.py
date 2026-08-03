@@ -125,12 +125,9 @@ def _hero_exclusions_for_story(
     hero_owners: dict[str, set[str]],
     story_id: str,
 ) -> set[str]:
-    """Exclude other stories' heroes while permitting one same-story reuse."""
-    return {
-        checksum
-        for checksum, owners in hero_owners.items()
-        if story_id not in owners
-    }
+    """Keep current-video hero pixels out of every archive-image window."""
+    del story_id  # Kept in the signature for call-site clarity and compatibility.
+    return set(hero_owners)
 
 
 def utc_now() -> str:
@@ -2943,9 +2940,10 @@ def run_media_selection(
     video_usage_counts: Counter[str] = Counter()
     current_hero_owners: dict[str, set[str]] = {}
 
-    # Hero images count toward the global cap. A story may reuse its own hero once
-    # as an archive visual (maximum two appearances total), while other stories'
-    # hero images stay excluded to avoid misleading cross-story reuse.
+    # Hero images count toward the global cap and are excluded from all archive
+    # windows in this video. Generated heroes are also saved to the reusable Assets
+    # library, so filename-based selection can otherwise place the same pixels next
+    # to their hero range and create one long, visually frozen hold.
     for storyboard_story in storyboard.get("stories", []):
         for image in storyboard_story.get("images", []):
             checksum = str(image.get("generation", {}).get("file_sha256", ""))
