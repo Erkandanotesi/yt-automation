@@ -50,6 +50,7 @@ from tooling import find_executable  # noqa: E402
 
 MEDIA_PLAN_SCHEMA_VERSION = 1
 SELECTOR_CACHE_SCHEMA_VERSION = 1
+PEXELS_QUERY_CACHE_SCHEMA_VERSION = 1
 STAGE_NAME = "archive_visuals"
 
 GENERIC_CONTEXT_TOKENS = {
@@ -90,6 +91,48 @@ def _is_in_video_media_asset(asset: dict) -> bool:
     )
 
 
+def _is_pexels_asset(asset: dict) -> bool:
+    identity = normalize_search_text(
+        " ".join(
+            [
+                str(asset.get("source_url", "")),
+                str(asset.get("workspace_relative_path", "")),
+                str(asset.get("folder", "")),
+            ]
+        )
+    )
+    return "pexels.com" in identity or "online retrieved pexels" in identity
+
+
+def _local_repository_index(index: dict) -> dict:
+    """Return only user-owned/generated media for the first selection pass.
+
+    Downloaded Pexels files remain in the persistent media index so they can be
+    reused later by the Pexels fallback resolver, but they must not compete with
+    the curated local repository in the initial shortlist.
+    """
+    return {
+        **index,
+        "assets": [
+            asset
+            for asset in index.get("assets", [])
+            if not _is_pexels_asset(asset)
+        ],
+    }
+
+
+def _hero_exclusions_for_story(
+    hero_owners: dict[str, set[str]],
+    story_id: str,
+) -> set[str]:
+    """Exclude other stories' heroes while permitting one same-story reuse."""
+    return {
+        checksum
+        for checksum, owners in hero_owners.items()
+        if story_id not in owners
+    }
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -109,6 +152,8 @@ class MediaSelectionSettings:
     pexels_fallback_enabled: bool = True
     pexels_max_downloads_per_video: int = 20
     pexels_max_searches_per_video: int = 20
+    pexels_query_model: str = "gpt-5.6-luna"
+    pexels_query_reasoning_effort: str = "low"
     maximum_uses_per_video: int = 2
     minimum_ai_confidence: float = 0.45
 
@@ -156,6 +201,14 @@ class MediaSelectionSettings:
             pexels_max_searches_per_video=int(
                 os.getenv("PEXELS_MAX_SEARCHES_PER_VIDEO", "20")
             ),
+            pexels_query_model=os.getenv(
+                "PEXELS_QUERY_MODEL",
+                "gpt-5.6-luna",
+            ).strip(),
+            pexels_query_reasoning_effort=os.getenv(
+                "PEXELS_QUERY_REASONING_EFFORT",
+                "low",
+            ).strip().lower(),
             maximum_uses_per_video=int(
                 os.getenv("MEDIA_MAX_USES_PER_VIDEO", "2")
             ),
@@ -194,6 +247,12 @@ class MediaSelectionSettings:
             raise ValueError(
                 "PEXELS_MAX_SEARCHES_PER_VIDEO must be between 0 and 30."
             )
+        if not self.pexels_query_model:
+            raise ValueError("PEXELS_QUERY_MODEL cannot be empty.")
+        if self.pexels_query_reasoning_effort not in {
+            "none", "low", "medium", "high", "xhigh", "max",
+        }:
+            raise ValueError("PEXELS_QUERY_REASONING_EFFORT is invalid.")
         if not 1 <= self.maximum_uses_per_video <= 10:
             raise ValueError("MEDIA_MAX_USES_PER_VIDEO must be between 1 and 10.")
         if not 0.0 <= self.minimum_ai_confidence <= 1.0:
@@ -228,6 +287,23 @@ class StoryMediaDecisions(BaseModel):
     decisions: list[WindowDecision]
 
 
+class PexelsQueryGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    group_id: str = Field(min_length=1, max_length=80)
+    window_ids: list[str] = Field(min_length=1, max_length=20)
+    primary_query: str = Field(min_length=3, max_length=100)
+    alternative_queries: list[str] = Field(default_factory=list, max_length=2)
+    visual_subject: str = Field(min_length=3, max_length=120)
+    rationale: str = Field(min_length=12, max_length=400)
+
+
+class StoryPexelsQueryPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    groups: list[PexelsQueryGroup] = Field(min_length=1, max_length=12)
+
+
 Selector = Callable[
     [dict, list[dict], MediaSelectionSettings],
     StoryMediaDecisions,
@@ -249,6 +325,53 @@ def load_json(path: Path, label: str) -> dict:
 def _selector_cache_path(video_dir: Path, story_id: str) -> Path:
     safe_story_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", story_id)
     return video_dir / "05_visuals" / "selector_cache" / f"{safe_story_id}.json"
+
+
+def _pexels_query_cache_path(video_dir: Path, story_id: str) -> Path:
+    safe_story_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", story_id)
+    return (
+        video_dir
+        / "05_visuals"
+        / "pexels_query_cache"
+        / f"{safe_story_id}.json"
+    )
+
+
+def _load_pexels_query_cache(
+    path: Path,
+    fingerprint: str,
+) -> StoryPexelsQueryPlan | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = load_json(path, "Pexels query cache")
+        if (
+            payload.get("schema_version") != PEXELS_QUERY_CACHE_SCHEMA_VERSION
+            or payload.get("input_fingerprint") != fingerprint
+        ):
+            return None
+        return StoryPexelsQueryPlan.model_validate(payload.get("plan", {}))
+    except (RuntimeError, ValueError):
+        return None
+
+
+def _save_pexels_query_cache(
+    path: Path,
+    *,
+    story_id: str,
+    fingerprint: str,
+    plan: StoryPexelsQueryPlan,
+) -> None:
+    atomic_write_json(
+        path,
+        {
+            "schema_version": PEXELS_QUERY_CACHE_SCHEMA_VERSION,
+            "story_id": story_id,
+            "input_fingerprint": fingerprint,
+            "saved_at_utc": utc_now(),
+            "plan": plan.model_dump(mode="json"),
+        },
+    )
 
 
 def _load_selector_cache(
@@ -838,7 +961,10 @@ def shortlist_assets(
         and _is_in_video_media_asset(item)
     ]
     if not usable_assets:
-        raise RuntimeError("The media index contains no usable assets.")
+        # An empty curated repository is recoverable: the caller creates a
+        # context-safe card, then the online fallback gets an opportunity to
+        # replace it. Do not turn a missing local match into a stage failure.
+        return []
     exclusions = excluded_sha or set()
     assets = [
         item for item in usable_assets if item.get("sha256") not in exclusions
@@ -1057,6 +1183,95 @@ def select_story_with_openai(
     raise RuntimeError(f"AI media selection failed: {last_error}") from last_error
 
 
+def pexels_query_prompt(story: dict, windows: list[dict]) -> str:
+    payload = [
+        {
+            "window_id": window["window_id"],
+            "full_sentence_context": window.get("text", ""),
+            "timed_excerpt": window.get("timestamp_excerpt", ""),
+            "entities": window.get("entities", []),
+            "scene_intent": window.get("scene_intent", ""),
+        }
+        for window in windows
+    ]
+    return f"""
+Plan efficient Pexels photo-search queries for the unresolved visual windows in one
+technology-news story. Pexels is a stock-photo library, not a general web search.
+
+Rules:
+- Use the complete story title and full_sentence_context. Never plan from an
+  isolated clause when its subject appears earlier in the sentence or story.
+- Cover every supplied window_id exactly once. Group adjacent windows only when one
+  honest visual subject can represent all of them; split the group when the visible
+  subject changes.
+- primary_query must be a concise Pexels-ready phrase of roughly three to seven
+  concrete visible nouns/adjectives. Preserve a famous product or company name when
+  it is visually central, then add visible context.
+- Provide up to two genuinely different alternative queries, moving from exact to
+  descriptive. Example: Google Earth satellite map computer screen; then digital
+  globe satellite imagery map. Do not collapse Google Earth into generic AI or
+  generic technology.
+- Queries must describe what a useful photograph should visibly show. Avoid claims,
+  dates, statistics, article prose, unsupported people, abstract verbs, and words
+  such as news, report, controversy, allegation, or Wikimedia.
+- visual_subject is a short grounding phrase shared by the queries. It must contain
+  recognizable visible terms likely to appear in Pexels alt text.
+- Slight contextual relevance is acceptable; totally unrelated imagery is not.
+- Keep rationale brief. Return only the structured plan.
+
+STORY TITLE:
+{story.get('title', '')}
+
+UNRESOLVED WINDOWS:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+""".strip()
+
+
+def plan_pexels_queries_with_openai(
+    story: dict,
+    windows: list[dict],
+    settings: MediaSelectionSettings,
+) -> StoryPexelsQueryPlan:
+    if not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY is required for Pexels query planning.")
+    from openai import OpenAI
+
+    client = OpenAI(timeout=settings.timeout_seconds)
+    last_error: Exception | None = None
+    for attempt in range(1, settings.api_retries + 1):
+        try:
+            response = client.responses.parse(
+                model=settings.pexels_query_model,
+                reasoning={"effort": settings.pexels_query_reasoning_effort},
+                input=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You plan precise, economical stock-photo searches. "
+                            "Preserve named visual context and never invent subjects."
+                        ),
+                    },
+                    {"role": "user", "content": pexels_query_prompt(story, windows)},
+                ],
+                text_format=StoryPexelsQueryPlan,
+            )
+            if response.output_parsed is None:
+                raise RuntimeError("OpenAI returned no Pexels query plan.")
+            return response.output_parsed
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            status = getattr(exc, "status_code", None)
+            if (
+                isinstance(status, int)
+                and 400 <= status < 500
+                and status not in {408, 409, 429}
+            ):
+                break
+            if attempt < settings.api_retries:
+                time.sleep(min(2 ** (attempt - 1), 4))
+    raise RuntimeError(f"Pexels query planning failed: {last_error}") from last_error
+
+
 def local_story_selector(
     story: dict,
     windows: list[dict],
@@ -1243,7 +1458,27 @@ def _validate_decisions(
             )
         ][:3]
         if decision.relevance_status == "images_are_irrelevant":
-            decision = _ground_irrelevant_decision(decision, window, story)
+            strongest_local = window["shortlist"][0]
+            entity_hits = strongest_local.get("score_components", {}).get(
+                "entity_hits",
+                [],
+            )
+            is_strong_named_match = bool(
+                strongest_local.get("grounding_basis") == "exact_entity"
+                and float(strongest_local.get("local_score", 0)) >= 30
+                and any(len(tokenize(str(entity))) >= 2 for entity in entity_hits)
+            )
+            if is_strong_named_match:
+                decision = _fallback_to_local_candidate(
+                    decision,
+                    window,
+                    (
+                        "The top curated local asset has a strong multi-word "
+                        "entity match, so online fallback is unnecessary."
+                    ),
+                )
+            else:
+                decision = _ground_irrelevant_decision(decision, window, story)
         result[decision.window_id] = decision
     return result
 
@@ -1282,6 +1517,15 @@ def _fallback_to_local_candidate(
             required_entity=(window.get("entities") or [""])[0],
         )
     chosen = eligible[0]
+    grounding_basis = str(chosen.get("grounding_basis", ""))
+    local_score = float(chosen.get("local_score", 0))
+    recovery_confidence = (
+        0.72
+        if grounding_basis == "exact_entity" and local_score >= 5
+        else 0.52
+        if grounding_basis == "distinctive_context" and local_score >= 12
+        else 0.15
+    )
     alternatives = [
         item["asset_id"]
         for item in eligible[1:4]
@@ -1290,7 +1534,7 @@ def _fallback_to_local_candidate(
         window_id=window["window_id"],
         relevance_status="relevant",
         selected_asset_id=chosen["asset_id"],
-        confidence=0.15,
+        confidence=recovery_confidence,
         selection_reason=(
             "Automatic recovery selected the strongest valid candidate from this "
             f"window's local shortlist. {reason}"
@@ -1436,24 +1680,89 @@ def _pexels_asset_matches(asset: dict, query: str, entity: str) -> bool:
     source_url = normalize_search_text(str(asset.get("source_url", "")))
     if "pexels.com" not in source_url:
         return False
-    searchable = set(
+    provider = asset.get("provider_metadata", {})
+    visible_source = (
+        " ".join(
+            [
+                str(provider.get("title", "")),
+                str(provider.get("description", "")),
+            ]
+        )
+        if provider
+        else " ".join(
+            [
+                str(asset.get("filename", "")),
+                str(asset.get("local_caption", "")),
+                " ".join(str(item) for item in asset.get("keywords", [])),
+            ]
+        )
+    )
+    visible_tokens = set(
+        tokenize(
+            visible_source
+        )
+    )
+    ignored = {
+        "modern", "technology", "computer", "digital", "photo", "image",
+        "screen", "online", "retrieved", "pexels", "interface", "concept",
+    }
+    terms = {
+        token
+        for token in tokenize(f"{query} {entity}")
+        if token not in ignored and len(token) >= 3
+    }
+    visible_overlap = visible_tokens.intersection(terms)
+    provenance_tokens = set(
         tokenize(
             " ".join(
                 [
-                    str(asset.get("filename", "")),
-                    str(asset.get("local_caption", "")),
-                    " ".join(str(item) for item in asset.get("keywords", [])),
-                    str(asset.get("source_url", "")),
+                    str(provider.get("query", "")),
+                    str(provider.get("required_entity", "")),
                 ]
             )
         )
     )
-    terms = [
+    minimum_visible_hits = min(2, max(1, len(terms)))
+    if provenance_tokens:
+        # A prior download is reusable only when both its original search purpose
+        # and its visible description overlap this new visual subject. This keeps
+        # a cryptocurrency or television photo out of a Google Earth chapter.
+        return bool(provenance_tokens.intersection(terms)) and (
+            len(visible_overlap) >= minimum_visible_hits
+        )
+    # Backward-compatible path for old manually indexed Pexels files without a
+    # sidecar query. Require a stronger visible match than a single generic word.
+    return len(visible_overlap) >= minimum_visible_hits
+
+
+def _pexels_candidate_matches_subject(
+    candidate: dict,
+    query: str,
+    entity: str,
+) -> bool:
+    """Reject API results grounded only by a generic word or company name."""
+    ignored = {
+        "modern", "technology", "computer", "digital", "photo", "image",
+        "screen", "online", "interface", "concept",
+    }
+    subject_terms = {
         token
         for token in tokenize(f"{query} {entity}")
-        if token not in {"modern", "technology", "computer", "digital"}
-    ]
-    return bool(searchable.intersection(terms))
+        if token not in ignored and len(token) >= 3
+    }
+    visible_terms = set(
+        tokenize(
+            " ".join(
+                [
+                    str(candidate.get("title", "")),
+                    str(candidate.get("description", "")),
+                    str(candidate.get("source_page", "")),
+                ]
+            )
+        )
+    )
+    required_hits = min(2, max(1, len(subject_terms)))
+    return len(subject_terms.intersection(visible_terms)) >= required_hits
 
 
 def _pexels_candidate(asset: dict, *, query: str, concept: str) -> dict:
@@ -1511,6 +1820,7 @@ def resolve_pexels_fallbacks(
     remaining_searches: int,
     video_usage_counts: Counter[str] | None = None,
     search_cache: dict[str, dict] | None = None,
+    query_plan: StoryPexelsQueryPlan | None = None,
 ) -> tuple[dict[str, WindowDecision], dict, int, int]:
     """Fill unresolved windows from reusable, topic-grounded Pexels pools.
 
@@ -1629,14 +1939,62 @@ def resolve_pexels_fallbacks(
 
     groups: dict[str, dict] = {}
     window_groups: dict[str, str] = {}
+    unresolved_by_id = {window["window_id"]: window for window in unresolved}
+    if query_plan is not None:
+        claimed: set[str] = set()
+        for planned_group in query_plan.groups:
+            planned_windows = [
+                unresolved_by_id[window_id]
+                for window_id in planned_group.window_ids
+                if window_id in unresolved_by_id and window_id not in claimed
+            ]
+            if not planned_windows:
+                continue
+            key = "ai_" + re.sub(
+                r"[^a-z0-9]+",
+                "_",
+                normalize_search_text(planned_group.group_id),
+            ).strip("_")
+            key = key or f"ai_group_{len(groups) + 1}"
+            while key in groups:
+                key += "_next"
+            queries = list(
+                dict.fromkeys(
+                    query.strip()
+                    for query in [
+                        planned_group.primary_query,
+                        *planned_group.alternative_queries,
+                    ]
+                    if query.strip()
+                )
+            )
+            groups[key] = {
+                "query": queries[0],
+                "queries": queries,
+                "entity": planned_group.visual_subject,
+                "windows": planned_windows,
+                "planner": "luna_low",
+            }
+            for window in planned_windows:
+                claimed.add(window["window_id"])
+                window_groups[window["window_id"]] = key
+
     for window in unresolved:
+        if window["window_id"] in window_groups:
+            continue
         decision = updated[window["window_id"]]
         key, query, entity = _pexels_visual_concept(window, decision)
         if key == "general_technology" and story_concept[0] != key:
             key, query, entity = story_concept
         group = groups.setdefault(
             key,
-            {"query": query, "entity": entity, "windows": []},
+            {
+                "query": query,
+                "queries": [query],
+                "entity": entity,
+                "windows": [],
+                "planner": "deterministic_fallback",
+            },
         )
         group["windows"].append(window)
         window_groups[window["window_id"]] = key
@@ -1676,7 +2034,10 @@ def resolve_pexels_fallbacks(
             for asset in media_index.get("assets", [])
             if _is_in_video_media_asset(asset)
             and Path(str(asset.get("absolute_path", ""))).is_file()
-            and _pexels_asset_matches(asset, query, entity)
+            and any(
+                _pexels_asset_matches(asset, candidate_query, entity)
+                for candidate_query in group.get("queries", [query])
+            )
             and usage[str(asset.get("sha256", ""))]
             < settings.maximum_uses_per_video
         ]
@@ -1712,54 +2073,63 @@ def resolve_pexels_fallbacks(
         needed_unique = max(capacity_shortfall, uniqueness_shortfall)
         if needed_unique <= 0 or throttled:
             continue
-        if searches_used >= remaining_searches and key not in query_cache:
-            continue
-
         try:
-            search = query_cache.get(key)
-            if search is None:
-                if online_settings.request_interval_seconds:
-                    time.sleep(online_settings.request_interval_seconds)
-                combined_context = " ".join(
-                    str(item.get("text", "")) for item in group["windows"][:4]
-                )
-                search = search_pexels(
-                    query=query,
-                    required_entity=entity,
-                    context=combined_context,
-                    settings=online_settings,
-                )
-                query_cache[key] = search
-                searches_used += 1
-                save_search_manifest(search, video_number=video_number)
             known_photo_ids = {
                 match.group(1)
                 for asset in reusable
                 for match in [re.search(r"_([0-9]+)\.[a-z0-9]+$", asset.get("filename", ""))]
                 if match
             }
-            for candidate in search.get("candidates", []):
+            combined_context = " ".join(
+                str(item.get("text", "")) for item in group["windows"][:4]
+            )
+            for active_query in group.get("queries", [query]):
                 if needed_unique <= 0 or downloads_used >= remaining_downloads:
                     break
-                photo_id = str(candidate.get("photo_id", ""))
-                if not photo_id or photo_id in known_photo_ids:
-                    continue
-                try:
-                    downloaded = download_candidate(
-                        candidate,
-                        query=query,
+                cache_key = normalize_search_text(active_query)
+                search = query_cache.get(cache_key)
+                if search is None:
+                    if searches_used >= remaining_searches:
+                        break
+                    if online_settings.request_interval_seconds:
+                        time.sleep(online_settings.request_interval_seconds)
+                    search = search_pexels(
+                        query=active_query,
                         required_entity=entity,
-                        context=" ".join(
-                            str(item.get("text", "")) for item in group["windows"][:4]
-                        ),
+                        context=combined_context,
                         settings=online_settings,
                     )
-                except Exception:
-                    continue
-                downloaded_by_group.setdefault(key, []).append(downloaded["sha256"])
-                known_photo_ids.add(photo_id)
-                downloads_used += 1
-                needed_unique -= 1
+                    query_cache[cache_key] = search
+                    searches_used += 1
+                    save_search_manifest(search, video_number=video_number)
+                for candidate in search.get("candidates", []):
+                    if needed_unique <= 0 or downloads_used >= remaining_downloads:
+                        break
+                    if not _pexels_candidate_matches_subject(
+                        candidate,
+                        active_query,
+                        entity,
+                    ):
+                        continue
+                    photo_id = str(candidate.get("photo_id", ""))
+                    if not photo_id or photo_id in known_photo_ids:
+                        continue
+                    try:
+                        downloaded = download_candidate(
+                            candidate,
+                            query=active_query,
+                            required_entity=entity,
+                            context=combined_context,
+                            settings=online_settings,
+                        )
+                    except Exception:
+                        continue
+                    downloaded_by_group.setdefault(key, []).append(
+                        downloaded["sha256"]
+                    )
+                    known_photo_ids.add(photo_id)
+                    downloads_used += 1
+                    needed_unique -= 1
         except Exception as exc:  # noqa: BLE001
             if "429" in str(exc) or "too many requests" in str(exc).casefold():
                 throttled = True
@@ -1785,9 +2155,24 @@ def resolve_pexels_fallbacks(
     for key, checksums in downloaded_by_group.items():
         for checksum in checksums:
             asset = assets_by_sha.get(checksum)
-            if asset is not None and all(
+            group = groups[key]
+            if (
+                asset is not None
+                and any(
+                    _pexels_asset_matches(
+                        asset,
+                        candidate_query,
+                        group["entity"],
+                    )
+                    for candidate_query in group.get(
+                        "queries",
+                        [group["query"]],
+                    )
+                )
+                and all(
                 existing.get("sha256") != checksum
                 for existing in group_assets[key]
+                )
             ):
                 group_assets[key].append(asset)
 
@@ -2054,20 +2439,30 @@ def _enforce_selection_constraints(
                 or "crop_risk" not in candidate.get("quality_flags", [])
             )
 
-        preferred_online = candidate_by_id.get(decision.selected_asset_id or "", {})
+        preferred_candidate = candidate_by_id.get(
+            decision.selected_asset_id or "",
+            {},
+        )
+        preferred_priority_reuse = bool(
+            preferred_candidate.get("online_fallback") is True
+            or (
+                preferred_candidate.get("grounding_basis") == "exact_entity"
+                and float(preferred_candidate.get("local_score", 0)) >= 30
+            )
+        )
         if (
-            preferred_online.get("online_fallback") is True
+            preferred_priority_reuse
             and (
-                preferred_online.get("brand_logo", False)
-                or "crop_risk" not in preferred_online.get("quality_flags", [])
+                preferred_candidate.get("brand_logo", False)
+                or "crop_risk" not in preferred_candidate.get("quality_flags", [])
             )
             and acceptable(decision.selected_asset_id or "", allow_reuse=True)
         ):
             chosen_id = decision.selected_asset_id
             override_reason = (
-                "Intentional Pexels topic-image reuse was preferred over an "
-                "unrelated local candidate."
-                if video_usage_counts[preferred_online.get("sha256", "")] > 0
+                "Intentional exact-context image reuse was preferred over a "
+                "weaker unused candidate."
+                if video_usage_counts[preferred_candidate.get("sha256", "")] > 0
                 else ""
             )
         else:
@@ -2276,6 +2671,92 @@ def _story_plan_fingerprint(
     )
 
 
+def _selector_input_fingerprint(
+    story: dict,
+    storyboard_story: dict,
+    windows: list[dict],
+    settings: MediaSelectionSettings,
+) -> str:
+    """Fingerprint only inputs that can change the local AI selection.
+
+    Pexels query-model and API limits are deliberately absent. Changing the
+    online fallback must not repeat the more expensive local selector request.
+    """
+    return json_fingerprint(
+        {
+            "story_id": story["story_id"],
+            "audio_file": story.get("audio_file", ""),
+            "alignment_file": story.get("alignment_file", ""),
+            "hero_images": [
+                {
+                    "time_range": image.get("time_range"),
+                    "file": image.get("output_file"),
+                    "sha256": image.get("generation", {}).get("file_sha256"),
+                }
+                for image in storyboard_story.get("images", [])
+            ],
+            "windows": windows,
+            "selector": {
+                "model": settings.model,
+                "reasoning_effort": settings.reasoning_effort,
+                "shortlist_size": settings.shortlist_size,
+                "minimum_local_score": settings.minimum_local_score,
+                "minimum_ai_confidence": settings.minimum_ai_confidence,
+            },
+        }
+    )
+
+
+def _windows_requiring_online_fallback(
+    windows: list[dict],
+    decisions: dict[str, WindowDecision],
+    *,
+    video_usage_counts: Counter[str],
+    maximum_uses: int,
+) -> list[dict]:
+    """Preview the same local-choice failures handled by the Pexels resolver."""
+    unresolved: list[dict] = []
+    projected_usage = Counter(video_usage_counts)
+    previous_sha = ""
+    for window in windows:
+        decision = decisions[window["window_id"]]
+        selected = next(
+            (
+                candidate
+                for candidate in window.get("shortlist", [])
+                if candidate.get("asset_id") == decision.selected_asset_id
+            ),
+            None,
+        )
+        selected_sha = str(selected.get("sha256", "")) if selected else ""
+        selected_is_neutral = bool(
+            selected
+            and (
+                selected.get("neutral_fallback", False)
+                or selected.get("context_safe_fallback", False)
+                or selected.get("grounding_basis") == "context_safe_neutral"
+            )
+        )
+        selected_is_conflicted = bool(
+            selected_sha
+            and (
+                projected_usage[selected_sha] >= maximum_uses
+                or selected_sha == previous_sha
+            )
+        )
+        if (
+            decision.relevance_status == "images_are_irrelevant"
+            or selected is None
+            or selected_is_neutral
+            or selected_is_conflicted
+        ):
+            unresolved.append(window)
+            continue
+        projected_usage[selected_sha] += 1
+        previous_sha = selected_sha
+    return unresolved
+
+
 def _cached_story_current(story_plan: dict, fingerprint: str) -> bool:
     if story_plan.get("input_fingerprint") != fingerprint:
         return False
@@ -2356,6 +2837,8 @@ def run_media_selection(
 
     pexels_download_count = 0
     pexels_search_count = 0
+    pexels_query_planner_requests = 0
+    pexels_query_planner_cache_hits = 0
     selector_cache_hits = 0
     selector_requests_this_run = 0
     pexels_search_cache: dict[str, dict] = {}
@@ -2363,9 +2846,9 @@ def run_media_selection(
     video_usage_counts: Counter[str] = Counter()
     current_hero_owners: dict[str, set[str]] = {}
 
-    # Generated hero images are reserved exclusively for their authored hero slots.
-    # Their checksums remain counted for the video cap, but never enter archive
-    # shortlists (including global archived copies of the same pixels).
+    # Hero images count toward the global cap. A story may reuse its own hero once
+    # as an archive visual (maximum two appearances total), while other stories'
+    # hero images stay excluded to avoid misleading cross-story reuse.
     for storyboard_story in storyboard.get("stories", []):
         for image in storyboard_story.get("images", []):
             checksum = str(image.get("generation", {}).get("file_sha256", ""))
@@ -2406,16 +2889,20 @@ def run_media_selection(
                 f"Storyboard is missing for {story['story_id']}."
             )
         windows = build_archive_windows(story, storyboard_story, settings)
+        local_media_index = _local_repository_index(media_index)
         used_sha: set[str] = set()
         previous_sha = ""
         for window in windows:
             window["shortlist"] = shortlist_assets(
-                media_index,
+                local_media_index,
                 window,
                 settings,
                 already_used_sha=used_sha,
                 previous_sha=previous_sha,
-                excluded_sha=set(current_hero_owners)
+                excluded_sha=_hero_exclusions_for_story(
+                    current_hero_owners,
+                    story["story_id"],
+                )
                 | {
                     checksum
                     for checksum, count in video_usage_counts.items()
@@ -2432,6 +2919,12 @@ def run_media_selection(
             # Shortlists are intentionally computed without committing a choice.
             # Reuse is enforced after the story-level AI sees all windows.
         fingerprint = _story_plan_fingerprint(
+            story,
+            storyboard_story,
+            windows,
+            settings,
+        )
+        selector_fingerprint = _selector_input_fingerprint(
             story,
             storyboard_story,
             windows,
@@ -2460,9 +2953,12 @@ def run_media_selection(
             if force or offline
             else _load_selector_cache(
                 selector_cache,
-                fingerprint,
+                selector_fingerprint,
                 compatible_fingerprints=(
-                    {str(cached.get("input_fingerprint", ""))}
+                    {
+                        fingerprint,
+                        str(cached.get("input_fingerprint", "")),
+                    }
                     if refresh_fallbacks and cached.get("input_fingerprint")
                     else None
                 ),
@@ -2474,7 +2970,7 @@ def run_media_selection(
                 _save_selector_cache(
                     selector_cache,
                     story_id=story["story_id"],
-                    fingerprint=fingerprint,
+                    fingerprint=selector_fingerprint,
                     decisions=decisions,
                 )
                 selector_requests_this_run += 1
@@ -2487,7 +2983,7 @@ def run_media_selection(
                 _save_selector_cache(
                     selector_cache,
                     story_id=story["story_id"],
-                    fingerprint=fingerprint,
+                    fingerprint=selector_fingerprint,
                     decisions=decisions,
                 )
         decision_by_window = _validate_decisions(
@@ -2496,6 +2992,67 @@ def run_media_selection(
             story,
             minimum_confidence=settings.minimum_ai_confidence,
         )
+        query_plan: StoryPexelsQueryPlan | None = None
+        planner_windows = _windows_requiring_online_fallback(
+            windows,
+            decision_by_window,
+            video_usage_counts=video_usage_counts,
+            maximum_uses=settings.maximum_uses_per_video,
+        )
+        planner_fingerprint = ""
+        planner_error = ""
+        if planner_windows and not offline:
+            planner_fingerprint = json_fingerprint(
+                {
+                    "story_id": story["story_id"],
+                    "story_title": story.get("title", ""),
+                    "windows": [
+                        {
+                            "window_id": window["window_id"],
+                            "text": window.get("text", ""),
+                            "timestamp_excerpt": window.get(
+                                "timestamp_excerpt", ""
+                            ),
+                            "entities": window.get("entities", []),
+                            "scene_intent": window.get("scene_intent", ""),
+                        }
+                        for window in planner_windows
+                    ],
+                    "model": settings.pexels_query_model,
+                    "reasoning_effort": settings.pexels_query_reasoning_effort,
+                }
+            )
+            planner_cache = _pexels_query_cache_path(
+                video_dir,
+                story["story_id"],
+            )
+            query_plan = (
+                None
+                if force
+                else _load_pexels_query_cache(
+                    planner_cache,
+                    planner_fingerprint,
+                )
+            )
+            if query_plan is None:
+                try:
+                    query_plan = plan_pexels_queries_with_openai(
+                        story,
+                        planner_windows,
+                        settings,
+                    )
+                    _save_pexels_query_cache(
+                        planner_cache,
+                        story_id=story["story_id"],
+                        fingerprint=planner_fingerprint,
+                        plan=query_plan,
+                    )
+                    pexels_query_planner_requests += 1
+                except Exception as exc:  # noqa: BLE001
+                    planner_error = str(exc)
+                    query_plan = None
+            else:
+                pexels_query_planner_cache_hits += 1
         # Resolve in a few deterministic passes. Replacing one over-cap choice can
         # reveal a later collision that was hidden by the original selector plan.
         # The shared topic cache prevents repeated Pexels searches between passes.
@@ -2530,6 +3087,7 @@ def run_media_selection(
                 ),
                 video_usage_counts=video_usage_counts,
                 search_cache=pexels_search_cache,
+                query_plan=query_plan,
             )
             pexels_download_count += pexels_downloads_used
             pexels_search_count += pexels_searches_used
@@ -2617,6 +3175,20 @@ def run_media_selection(
                     if selector is not None or offline
                     else settings.reasoning_effort
                 ),
+            },
+            "pexels_query_planner": {
+                "provider": "openai" if query_plan is not None else "deterministic",
+                "model": (
+                    settings.pexels_query_model if query_plan is not None else None
+                ),
+                "reasoning_effort": (
+                    settings.pexels_query_reasoning_effort
+                    if query_plan is not None
+                    else None
+                ),
+                "input_fingerprint": planner_fingerprint,
+                "group_count": len(query_plan.groups) if query_plan else 0,
+                "error": planner_error,
             },
             "hero_ranges": [
                 {
@@ -2721,6 +3293,8 @@ def run_media_selection(
         ),
         "pexels_download_count": pexels_download_count,
         "pexels_search_count": pexels_search_count,
+        "pexels_query_planner_requests_this_run": pexels_query_planner_requests,
+        "pexels_query_planner_cache_hits": pexels_query_planner_cache_hits,
         "selector_cache_hits": selector_cache_hits,
         "selector_requests_this_run": selector_requests_this_run,
         "story_count": len(timing_stories),

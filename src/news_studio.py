@@ -599,6 +599,9 @@ def api_cost_plan(video_number: int | None = None) -> dict:
         "storyboard_planning_requests": 1,
         "story_image_requests_remaining": missing_images,
         "archive_selection_requests": "bounded and cached; depends on uncovered windows",
+        "pexels_query_planning_requests": (
+            "up to 5 Luna-low requests; unresolved stories only, cached"
+        ),
         "publishing_copy_requests": 1,
         "thumbnail_image_requests": 1,
         "live_test_requests": 0,
@@ -1591,6 +1594,7 @@ def print_api_cost_plan(plan: dict) -> None:
         "storyboard_planning_requests": "Storyboard plan",
         "story_image_requests_remaining": "AI images remaining",
         "archive_selection_requests": "Archive selection",
+        "pexels_query_planning_requests": "Pexels query plan",
         "publishing_copy_requests": "YouTube copy",
         "thumbnail_image_requests": "Thumbnail",
     }

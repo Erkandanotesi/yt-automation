@@ -1363,7 +1363,7 @@ def render_reference_proof(
     filters = [
         (
             f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height},fps={fps},format=yuv420p,"
+            f"crop={width}:{height},setsar=1,fps={fps},format=yuv420p,"
             f"trim=duration={separator_duration},setpts=PTS-STARTPTS[v0]"
         )
     ]
@@ -1380,7 +1380,8 @@ def render_reference_proof(
         )
         filters.append(
             f"[{offset}:v]{motion_filter},"
-            f"trim=duration={image_duration},setpts=PTS-STARTPTS[v{offset}]"
+            f"setsar=1,trim=duration={image_duration},"
+            f"setpts=PTS-STARTPTS[v{offset}]"
         )
     filters.append(
         "".join(f"[v{index}]" for index in range(1, len(durations) + 1))

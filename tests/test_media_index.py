@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -34,6 +35,42 @@ def make_image(path: Path, color: str) -> None:
 
 
 class MediaIndexTests(unittest.TestCase):
+    def test_pexels_query_context_is_indexed_from_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media = root / "Media"
+            image = media / "Online Retrieved" / "Pexels" / "satellite-map.jpg"
+            make_image(image, "blue")
+            sidecar = image.with_name(image.name + ".metadata.json")
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "provider": "pexels",
+                        "source_url": "https://www.pexels.com/photo/map-123/",
+                        "query": "Google Earth satellite map computer screen",
+                        "required_entity": "Google Earth satellite map interface",
+                        "context": "Google Earth briefly added an AI image tool.",
+                        "title": "Satellite map on a monitor",
+                        "description": "A map interface displayed on a screen",
+                        "relevance_score": 18.5,
+                        "license_status": "pexels_license",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = MediaIndexSettings(
+                index_path=root / "index.json",
+                roots=(MediaRoot("primary", media, "unknown"),),
+                workers=1,
+            )
+
+            result = scan_media_index(settings)
+
+            metadata = result["assets"][0]["provider_metadata"]
+            self.assertEqual(metadata["provider"], "pexels")
+            self.assertIn("Google Earth", metadata["query"])
+            self.assertEqual(metadata["relevance_score"], 18.5)
+
     def test_default_repositories_are_user_confirmed_no_copyright(self) -> None:
         settings = MediaIndexSettings.from_environment()
         self.assertTrue(settings.roots)

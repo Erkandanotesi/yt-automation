@@ -17,7 +17,12 @@ from media_selection_stage import (
     _create_context_safe_fallback_asset,
     _effective_hero_images,
     _enforce_selection_constraints,
+    _hero_exclusions_for_story,
+    _is_pexels_asset,
+    _local_repository_index,
     _load_selector_cache,
+    _pexels_asset_matches,
+    _pexels_candidate_matches_subject,
     _pexels_visual_concept,
     _resolve_context_safe_fallbacks,
     _save_selector_cache,
@@ -26,9 +31,11 @@ from media_selection_stage import (
     _window_excerpt,
     _window_text,
     _window_entities,
+    _windows_requiring_online_fallback,
     build_archive_windows,
     coverage_quality,
     infer_scene_intent,
+    pexels_query_prompt,
     resolve_pexels_fallbacks,
     run_media_selection,
     shortlist_assets,
@@ -149,6 +156,215 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_initial_repository_pass_excludes_downloaded_pexels_assets(self) -> None:
+        local = {
+            "asset_id": "local-google-earth",
+            "workspace_relative_path": "AI Generated/google-earth.png",
+            "source_url": "",
+        }
+        pexels = {
+            "asset_id": "pexels-globe",
+            "workspace_relative_path": "Online Retrieved/Pexels/globe_123.jpg",
+            "source_url": "https://www.pexels.com/photo/globe-123/",
+        }
+
+        local_index = _local_repository_index({"assets": [local, pexels]})
+
+        self.assertEqual(local_index["assets"], [local])
+        self.assertFalse(_is_pexels_asset(local))
+        self.assertTrue(_is_pexels_asset(pexels))
+
+    def test_same_story_hero_can_be_reused_but_other_story_hero_cannot(self) -> None:
+        owners = {
+            "own-checksum": {"story_google_earth"},
+            "other-checksum": {"story_spaceflight"},
+        }
+
+        exclusions = _hero_exclusions_for_story(owners, "story_google_earth")
+
+        self.assertNotIn("own-checksum", exclusions)
+        self.assertIn("other-checksum", exclusions)
+
+    def test_pexels_planner_prompt_preserves_google_earth_visual_context(self) -> None:
+        prompt = pexels_query_prompt(
+            {"title": "Google Earth's AI Makeover Lasted Less Than Two Days"},
+            [
+                {
+                    "window_id": "story_01_archive_001",
+                    "text": (
+                        "Google Earth briefly let users transform satellite "
+                        "imagery with an AI image tool before Google removed it."
+                    ),
+                    "timestamp_excerpt": "before Google removed it",
+                    "entities": ["Google Earth", "Google"],
+                    "scene_intent": "software_product",
+                }
+            ],
+        )
+
+        self.assertIn("Google Earth satellite map computer screen", prompt)
+        self.assertIn("full_sentence_context", prompt)
+        self.assertIn("Google Earth briefly let users", prompt)
+
+    def test_neutral_local_choice_is_sent_to_pexels_query_planner(self) -> None:
+        window = {
+            "window_id": "story_01_archive_001",
+            "shortlist": [
+                {
+                    "asset_id": "neutral-card",
+                    "sha256": "neutral-sha",
+                    "context_safe_fallback": True,
+                }
+            ],
+        }
+        decision = WindowDecision(
+            window_id=window["window_id"],
+            relevance_status="relevant",
+            selected_asset_id="neutral-card",
+            confidence=0.15,
+            selection_reason="Temporary context-safe card awaiting online fallback.",
+        )
+
+        unresolved = _windows_requiring_online_fallback(
+            [window],
+            {window["window_id"]: decision},
+            video_usage_counts=Counter(),
+            maximum_uses=2,
+        )
+
+        self.assertEqual(unresolved, [window])
+
+    def test_pexels_reuse_requires_original_query_and_visible_topic_match(self) -> None:
+        cryptocurrency = {
+            "source_url": "https://www.pexels.com/photo/bitcoin-123/",
+            "filename": "bitcoin-coins-on-laptop.jpg",
+            "local_caption": "bitcoin coins on laptop keyboard",
+            "keywords": ["bitcoin", "cryptocurrency", "laptop"],
+            "provider_metadata": {
+                "query": "bitcoin cryptocurrency digital wallet",
+                "required_entity": "cryptocurrency",
+                "title": "Bitcoin coins on a laptop keyboard",
+                "description": "Physical cryptocurrency coins beside a laptop",
+            },
+        }
+        google_earth = {
+            "source_url": "https://www.pexels.com/photo/satellite-map-456/",
+            "filename": "satellite-map-on-monitor.jpg",
+            "local_caption": "satellite map displayed on monitor",
+            "keywords": ["satellite", "map", "monitor"],
+            "provider_metadata": {
+                "query": "Google Earth satellite map computer screen",
+                "required_entity": "Google Earth satellite map interface",
+                "title": "Satellite map displayed on a desktop monitor",
+                "description": "A detailed satellite map on a workstation",
+            },
+        }
+
+        query = "Google Earth satellite map computer screen"
+        entity = "Google Earth satellite map interface"
+        self.assertFalse(_pexels_asset_matches(cryptocurrency, query, entity))
+        self.assertTrue(_pexels_asset_matches(google_earth, query, entity))
+
+    def test_google_search_page_does_not_pass_as_google_earth(self) -> None:
+        generic_google = {
+            "title": "Person using a laptop with Google search on screen",
+            "description": "A Google website is open on a laptop outdoors",
+            "source_page": "https://www.pexels.com/photo/google-website-123/",
+        }
+        satellite_map = {
+            "title": "Detailed satellite map displayed on a monitor",
+            "description": "Satellite imagery and a map fill the screen",
+            "source_page": "https://www.pexels.com/photo/satellite-map-456/",
+        }
+        query = "Google Earth satellite map computer screen"
+        entity = "Google Earth satellite map interface"
+
+        self.assertFalse(
+            _pexels_candidate_matches_subject(generic_google, query, entity)
+        )
+        self.assertTrue(
+            _pexels_candidate_matches_subject(satellite_map, query, entity)
+        )
+
+    def test_ai_irrelevant_decision_keeps_strong_named_local_asset(self) -> None:
+        window = {
+            "window_id": "story_01_archive_001",
+            "text": "Google Earth displayed transformed satellite imagery.",
+            "entities": ["Google Earth"],
+            "scene_intent": "software_product",
+            "shortlist": [
+                {
+                    "asset_id": "google-earth-local",
+                    "sha256": "f" * 64,
+                    "local_score": 55.0,
+                    "context_grounded": True,
+                    "grounding_basis": "exact_entity",
+                    "score_components": {"entity_hits": ["Google Earth"]},
+                }
+            ],
+        }
+        decisions = StoryMediaDecisions(
+            decisions=[
+                WindowDecision(
+                    window_id=window["window_id"],
+                    relevance_status="images_are_irrelevant",
+                    confidence=0.8,
+                    selection_reason="The legacy selector preferred online search.",
+                    online_search_query="Google Earth satellite map",
+                    required_entity="Google Earth",
+                )
+            ]
+        )
+
+        repaired = _validate_decisions(
+            decisions,
+            [window],
+            {"title": "Google Earth AI feature"},
+            minimum_confidence=0.45,
+        )[window["window_id"]]
+
+        self.assertEqual(repaired.relevance_status, "relevant")
+        self.assertEqual(repaired.selected_asset_id, "google-earth-local")
+
+    def test_exact_entity_local_recovery_survives_confidence_gate(self) -> None:
+        window = {
+            "window_id": "story_01_archive_001",
+            "text": "Google Earth displayed transformed satellite imagery.",
+            "entities": ["Google Earth"],
+            "scene_intent": "software_product",
+            "shortlist": [
+                {
+                    "asset_id": "google-earth-local",
+                    "sha256": "e" * 64,
+                    "local_score": 55.0,
+                    "context_grounded": True,
+                    "grounding_basis": "exact_entity",
+                }
+            ],
+        }
+        decisions = StoryMediaDecisions(
+            decisions=[
+                WindowDecision(
+                    window_id=window["window_id"],
+                    relevance_status="relevant",
+                    selected_asset_id="legacy-pexels-choice",
+                    confidence=0.8,
+                    selection_reason="A cached choice predates local-first ranking.",
+                )
+            ]
+        )
+
+        repaired = _validate_decisions(
+            decisions,
+            [window],
+            {"title": "Google Earth AI feature"},
+            minimum_confidence=0.45,
+        )[window["window_id"]]
+
+        self.assertEqual(repaired.relevance_status, "relevant")
+        self.assertEqual(repaired.selected_asset_id, "google-earth-local")
+        self.assertGreaterEqual(repaired.confidence, 0.45)
+
     def test_tiny_tail_is_rebalanced_without_exceeding_maximum_hold(self) -> None:
         settings = replace(
             selection_settings(),
@@ -385,6 +601,58 @@ class MediaSelectionTests(unittest.TestCase):
             self.assertEqual(calls, [1, 2])
             self.assertEqual(
                 selected[0]["selected_asset"]["asset_id"], unique["asset_id"]
+            )
+
+    def test_enforcer_prefers_exact_story_asset_for_its_second_allowed_use(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exact = make_asset(
+                root,
+                "Media/google-earth-map.png",
+                ["google", "earth", "map"],
+                "cleared",
+            )
+            weaker = make_asset(
+                root,
+                "Media/starlink-earth.png",
+                ["starlink", "earth"],
+                "cleared",
+            )
+            exact_candidate = {
+                **exact,
+                "local_score": 55.0,
+                "context_grounded": True,
+                "grounding_basis": "exact_entity",
+            }
+            weaker_candidate = {
+                **weaker,
+                "local_score": 20.0,
+                "context_grounded": True,
+                "grounding_basis": "exact_entity",
+            }
+            window = {
+                "window_id": "story_google_earth_archive_001",
+                "shortlist": [exact_candidate, weaker_candidate],
+            }
+            decision = WindowDecision(
+                window_id=window["window_id"],
+                selected_asset_id=exact["asset_id"],
+                confidence=0.8,
+                selection_reason="The exact Google Earth asset matches.",
+                alternative_asset_ids=[weaker["asset_id"]],
+            )
+
+            selected = _enforce_selection_constraints(
+                [window],
+                {window["window_id"]: decision},
+                {exact["asset_id"]: exact, weaker["asset_id"]: weaker},
+                Counter({exact["sha256"]: 1}),
+                2,
+            )
+
+            self.assertEqual(
+                selected[0]["selected_asset"]["asset_id"],
+                exact["asset_id"],
             )
 
     def test_one_distinctive_context_term_is_relevant_enough(self) -> None:

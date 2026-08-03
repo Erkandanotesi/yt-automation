@@ -239,6 +239,18 @@ def _read_sidecar(path: Path) -> dict:
     return value if isinstance(value, dict) else {"sidecar_error": "Not a JSON object."}
 
 
+def _provider_metadata(sidecar: dict) -> dict:
+    return {
+        "provider": str(sidecar.get("provider", "")).strip(),
+        "query": str(sidecar.get("query", "")).strip(),
+        "required_entity": str(sidecar.get("required_entity", "")).strip(),
+        "context": str(sidecar.get("context", "")).strip(),
+        "title": str(sidecar.get("title", "")).strip(),
+        "description": str(sidecar.get("description", "")).strip(),
+        "relevance_score": sidecar.get("relevance_score"),
+    }
+
+
 def _generic_filename(path: Path) -> bool:
     tokens = set(tokenize(path.stem))
     return not tokens or tokens <= GENERIC_FILENAME_TOKENS
@@ -327,6 +339,7 @@ def _build_asset(
         "caption_source": "filename_and_folder",
         "source_url": str(sidecar.get("source_url", "")).strip(),
         "creator": str(sidecar.get("creator", "")).strip(),
+        "provider_metadata": _provider_metadata(sidecar),
         "license": {
             "status": license_status,
             "name": str(sidecar.get("license_name", "")).strip(),
@@ -478,6 +491,10 @@ def scan_media_index(
         ):
             reused = dict(previous)
             reused["media_root"] = root.label
+            if sidecar.is_file() and not reused.get("provider_metadata"):
+                reused["provider_metadata"] = _provider_metadata(
+                    _read_sidecar(path)
+                )
             if (
                 root.repository_license_hint == "user_confirmed_no_copyright"
                 and reused.get("license", {}).get("basis")

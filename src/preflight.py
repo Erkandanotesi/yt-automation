@@ -403,6 +403,9 @@ def collect_checks() -> list[Check]:
                         f"{media_selection_settings.pexels_max_searches_per_video}; "
                         f"download cap="
                         f"{media_selection_settings.pexels_max_downloads_per_video}; "
+                        f"query planner="
+                        f"{media_selection_settings.pexels_query_model}/"
+                        f"{media_selection_settings.pexels_query_reasoning_effort}; "
                         f"destination={pexels_settings.destination}"
                     ),
                 )

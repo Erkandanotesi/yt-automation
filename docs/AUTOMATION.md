@@ -335,9 +335,12 @@ both the exact timed clause and its complete containing sentence, so a long sent
 can change images naturally while names such as Microsoft or Steve Jobs remain attached
 to later clauses. Ambiguous verbs such as `launch` never imply spaceflight unless the
 context also contains space-specific evidence such as a rocket, satellite, or orbit.
-Local files are always selected first. Unresolved windows are grouped into broad,
-truthful Pexels photographic topics, allowing one search to supply several distinct
-images. If no acceptable local or Pexels result exists, FFmpeg creates a unique dark,
+Local files are always selected first, and downloaded Pexels files cannot compete in
+that initial shortlist. A cached Luna-low planner turns the complete sentence context
+of unresolved windows into precise Pexels searches, preserving visible names such as
+Google Earth and trying descriptive alternatives only when needed. Compatible windows
+are pooled so one query can supply several distinct images. If no acceptable local or
+Pexels result exists, FFmpeg creates a unique dark,
 context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
 chapter title remains visible, production continues without an API request, and no
 unrelated person, company, product, or event is implied.
@@ -355,8 +358,8 @@ response without paying for the same selector request again.
 SHA-256-based cap across the complete video, including generated hero images, local
 archive images and Pexels downloads. Selection repairs and cached story resumes
 must respect the same limit.
-Current-video hero checksums are reserved exclusively for their authored hero slots,
-so an archived copy of the same generated pixels cannot reappear in an archive window.
+The current story may reuse its own hero image once, keeping the global two-use cap.
+Hero checksums from other stories remain excluded from that story's archive windows.
 `EFFECTS_MAX_VISUAL_HOLD_SECONDS=9` is an independent final cadence gate: effects and
 render preparation stop if any still event, or any adjacent run of identical pixels,
 meaningfully exceeds nine seconds. Newly split archive windows obey the hard limit;
