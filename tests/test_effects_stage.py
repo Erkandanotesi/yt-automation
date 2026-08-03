@@ -118,12 +118,12 @@ def write_plan_fixture(root: Path) -> dict[str, Path]:
                         "selected_asset": {
                             "absolute_path": str(assets[1]),
                             "sha256": sha256_file(assets[1]),
-                            "source_url": "https://commons.wikimedia.org/wiki/File:Test",
+                            "source_url": "https://www.pexels.com/photo/test-123/",
                             "creator": "Test Creator",
                             "license": {
-                                "name": "CC BY-SA 4.0",
+                                "name": "Pexels License",
                                 "attribution_required": True,
-                                "attribution_text": "Test Creator; CC BY-SA 4.0",
+                                "attribution_text": "Photo by Test Creator on Pexels",
                             },
                             "quality_flags": [],
                         },

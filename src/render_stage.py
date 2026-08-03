@@ -246,13 +246,7 @@ def _compact_source_attribution(attribution: dict) -> str:
         str(attribution.get("license_name", "")),
     ).strip()
     host = urlparse(source_url).netloc.casefold()
-    provider = (
-        "Wikimedia Commons"
-        if "wikimedia.org" in host
-        else "Pexels"
-        if "pexels.com" in host
-        else host.removeprefix("www.")
-    )
+    provider = "Pexels" if "pexels.com" in host else host.removeprefix("www.")
     if not creator:
         provided = re.sub(
             r"\s+",

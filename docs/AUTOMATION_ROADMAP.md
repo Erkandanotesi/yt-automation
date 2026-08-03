@@ -460,14 +460,12 @@ verification and receives no warning or ranking penalty.
 6. Save every decision, confidence, and alternative in `media_plan.json`.
 7. Copy selected assets into the project or record immutable source paths and hashes.
 
-If the AI explicitly returns `images_are_irrelevant` for every local candidate, query
-Wikimedia Commons by exact named entity plus scene intent. Google/Yandex Images may be used only
-to discover an original source page, never as an automatic download source. Reject
-the fallback unless the title/description/category matches the named entity and the
-image itself passes visual relevance review. Save accepted downloads under
-`Assets/Media/Online Retrieved` with a descriptive filename and a JSON sidecar that
-records source page, creator, license, license URL, retrieval date, query, checksum,
-and relevance evidence.
+If the AI explicitly returns `images_are_irrelevant` for every local candidate, map
+the window to a broad photographic concept and query Pexels. Searches are pooled by
+topic and can provide several distinct photos. Reject totally unrelated results and
+use a neutral local card when no acceptable result exists. Save accepted downloads
+under `Assets/Media/Online Retrieved/Pexels` with a descriptive filename and JSON
+metadata sidecar.
 
 ### Test
 
@@ -492,12 +490,12 @@ and relevance evidence.
 - Production enforcement avoids adjacent duplicates, same-story reuse, and crop-risk
   choices whenever a safe shortlist alternative exists.
 - An explicit structured `images_are_irrelevant` decision triggers the optional,
-  capped Wikimedia provider. Exact entity/title evidence, supported dimensions and
-  commercial-reuse license metadata are required; failed searches safely return to
-  the local shortlist instead of inserting a wrong-entity web image.
-- Online images and attribution sidecars live separately under `Assets/Media/Online
-  Retrieved/Wikimedia Commons`. Search manifests are stored per video, and the whole
-  provider can be disabled with `WIKIMEDIA_FALLBACK_ENABLED=false`.
+  capped Pexels provider after all local files have been considered. Topic metadata,
+  supported dimensions, and license metadata are required; failed searches safely
+  produce a neutral local fallback instead of a wrong-entity image.
+- Pexels images and attribution sidecars live under `Assets/Media/Online
+  Retrieved/Pexels`. Search manifests are stored per video, and the provider can be
+  disabled with `PEXELS_FALLBACK_ENABLED=false`.
 - `media_plan.json` records exact local/global time ranges, immutable source path,
   SHA-256, dimensions, repository classification, confidence, reason, override,
   alternatives, and full shortlist.

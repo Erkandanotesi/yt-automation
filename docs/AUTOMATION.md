@@ -18,8 +18,7 @@ Tech News/
 |   |-- Media/
 |   |   |-- AI Generated/
 |   |   |-- Online Retrieved/
-|   |       |-- Pexels/
-|   |       `-- Wikimedia Commons/
+|   |       `-- Pexels/
 |   |   `-- Thumbnails/
 |   |-- Media (No-Copyright)/
 |   |-- Overlays/
@@ -203,9 +202,9 @@ as `Haberler/*-orijinal.txt`. Whitespace-only formatting does not change duplica
 identity because the archive hashes normalized content.
 
 Archive-image decisions use each window plus the complete story title and entity
-context. If an AI-generated Wikimedia entity is worded as an ungrounded paraphrase, it
-is repaired locally to a story entity. If no grounded entity exists, the window uses a
-low-confidence local fallback instead of failing the complete production run.
+context. Exact names are kept for local matching, then broadened into truthful photo
+topics only when Pexels is needed. If no grounded image exists, the window uses a
+unique local neutral fallback instead of failing the complete production run.
 
 Only folders named exactly `Video N` participate in project numbering.
 
@@ -336,10 +335,9 @@ both the exact timed clause and its complete containing sentence, so a long sent
 can change images naturally while names such as Microsoft or Steve Jobs remain attached
 to later clauses. Ambiguous verbs such as `launch` never imply spaceflight unless the
 context also contains space-specific evidence such as a rocket, satellite, or orbit.
-Pexels handles grounded general photographic scenes first; exact logo requests go
-straight to Wikimedia Commons. If Pexels cannot prove a match from search rank and
-alt-text metadata, Wikimedia is tried next. If no acceptable local, Pexels, or
-Wikimedia result exists, FFmpeg creates a unique dark,
+Local files are always selected first. Unresolved windows are grouped into broad,
+truthful Pexels photographic topics, allowing one search to supply several distinct
+images. If no acceptable local or Pexels result exists, FFmpeg creates a unique dark,
 context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
 chapter title remains visible, production continues without an API request, and no
 unrelated person, company, product, or event is implied.
@@ -347,17 +345,7 @@ Fallback uniqueness is verified from the rendered file checksum. If FFmpeg color
 quantization makes two digest-derived neutral cards pixel-identical, the renderer
 tries deterministic local variants until it produces distinct pixels; this collision
 cannot abort archive selection or consume another AI request.
-With `WIKIMEDIA_BRAND_LOGOS_ENABLED=true`, the first archive window that explicitly
-speaks each detected company name prefers an exact logo already in the local archive,
-or a commercially reusable Wikimedia Commons logo when no local logo is selected.
-Pronoun-only clauses do not inherit this rule, and each company is promoted at most
-once per story to avoid a logo-heavy video. Previously downloaded logo assets are
-reused from the media index; otherwise the
-normal Wikimedia search/download limits and attribution overlay still apply. Commons
-SVG logos are downloaded through Wikimedia's raster thumbnail service, then rendered
-uncropped and motionless on a light neutral 16:9 field. If no accepted logo exists, selection
-falls back safely to the strongest grounded contextual image without stopping the run.
-Folders named `Thumbnails` are excluded both when the media index is scanned and when
+Legacy Commons download folders and folders named `Thumbnails` are excluded both when the media index is scanned and when
 an in-video shortlist is built. The second guard also blocks thumbnail files lingering
 in an older cached index; thumbnail creation and YouTube publishing remain unchanged.
 Each raw per-story selector response is saved before validation under
@@ -365,7 +353,7 @@ Each raw per-story selector response is saved before validation under
 response without paying for the same selector request again.
 `MEDIA_MAX_USES_PER_VIDEO=2` is a hard
 SHA-256-based cap across the complete video, including generated hero images, local
-archive images, Pexels downloads, and Wikimedia downloads. Selection repairs and cached story resumes
+archive images and Pexels downloads. Selection repairs and cached story resumes
 must respect the same limit.
 Current-video hero checksums are reserved exclusively for their authored hero slots,
 so an archived copy of the same generated pixels cannot reappear in an archive window.

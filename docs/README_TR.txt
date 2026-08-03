@@ -128,8 +128,8 @@ Kod karşılığı:
 data\indexes\media_index.json
 
 Hem `Assets\Media` hem `Assets\Media (No-Copyright)` kullanılır. Yerel adaylar
-ilgisizse genel fotoğraflar için Pexels, kesin marka ve logo eşleşmeleri için
-Wikimedia Commons devreye girer.
+ilgisizse konu bazlı fotoğraf havuzları için Pexels devreye girer. Uygun sonuç yoksa
+üretim durmaz; yerel ve benzersiz bir nötr görsel kullanılır.
 
 8. YAYIN PAKETİ
 ---------------

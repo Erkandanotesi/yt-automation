@@ -80,9 +80,9 @@ def write_fixture(root: Path, *, overlay_mode: bool = True) -> None:
                 "attribution": {
                     "required": True,
                     "creator": "Example Creator",
-                    "source_url": "https://commons.wikimedia.org/wiki/File:Example",
-                    "license_name": "CC BY-SA 4.0",
-                    "provided_text": "Example Creator; CC BY-SA 4.0",
+                    "source_url": "https://www.pexels.com/photo/example-123/",
+                    "license_name": "Pexels License",
+                    "provided_text": "Photo by Example Creator on Pexels",
                 },
             }
         ],

@@ -86,11 +86,15 @@ class MediaIndexTests(unittest.TestCase):
             self.assertIn("openai", cleared_asset["keywords"])
             self.assertIn("phone", cleared_asset["keywords"])
 
-    def test_thumbnail_directories_are_excluded_from_index(self) -> None:
+    def test_non_video_media_directories_are_excluded_from_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             media = root / "Media"
             make_image(media / "Thumbnails" / "openai launch thumbnail.png", "red")
+            make_image(
+                media / "Online Retrieved" / "Wikimedia Commons" / "legacy.png",
+                "green",
+            )
             make_image(media / "OpenAI" / "openai office.png", "blue")
             settings = MediaIndexSettings(
                 index_path=root / "index.json",

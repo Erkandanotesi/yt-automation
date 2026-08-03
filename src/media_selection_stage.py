@@ -107,14 +107,10 @@ class MediaSelectionSettings:
     timeout_seconds: float = 120.0
     copy_selected_assets: bool = False
     pexels_fallback_enabled: bool = True
-    pexels_max_downloads_per_video: int = 10
-    pexels_max_searches_per_video: int = 12
-    wikimedia_fallback_enabled: bool = True
-    wikimedia_max_downloads_per_video: int = 10
-    wikimedia_max_searches_per_video: int = 12
+    pexels_max_downloads_per_video: int = 20
+    pexels_max_searches_per_video: int = 20
     maximum_uses_per_video: int = 2
     minimum_ai_confidence: float = 0.45
-    wikimedia_brand_logos_enabled: bool = True
 
     @classmethod
     def from_environment(cls) -> "MediaSelectionSettings":
@@ -155,21 +151,10 @@ class MediaSelectionSettings:
             ).strip().lower()
             in {"1", "true", "yes", "on"},
             pexels_max_downloads_per_video=int(
-                os.getenv("PEXELS_MAX_DOWNLOADS_PER_VIDEO", "10")
+                os.getenv("PEXELS_MAX_DOWNLOADS_PER_VIDEO", "20")
             ),
             pexels_max_searches_per_video=int(
-                os.getenv("PEXELS_MAX_SEARCHES_PER_VIDEO", "12")
-            ),
-            wikimedia_fallback_enabled=os.getenv(
-                "WIKIMEDIA_FALLBACK_ENABLED",
-                "true",
-            ).strip().lower()
-            in {"1", "true", "yes", "on"},
-            wikimedia_max_downloads_per_video=int(
-                os.getenv("WIKIMEDIA_MAX_DOWNLOADS_PER_VIDEO", "10")
-            ),
-            wikimedia_max_searches_per_video=int(
-                os.getenv("WIKIMEDIA_MAX_SEARCHES_PER_VIDEO", "12")
+                os.getenv("PEXELS_MAX_SEARCHES_PER_VIDEO", "20")
             ),
             maximum_uses_per_video=int(
                 os.getenv("MEDIA_MAX_USES_PER_VIDEO", "2")
@@ -177,11 +162,6 @@ class MediaSelectionSettings:
             minimum_ai_confidence=float(
                 os.getenv("MEDIA_MIN_AI_CONFIDENCE", "0.45")
             ),
-            wikimedia_brand_logos_enabled=os.getenv(
-                "WIKIMEDIA_BRAND_LOGOS_ENABLED",
-                "true",
-            ).strip().lower()
-            in {"1", "true", "yes", "on"},
         )
 
     def validate(self) -> None:
@@ -206,10 +186,6 @@ class MediaSelectionSettings:
             raise ValueError("Media window duration settings are inconsistent.")
         if self.api_retries < 1 or self.timeout_seconds <= 0:
             raise ValueError("Media selection API retry/timeout must be positive.")
-        if not 0 <= self.wikimedia_max_downloads_per_video <= 30:
-            raise ValueError(
-                "WIKIMEDIA_MAX_DOWNLOADS_PER_VIDEO must be between 0 and 30."
-            )
         if not 0 <= self.pexels_max_downloads_per_video <= 30:
             raise ValueError(
                 "PEXELS_MAX_DOWNLOADS_PER_VIDEO must be between 0 and 30."
@@ -217,10 +193,6 @@ class MediaSelectionSettings:
         if not 0 <= self.pexels_max_searches_per_video <= 30:
             raise ValueError(
                 "PEXELS_MAX_SEARCHES_PER_VIDEO must be between 0 and 30."
-            )
-        if not 0 <= self.wikimedia_max_searches_per_video <= 30:
-            raise ValueError(
-                "WIKIMEDIA_MAX_SEARCHES_PER_VIDEO must be between 0 and 30."
             )
         if not 1 <= self.maximum_uses_per_video <= 10:
             raise ValueError("MEDIA_MAX_USES_PER_VIDEO must be between 1 and 10.")
@@ -282,6 +254,7 @@ def _selector_cache_path(video_dir: Path, story_id: str) -> Path:
 def _load_selector_cache(
     path: Path,
     fingerprint: str,
+    compatible_fingerprints: set[str] | None = None,
 ) -> StoryMediaDecisions | None:
     if not path.is_file():
         return None
@@ -289,7 +262,11 @@ def _load_selector_cache(
         payload = load_json(path, "Media selector cache")
         if (
             payload.get("schema_version") != SELECTOR_CACHE_SCHEMA_VERSION
-            or payload.get("input_fingerprint") != fingerprint
+            or (
+                payload.get("input_fingerprint") != fingerprint
+                and payload.get("input_fingerprint")
+                not in (compatible_fingerprints or set())
+            )
         ):
             return None
         return StoryMediaDecisions.model_validate(payload.get("decisions", {}))
@@ -1012,10 +989,9 @@ Rules:
 - An `unknown` license is allowed for planning but must remain visibly recorded.
 - If every candidate is unrelated, merely shares a broad company/category, or would
   visually misrepresent the spoken claim, return relevance_status exactly as
-  `images_are_irrelevant`, selected_asset_id as null, and supply a concise Wikimedia
-  search query plus one exact required_entity visible in the story title, spoken text,
-  or supplied entities. Reuse the story's main entity when a short window uses a
-  pronoun or splits a sentence across windows.
+  `images_are_irrelevant` and selected_asset_id as null. Supply a concise Pexels
+  photographic search idea and the central subject. The program will deliberately
+  broaden exact brand/person names into a truthful visual topic before searching.
 - Never force a local selection after deciding the images are irrelevant.
 - For a normal choice, return relevance_status=`relevant` and choose only an asset_id
   listed in that window's candidates.
@@ -1323,89 +1299,191 @@ def _fallback_to_local_candidate(
     )
 
 
-def _company_entities(story: dict) -> list[str]:
-    companies: list[str] = []
-    records = [story, *story.get("visual_beats", [])]
-    for record in records:
-        named = record.get("named_entities") or {}
-        for category, values in named.items():
-            normalized_category = normalize_search_text(str(category))
-            if not any(
-                marker in normalized_category
-                for marker in ("compan", "organization", "organisation")
-            ):
-                continue
-            if isinstance(values, list):
-                companies.extend(str(value).strip() for value in values if str(value).strip())
-    return list(dict.fromkeys(companies))
+PEXELS_VISUAL_CONCEPTS = (
+    (
+        "data_center",
+        "data center servers technology",
+        "data center",
+        {"data center", "server", "servers", "cloud infrastructure", "outage"},
+    ),
+    (
+        "smart_television",
+        "smart television streaming entertainment",
+        "smart television",
+        {"television", "smart tv", "streaming", "tv app", "samsung tv"},
+    ),
+    (
+        "cryptocurrency",
+        "bitcoin cryptocurrency digital wallet",
+        "cryptocurrency",
+        {"bitcoin", "crypto", "cryptocurrency", "wallet", "blockchain", "coldcard"},
+    ),
+    (
+        "writing_publishing",
+        "writer books publishing desk",
+        "writer books",
+        {"writer", "author", "book", "novel", "publishing", "copyright", "scalzi"},
+    ),
+    (
+        "cybersecurity",
+        "cybersecurity computer security operations",
+        "cybersecurity",
+        {
+            "cybersecurity", "security", "hacker", "hacking", "malware",
+            "breach", "attack", "vulnerability", "firmware", "exploit",
+        },
+    ),
+    (
+        "privacy_data",
+        "digital privacy personal data protection",
+        "digital privacy",
+        {"privacy", "personal data", "surveillance", "tracking", "face data"},
+    ),
+    (
+        "artificial_intelligence",
+        "artificial intelligence computer research",
+        "artificial intelligence",
+        {
+            "artificial intelligence", " ai ", "model", "training", "agent",
+            "machine learning", "neural", "llm", "chatbot",
+        },
+    ),
+    (
+        "computer_chips",
+        "computer chips semiconductor circuit board",
+        "computer chips",
+        {"gpu", "cpu", "chip", "semiconductor", "nvidia", "amd", "intel"},
+    ),
+    (
+        "gaming",
+        "computer gaming esports setup",
+        "computer gaming",
+        {"gaming", "game", "xbox", "playstation", "steam", "esports"},
+    ),
+    (
+        "autonomous_vehicle",
+        "autonomous electric car technology",
+        "autonomous car",
+        {"waymo", "autonomous car", "self driving", "electric vehicle", "robotaxi"},
+    ),
+    (
+        "social_media",
+        "social media smartphone apps",
+        "social media",
+        {"social media", "facebook", "instagram", "tiktok", "online platform"},
+    ),
+    (
+        "satellite_network",
+        "satellite communications network technology",
+        "satellite network",
+        {"satellite", "starlink", "space internet", "communications network"},
+    ),
+    (
+        "software_workplace",
+        "computer software office workplace",
+        "computer software",
+        {
+            "microsoft", "windows", "google", "apple", "openai", "software",
+            "operating system", "office", "browser", "application", "app",
+        },
+    ),
+)
 
 
-def _candidate_is_company_logo(candidate: dict, company: str) -> bool:
-    identity = _phrase_key(
+def _pexels_visual_concept(
+    window: dict,
+    decision: WindowDecision,
+) -> tuple[str, str, str]:
+    """Map an exact news claim to an honest, searchable photographic topic."""
+    source = " " + normalize_search_text(
         " ".join(
             [
-                str(candidate.get("filename", "")),
-                str(candidate.get("local_caption", "")),
-                " ".join(str(value) for value in candidate.get("keywords", [])),
+                str(window.get("text", "")),
+                str(window.get("timestamp_excerpt", "")),
+                str(window.get("scene_intent", "")),
+                " ".join(str(item) for item in window.get("entities", [])),
+                decision.online_search_query,
+                decision.required_entity,
             ]
         )
-    )
-    company_text = _phrase_key(company)
-    return company_text in identity and "logo" in identity.split()
-
-
-def prefer_explicit_company_logos(
-    windows: list[dict],
-    decisions: dict[str, WindowDecision],
-    story: dict,
-    *,
-    enabled: bool = True,
-) -> dict[str, WindowDecision]:
-    """Prefer one Commons logo when a company is explicitly spoken in a story."""
-    if not enabled:
-        return decisions
-    companies = _company_entities(story)
-    if not companies:
-        return decisions
-    updated = dict(decisions)
-    handled: set[str] = set()
-    for window in sorted(windows, key=lambda item: float(item.get("start", 0))):
-        excerpt = str(window.get("timestamp_excerpt") or window.get("text", ""))
-        explicit = _entities_in_text(companies, excerpt)
-        explicit.sort(
-            key=lambda entity: _phrase_key(excerpt).find(
-                _phrase_key(entity)
+    ) + " "
+    best: tuple[int, int, str, str, str] | None = None
+    for order, (key, query, entity, phrases) in enumerate(PEXELS_VISUAL_CONCEPTS):
+        hits = sum(
+            1
+            for phrase in phrases
+            if (
+                f" {normalize_search_text(phrase)} " in source
+                or (
+                    len(tokenize(phrase)) == 1
+                    and tokenize(phrase)[0] in set(tokenize(source))
+                )
             )
         )
-        for company in explicit:
-            company_key = _phrase_key(company)
-            if not company_key or company_key in handled:
-                continue
-            handled.add(company_key)
-            current = updated[window["window_id"]]
-            selected = next(
-                (
-                    candidate
-                    for candidate in window.get("shortlist", [])
-                    if candidate.get("asset_id") == current.selected_asset_id
-                ),
-                None,
+        candidate = (hits, -order, key, query, entity)
+        if hits and (best is None or candidate > best):
+            best = candidate
+    if best is not None:
+        return best[2], best[3], best[4]
+    return (
+        "general_technology",
+        "modern computer technology workspace",
+        "computer technology",
+    )
+
+
+def _pexels_asset_matches(asset: dict, query: str, entity: str) -> bool:
+    source_url = normalize_search_text(str(asset.get("source_url", "")))
+    if "pexels.com" not in source_url:
+        return False
+    searchable = set(
+        tokenize(
+            " ".join(
+                [
+                    str(asset.get("filename", "")),
+                    str(asset.get("local_caption", "")),
+                    " ".join(str(item) for item in asset.get("keywords", [])),
+                    str(asset.get("source_url", "")),
+                ]
             )
-            if selected is not None and _candidate_is_company_logo(selected, company):
-                break
-            updated[window["window_id"]] = WindowDecision(
-                window_id=window["window_id"],
-                relevance_status="images_are_irrelevant",
-                confidence=max(0.7, float(current.confidence)),
-                selection_reason=(
-                    f"The narration explicitly names {company}; prefer its exact "
-                    "Wikimedia Commons logo over a generic contextual image."
-                ),
-                online_search_query=f"{company} official logo",
-                required_entity=company,
-            )
-            break
-    return updated
+        )
+    )
+    terms = [
+        token
+        for token in tokenize(f"{query} {entity}")
+        if token not in {"modern", "technology", "computer", "digital"}
+    ]
+    return bool(searchable.intersection(terms))
+
+
+def _pexels_candidate(asset: dict, *, query: str, concept: str) -> dict:
+    return {
+        "asset_id": asset["asset_id"],
+        "workspace_relative_path": asset.get("workspace_relative_path", ""),
+        "filename": asset.get("filename", ""),
+        "folder": asset.get("folder", str(Path(asset["absolute_path"]).parent)),
+        "local_caption": asset.get("local_caption", ""),
+        "keywords": asset.get("keywords", []),
+        "width": asset["width"],
+        "height": asset["height"],
+        "aspect_ratio": asset["aspect_ratio"],
+        "crop_retention_16_9": asset.get("crop_retention_16_9", 1.0),
+        "quality_flags": asset.get("quality_flags", []),
+        "license_status": asset.get("license", {}).get("status", "pexels_license"),
+        "prior_use_count": asset.get("prior_use_count", 0),
+        "sha256": asset["sha256"],
+        "local_score": 20.0,
+        "score_components": {
+            "pexels_topic_query": query,
+            "pexels_visual_concept": concept,
+        },
+        "context_grounded": True,
+        "grounding_basis": "pexels_topic_concept",
+        "distinctive_overlap_tokens": tokenize(concept),
+        "neutral_fallback": False,
+        "online_fallback": True,
+        "online_provider": "pexels",
+    }
 
 
 def _keep_irrelevant(decision: WindowDecision, reason: str) -> WindowDecision:
@@ -1431,26 +1509,74 @@ def resolve_pexels_fallbacks(
     settings: MediaSelectionSettings,
     remaining_downloads: int,
     remaining_searches: int,
+    video_usage_counts: Counter[str] | None = None,
+    search_cache: dict[str, dict] | None = None,
 ) -> tuple[dict[str, WindowDecision], dict, int, int]:
-    """Resolve generic photographic gaps with grounded Pexels results.
+    """Fill unresolved windows from reusable, topic-grounded Pexels pools.
 
-    Exact logo requests intentionally remain unresolved here so Wikimedia can
-    handle them with its stricter title/entity metadata.
+    Local files have already been selected before this function runs. Exact names
+    are deliberately converted to broad photographic concepts so a brand mention
+    cannot become an unrelated rocket, person, or product image.
     """
-    irrelevant = [
-        window
-        for window in windows
-        if decisions[window["window_id"]].relevance_status
-        == "images_are_irrelevant"
-        and "logo"
-        not in normalize_search_text(
-            decisions[window["window_id"]].online_search_query
-        ).split()
-    ]
-    if not irrelevant:
-        return decisions, media_index, 0, 0
-    if not settings.pexels_fallback_enabled:
-        return decisions, media_index, 0, 0
+    updated = dict(decisions)
+    unresolved = []
+    projected_usage = Counter(video_usage_counts or {})
+    projected_previous_sha = ""
+    for window in windows:
+        current = decisions[window["window_id"]]
+        selected = next(
+            (
+                candidate
+                for candidate in window.get("shortlist", [])
+                if candidate.get("asset_id") == current.selected_asset_id
+            ),
+            None,
+        )
+        selected_is_neutral = bool(
+            selected
+            and (
+                selected.get("neutral_fallback", False)
+                or selected.get("context_safe_fallback", False)
+                or selected.get("grounding_basis") == "context_safe_neutral"
+            )
+        )
+        selected_sha = str(selected.get("sha256", "")) if selected else ""
+        selected_is_conflicted = bool(
+            selected_sha
+            and (
+                projected_usage[selected_sha]
+                >= settings.maximum_uses_per_video
+                or selected_sha == projected_previous_sha
+            )
+        )
+        selected_is_missing = bool(
+            current.relevance_status == "relevant" and selected is None
+        )
+        if (
+            current.relevance_status == "images_are_irrelevant"
+            or selected_is_neutral
+            or selected_is_conflicted
+            or selected_is_missing
+        ):
+            unresolved.append(window)
+            if current.relevance_status != "images_are_irrelevant":
+                updated[window["window_id"]] = WindowDecision(
+                    window_id=window["window_id"],
+                    relevance_status="images_are_irrelevant",
+                    confidence=min(0.2, current.confidence),
+                    selection_reason=(
+                        "The current local choice is neutral, missing, adjacent to "
+                        "identical pixels, or beyond the two-use cap; try the "
+                        "Pexels topic pool before rendering a neutral card."
+                    ),
+                    online_search_query=current.online_search_query,
+                    required_entity=current.required_entity,
+                )
+        elif selected_sha:
+            projected_usage[selected_sha] += 1
+            projected_previous_sha = selected_sha
+    if not unresolved or not settings.pexels_fallback_enabled:
+        return updated, media_index, 0, 0
 
     from pexels_media_stage import (
         PexelsMediaSettings,
@@ -1463,406 +1589,279 @@ def resolve_pexels_fallbacks(
     try:
         online_settings.validate()
     except ValueError as exc:
-        updated = dict(decisions)
-        for window in irrelevant:
-            current = decisions[window["window_id"]]
+        for window in unresolved:
+            current = updated[window["window_id"]]
             updated[window["window_id"]] = _keep_irrelevant(
                 current,
                 f"Pexels is unavailable: {exc}",
             )
         return updated, media_index, 0, 0
 
-    resolved_assets: dict[str, dict] = {}
-    pending_downloads: dict[str, dict] = {}
-    updated = dict(decisions)
+    story_context = {
+        "text": " ".join(str(window.get("text", "")) for window in windows),
+        "timestamp_excerpt": "",
+        "scene_intent": " ".join(
+            str(window.get("scene_intent", "")) for window in windows
+        ),
+        "entities": list(
+            dict.fromkeys(
+                entity
+                for window in windows
+                for entity in window.get("entities", [])
+            )
+        ),
+    }
+    story_context_decision = WindowDecision(
+        window_id="story_context",
+        relevance_status="images_are_irrelevant",
+        confidence=0.5,
+        selection_reason="Use the complete story to carry context into short clauses.",
+        online_search_query=" ".join(
+            updated[window["window_id"]].online_search_query
+            for window in unresolved
+        )[:180],
+        required_entity="",
+    )
+    story_concept = _pexels_visual_concept(
+        story_context,
+        story_context_decision,
+    )
+
+    groups: dict[str, dict] = {}
+    window_groups: dict[str, str] = {}
+    for window in unresolved:
+        decision = updated[window["window_id"]]
+        key, query, entity = _pexels_visual_concept(window, decision)
+        if key == "general_technology" and story_concept[0] != key:
+            key, query, entity = story_concept
+        group = groups.setdefault(
+            key,
+            {"query": query, "entity": entity, "windows": []},
+        )
+        group["windows"].append(window)
+        window_groups[window["window_id"]] = key
+
     downloads_used = 0
     searches_used = 0
-    cached_queries: dict[str, dict] = {}
-    online_throttled = False
-
-    def existing_asset(required_entity: str) -> dict | None:
-        exact = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            normalize_search_text(required_entity),
-        ).strip()
-        if not exact:
-            return None
-        matches = []
-        for asset in media_index.get("assets", []):
-            if not _is_in_video_media_asset(asset):
-                continue
-            source_url = str(asset.get("source_url", "")).casefold()
-            identity = re.sub(
-                r"[^a-z0-9]+",
-                " ",
-                normalize_search_text(
-                    " ".join(
-                        [
-                            asset.get("filename", ""),
-                            asset.get("local_caption", ""),
-                        ]
-                    )
-                ),
-            ).strip()
-            if "pexels.com" in source_url and exact in identity:
-                matches.append(asset)
-        return max(
-            matches,
-            key=lambda item: (
-                float(item.get("crop_retention_16_9", 0)),
-                int(item.get("width", 0)) * int(item.get("height", 0)),
+    query_cache = search_cache if search_cache is not None else {}
+    usage = Counter(video_usage_counts or {})
+    # Reserve candidates already chosen by the local/AI phase in this story.
+    # Without this preview of future enforcement, a Pexels pool can allocate the
+    # same checksum to an unresolved window and only discover the two-use
+    # collision later, when the neutral-card fallback is the sole remaining choice.
+    unresolved_ids = {window["window_id"] for window in unresolved}
+    for window in windows:
+        if window["window_id"] in unresolved_ids:
+            continue
+        selected_id = updated[window["window_id"]].selected_asset_id
+        selected = next(
+            (
+                candidate
+                for candidate in window.get("shortlist", [])
+                if candidate.get("asset_id") == selected_id
             ),
-            default=None,
+            None,
         )
+        if selected and selected.get("sha256"):
+            usage[selected["sha256"]] += 1
+    group_assets: dict[str, list[dict]] = {}
+    downloaded_by_group: dict[str, list[str]] = {}
+    throttled = False
 
-    for window in irrelevant:
-        current = decisions[window["window_id"]]
-        reusable = existing_asset(current.required_entity)
-        if reusable is not None:
-            resolved_assets[window["window_id"]] = reusable
-            continue
-        if online_throttled:
-            updated[window["window_id"]] = _keep_irrelevant(
-                current,
-                "Pexels throttled the current run, so further searches stopped.",
+    for key, group in groups.items():
+        query = group["query"]
+        entity = group["entity"]
+        reusable = [
+            asset
+            for asset in media_index.get("assets", [])
+            if _is_in_video_media_asset(asset)
+            and Path(str(asset.get("absolute_path", ""))).is_file()
+            and _pexels_asset_matches(asset, query, entity)
+            and usage[str(asset.get("sha256", ""))]
+            < settings.maximum_uses_per_video
+        ]
+        reusable.sort(
+            key=lambda asset: (
+                usage[str(asset.get("sha256", ""))],
+                -float(asset.get("crop_retention_16_9", 0)),
+                -int(asset.get("width", 0)) * int(asset.get("height", 0)),
             )
+        )
+        group_assets[key] = reusable
+        capacity = sum(
+            settings.maximum_uses_per_video - usage[asset["sha256"]]
+            for asset in reusable
+        )
+        needed_capacity = len(group["windows"])
+        capacity_shortfall = max(
+            0,
+            math.ceil((needed_capacity - capacity) / settings.maximum_uses_per_video),
+        )
+        # Keep one extra distinct photo as an adjacency buffer. A pool can have
+        # enough raw two-use capacity while its only available checksum is also
+        # the image immediately before a short unresolved clause.
+        topic_window_count = (
+            len(windows)
+            if key == story_concept[0]
+            else needed_capacity
+        )
+        target_unique = math.ceil(
+            topic_window_count / settings.maximum_uses_per_video
+        ) + 1
+        uniqueness_shortfall = max(0, target_unique - len(reusable))
+        needed_unique = max(capacity_shortfall, uniqueness_shortfall)
+        if needed_unique <= 0 or throttled:
             continue
-        if searches_used >= remaining_searches:
-            updated[window["window_id"]] = _keep_irrelevant(
-                current,
-                "The per-video Pexels search cap was reached.",
-            )
+        if searches_used >= remaining_searches and key not in query_cache:
             continue
-        cache_key = normalize_search_text(current.online_search_query)
+
         try:
-            search = cached_queries.get(cache_key)
+            search = query_cache.get(key)
             if search is None:
                 if online_settings.request_interval_seconds:
                     time.sleep(online_settings.request_interval_seconds)
+                combined_context = " ".join(
+                    str(item.get("text", "")) for item in group["windows"][:4]
+                )
                 search = search_pexels(
-                    query=current.online_search_query,
-                    required_entity=current.required_entity,
-                    context=window.get("text", ""),
+                    query=query,
+                    required_entity=entity,
+                    context=combined_context,
                     settings=online_settings,
                 )
-                cached_queries[cache_key] = search
+                query_cache[key] = search
                 searches_used += 1
                 save_search_manifest(search, video_number=video_number)
-            if not search.get("candidates"):
-                raise RuntimeError("No metadata-grounded Pexels result was found.")
-            if downloads_used >= remaining_downloads:
-                raise RuntimeError("The per-video Pexels download cap was reached.")
-            downloaded = download_candidate(
-                search["candidates"][0],
-                query=current.online_search_query,
-                required_entity=current.required_entity,
-                context=window.get("text", ""),
-                settings=online_settings,
-            )
-            pending_downloads[window["window_id"]] = {
-                "download": downloaded,
-                "decision": current,
+            known_photo_ids = {
+                match.group(1)
+                for asset in reusable
+                for match in [re.search(r"_([0-9]+)\.[a-z0-9]+$", asset.get("filename", ""))]
+                if match
             }
-            downloads_used += 1
-        except Exception as exc:  # noqa: BLE001
-            if "429" in str(exc) or "too many requests" in str(exc).casefold():
-                online_throttled = True
-            updated[window["window_id"]] = _keep_irrelevant(
-                current,
-                f"Pexels fallback error: {exc}",
-            )
-
-    refreshed = (
-        load_media_index(index_settings, rescan=True)
-        if pending_downloads
-        else media_index
-    )
-    assets_by_sha = {
-        item.get("sha256"): item
-        for item in refreshed.get("assets", [])
-        if item.get("sha256") and _is_in_video_media_asset(item)
-    }
-    for window in irrelevant:
-        item = pending_downloads.get(window["window_id"])
-        asset = resolved_assets.get(window["window_id"])
-        if asset is None and item is not None:
-            asset = assets_by_sha.get(item["download"]["sha256"])
-        if asset is None:
-            continue
-        ranked = shortlist_assets({"assets": [asset]}, window, settings)
-        if not ranked:
-            updated[window["window_id"]] = _keep_irrelevant(
-                item["decision"] if item else decisions[window["window_id"]],
-                "The downloaded Pexels file failed local context grounding.",
-            )
-            continue
-        online_shortlist = ranked[0]
-        online_shortlist["online_fallback"] = True
-        online_shortlist["online_provider"] = "pexels"
-        window["shortlist"] = [
-            online_shortlist,
-            *[
-                candidate
-                for candidate in window["shortlist"]
-                if candidate["asset_id"] != online_shortlist["asset_id"]
-            ],
-        ][: settings.shortlist_size]
-        updated[window["window_id"]] = WindowDecision(
-            window_id=window["window_id"],
-            relevance_status="relevant",
-            selected_asset_id=asset["asset_id"],
-            confidence=max(
-                0.7,
-                min(
-                    0.92,
-                    (item["decision"] if item else decisions[window["window_id"]]).confidence,
-                ),
-            ),
-            selection_reason=(
-                "AI rejected every local candidate. Selected a Pexels photograph "
-                "after API search rank, alt-text context, resolution, and crop gates."
-            ),
-            alternative_asset_ids=[
-                candidate["asset_id"] for candidate in window["shortlist"][1:4]
-            ],
-        )
-    return updated, refreshed, downloads_used, searches_used
-
-
-def resolve_wikimedia_fallbacks(
-    *,
-    video_number: int,
-    windows: list[dict],
-    decisions: dict[str, WindowDecision],
-    media_index: dict,
-    index_settings: MediaIndexSettings,
-    settings: MediaSelectionSettings,
-    remaining_downloads: int,
-    remaining_searches: int,
-) -> tuple[dict[str, WindowDecision], dict, int, int]:
-    irrelevant = [
-        window
-        for window in windows
-        if decisions[window["window_id"]].relevance_status
-        == "images_are_irrelevant"
-    ]
-    if not irrelevant:
-        return decisions, media_index, 0, 0
-    if not settings.wikimedia_fallback_enabled:
-        reason = (
-            "The Wikimedia fallback is disabled or its per-video download cap "
-            "has been reached."
-        )
-        updated = dict(decisions)
-        for window in irrelevant:
-            current = decisions[window["window_id"]]
-            updated[window["window_id"]] = _keep_irrelevant(
-                current,
-                reason,
-            )
-        return updated, media_index, 0, 0
-
-    from online_media_stage import (
-        OnlineMediaSettings,
-        download_candidate,
-        save_search_manifest,
-        search_wikimedia_commons,
-    )
-
-    online_settings = OnlineMediaSettings.from_environment()
-    resolved_assets: dict[str, dict] = {}
-    pending_downloads: dict[str, dict] = {}
-    updated = dict(decisions)
-    downloads_used = 0
-    searches_used = 0
-    cached_queries: dict[str, dict] = {}
-    online_throttled = False
-
-    def existing_asset(required_entity: str, *, logo_preferred: bool = False) -> dict | None:
-        exact = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            normalize_search_text(required_entity),
-        ).strip()
-        matches = []
-        for asset in media_index.get("assets", []):
-            if not _is_in_video_media_asset(asset):
-                continue
-            source_url = str(asset.get("source_url", "")).casefold()
-            identity = re.sub(
-                r"[^a-z0-9]+",
-                " ",
-                normalize_search_text(
-                    " ".join(
-                        [
-                            asset.get("filename", ""),
-                            asset.get("local_caption", ""),
-                        ]
+            for candidate in search.get("candidates", []):
+                if needed_unique <= 0 or downloads_used >= remaining_downloads:
+                    break
+                photo_id = str(candidate.get("photo_id", ""))
+                if not photo_id or photo_id in known_photo_ids:
+                    continue
+                try:
+                    downloaded = download_candidate(
+                        candidate,
+                        query=query,
+                        required_entity=entity,
+                        context=" ".join(
+                            str(item.get("text", "")) for item in group["windows"][:4]
+                        ),
+                        settings=online_settings,
                     )
-                ),
-            ).strip()
-            license_status = asset.get("license", {}).get("status", "unknown")
-            if (
-                "commons.wikimedia.org" in source_url
-                and exact in identity
-                and license_status not in {"", "unknown"}
-            ):
-                matches.append(asset)
-        return max(
-            matches,
-            key=lambda item: (
-                int(
-                    logo_preferred
-                    and "logo"
-                    in normalize_search_text(
-                        " ".join(
-                            [
-                                str(item.get("filename", "")),
-                                str(item.get("local_caption", "")),
-                                " ".join(
-                                    str(value)
-                                    for value in item.get("keywords", [])
-                                ),
-                            ]
-                        )
-                    ).split()
-                ),
-                float(item.get("crop_retention_16_9", 0)),
-                int(item.get("width", 0)) * int(item.get("height", 0)),
-            ),
-            default=None,
-        )
-
-    for window in irrelevant:
-        current = decisions[window["window_id"]]
-        logo_preferred = "logo" in normalize_search_text(
-            current.online_search_query
-        ).split()
-        reusable = existing_asset(
-            current.required_entity,
-            logo_preferred=logo_preferred,
-        )
-        if reusable is not None:
-            if logo_preferred:
-                reusable["brand_logo"] = True
-            resolved_assets[window["window_id"]] = reusable
-            continue
-        if online_throttled:
-            updated[window["window_id"]] = _keep_irrelevant(
-                current,
-                "Wikimedia throttled the current run, so further searches stopped.",
-            )
-            continue
-        if searches_used >= remaining_searches:
-            updated[window["window_id"]] = _keep_irrelevant(
-                current,
-                "The per-video Wikimedia search cap was reached.",
-            )
-            continue
-        cache_key = normalize_search_text(current.required_entity)
-        try:
-            search = cached_queries.get(cache_key)
-            if search is None:
-                if online_settings.request_interval_seconds:
-                    time.sleep(online_settings.request_interval_seconds)
-                search = search_wikimedia_commons(
-                    query=current.online_search_query,
-                    required_entity=current.required_entity,
-                    context=window.get("text", ""),
-                    settings=online_settings,
-                )
-                cached_queries[cache_key] = search
-                searches_used += 1
-                save_search_manifest(search, video_number=video_number)
-            if not search.get("candidates"):
-                raise RuntimeError("No exact-title, accepted-license result was found.")
-            if downloads_used >= remaining_downloads:
-                raise RuntimeError("The per-video Wikimedia download cap was reached.")
-            downloaded = download_candidate(
-                search["candidates"][0],
-                query=current.online_search_query,
-                required_entity=current.required_entity,
-                context=window.get("text", ""),
-                settings=online_settings,
-            )
-            pending_downloads[window["window_id"]] = {
-                "download": downloaded,
-                "decision": current,
-            }
-            downloads_used += 1
+                except Exception:
+                    continue
+                downloaded_by_group.setdefault(key, []).append(downloaded["sha256"])
+                known_photo_ids.add(photo_id)
+                downloads_used += 1
+                needed_unique -= 1
         except Exception as exc:  # noqa: BLE001
             if "429" in str(exc) or "too many requests" in str(exc).casefold():
-                online_throttled = True
-            updated[window["window_id"]] = _keep_irrelevant(
-                current,
-                f"Online fallback error: {exc}",
-            )
+                throttled = True
+            for window in group["windows"]:
+                current = updated[window["window_id"]]
+                updated[window["window_id"]] = _keep_irrelevant(
+                    current,
+                    f"Pexels topic pool error: {exc}",
+                )
 
     refreshed = (
         load_media_index(index_settings, rescan=True)
-        if pending_downloads
+        if downloaded_by_group
         else media_index
     )
     assets_by_sha = {
-        item.get("sha256"): item
-        for item in refreshed.get("assets", [])
-        if item.get("sha256") and _is_in_video_media_asset(item)
+        asset.get("sha256"): asset
+        for asset in refreshed.get("assets", [])
+        if asset.get("sha256")
+        and _is_in_video_media_asset(asset)
+        and Path(str(asset.get("absolute_path", ""))).is_file()
     }
-    for window in irrelevant:
-        item = pending_downloads.get(window["window_id"])
-        asset = resolved_assets.get(window["window_id"])
-        if asset is None and item is not None:
-            asset = assets_by_sha.get(item["download"]["sha256"])
-        if asset is None and item is None:
-            continue
-        if asset is None:
-            updated[window["window_id"]] = _keep_irrelevant(
-                item["decision"],
-                "The downloaded Wikimedia file was not found after media re-indexing.",
+    for key, checksums in downloaded_by_group.items():
+        for checksum in checksums:
+            asset = assets_by_sha.get(checksum)
+            if asset is not None and all(
+                existing.get("sha256") != checksum
+                for existing in group_assets[key]
+            ):
+                group_assets[key].append(asset)
+
+    allocation_usage = Counter(usage)
+    previous_sha = ""
+    unresolved_by_id = {window["window_id"]: window for window in unresolved}
+    for window in windows:
+        window_id = window["window_id"]
+        if window_id not in unresolved_by_id:
+            selected_id = updated[window_id].selected_asset_id
+            selected = next(
+                (
+                    candidate
+                    for candidate in window.get("shortlist", [])
+                    if candidate.get("asset_id") == selected_id
+                ),
+                None,
             )
+            previous_sha = str(selected.get("sha256", "")) if selected else ""
             continue
-        online_shortlist = shortlist_assets(
-            {"assets": [asset]},
-            window,
-            settings,
-        )[0]
-        online_shortlist["online_fallback"] = True
-        online_shortlist["brand_logo"] = "logo" in normalize_search_text(
-            decisions[window["window_id"]].online_search_query
-        ).split()
+        key = window_groups[window_id]
+        group = groups[key]
+        query = group["query"]
+        entity = group["entity"]
+        available = [
+            asset
+            for asset in group_assets.get(key, [])
+            if allocation_usage[asset["sha256"]]
+            < settings.maximum_uses_per_video
+            and asset["sha256"] != previous_sha
+        ]
+        if not available:
+            continue
+        available.sort(
+            key=lambda asset: (
+                allocation_usage[asset["sha256"]],
+                -float(asset.get("crop_retention_16_9", 0)),
+                -int(asset.get("width", 0)) * int(asset.get("height", 0)),
+            )
+        )
+        selected_asset = available[0]
+        allocation_usage[selected_asset["sha256"]] += 1
+        previous_sha = selected_asset["sha256"]
+        candidates = [
+            _pexels_candidate(asset, query=query, concept=entity)
+            for asset in available
+        ]
         window["shortlist"] = [
-            online_shortlist,
+            *candidates,
             *[
                 candidate
-                for candidate in window["shortlist"]
-                if candidate["asset_id"] != online_shortlist["asset_id"]
+                for candidate in window.get("shortlist", [])
+                if candidate.get("asset_id")
+                not in {item["asset_id"] for item in candidates}
             ],
         ][: settings.shortlist_size]
-        updated[window["window_id"]] = WindowDecision(
-            window_id=window["window_id"],
+        current = updated[window_id]
+        updated[window_id] = WindowDecision(
+            window_id=window_id,
             relevance_status="relevant",
-            selected_asset_id=asset["asset_id"],
-            confidence=max(
-                0.7,
-                min(
-                    0.95,
-                    (item["decision"] if item else decisions[window["window_id"]]).confidence,
-                ),
-            ),
+            selected_asset_id=selected_asset["asset_id"],
+            confidence=max(0.65, min(0.88, current.confidence)),
             selection_reason=(
-                "AI returned images_are_irrelevant for every local candidate. "
-                "Selected the highest-ranked Wikimedia Commons result after exact-"
-                "title entity, license, resolution, and metadata relevance gates."
+                "Every local candidate was rejected. Selected a Pexels photo "
+                f"from the grounded {entity} topic pool; exact names were not "
+                "used as literal visual claims."
             ),
             alternative_asset_ids=[
-                candidate["asset_id"]
-                for candidate in window["shortlist"][1:4]
+                asset["asset_id"] for asset in available[1:4]
             ],
+            online_search_query=query,
+            required_entity=entity,
         )
     return updated, refreshed, downloads_used, searches_used
-
-
 def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict:
     """Create a unique neutral card when no honest photographic match exists."""
     ffmpeg = find_executable("ffmpeg")
@@ -1998,7 +1997,7 @@ def _resolve_context_safe_fallbacks(
             selected_asset_id=asset["asset_id"],
             confidence=1.0,
             selection_reason=(
-                "No sufficiently grounded local or Wikimedia image was available. "
+                "No sufficiently grounded local or Pexels image was available. "
                 "Used a locally generated neutral chapter background rather than "
                 "showing misleading visual evidence."
             ),
@@ -2066,8 +2065,8 @@ def _enforce_selection_constraints(
         ):
             chosen_id = decision.selected_asset_id
             override_reason = (
-                "Intentional Wikimedia reuse was preferred over an unrelated local "
-                "candidate."
+                "Intentional Pexels topic-image reuse was preferred over an "
+                "unrelated local candidate."
                 if video_usage_counts[preferred_online.get("sha256", "")] > 0
                 else ""
             )
@@ -2301,6 +2300,7 @@ def run_media_selection(
     story_number: int | None = None,
     rescan: bool = True,
     force: bool = False,
+    refresh_fallbacks: bool = False,
     confirm_ai_cost: bool = False,
     offline: bool = False,
 ) -> dict:
@@ -2356,10 +2356,9 @@ def run_media_selection(
 
     pexels_download_count = 0
     pexels_search_count = 0
-    wikimedia_download_count = 0
-    wikimedia_search_count = 0
     selector_cache_hits = 0
     selector_requests_this_run = 0
+    pexels_search_cache: dict[str, dict] = {}
     selected_story_ids = {item["story_id"] for item in selected_timing}
     video_usage_counts: Counter[str] = Counter()
     current_hero_owners: dict[str, set[str]] = {}
@@ -2439,7 +2438,11 @@ def run_media_selection(
             settings,
         )
         cached = planned_by_id.get(story["story_id"], {})
-        if not force and _cached_story_current(cached, fingerprint):
+        if (
+            not force
+            and not refresh_fallbacks
+            and _cached_story_current(cached, fingerprint)
+        ):
             for window in cached.get("windows", []):
                 checksum = str(window.get("selected_asset", {}).get("sha256", ""))
                 if checksum:
@@ -2455,7 +2458,15 @@ def run_media_selection(
         decisions = (
             None
             if force or offline
-            else _load_selector_cache(selector_cache, fingerprint)
+            else _load_selector_cache(
+                selector_cache,
+                fingerprint,
+                compatible_fingerprints=(
+                    {str(cached.get("input_fingerprint", ""))}
+                    if refresh_fallbacks and cached.get("input_fingerprint")
+                    else None
+                ),
+            )
         )
         if decisions is None:
             decisions = selection_function(story, windows, settings)
@@ -2469,73 +2480,72 @@ def run_media_selection(
                 selector_requests_this_run += 1
         else:
             selector_cache_hits += 1
+            if refresh_fallbacks:
+                # Migrate an accepted prior-plan cache to the current fallback
+                # configuration fingerprint. Otherwise a second repair run would
+                # miss the compatible fingerprint and repeat the paid selector.
+                _save_selector_cache(
+                    selector_cache,
+                    story_id=story["story_id"],
+                    fingerprint=fingerprint,
+                    decisions=decisions,
+                )
         decision_by_window = _validate_decisions(
             decisions,
             windows,
             story,
             minimum_confidence=settings.minimum_ai_confidence,
         )
-        decision_by_window = prefer_explicit_company_logos(
-            windows,
-            decision_by_window,
-            story,
-            enabled=settings.wikimedia_brand_logos_enabled and not offline,
-        )
-        (
-            decision_by_window,
-            media_index,
-            pexels_downloads_used,
-            pexels_searches_used,
-        ) = resolve_pexels_fallbacks(
-            video_number=video_number,
-            windows=windows,
-            decisions=decision_by_window,
-            media_index=media_index,
-            index_settings=index_settings,
-            settings=settings,
-            remaining_downloads=max(
-                0,
-                settings.pexels_max_downloads_per_video
-                - pexels_download_count,
-            ),
-            remaining_searches=max(
-                0,
-                settings.pexels_max_searches_per_video
-                - pexels_search_count,
-            ),
-        )
-        (
-            decision_by_window,
-            media_index,
-            downloads_used,
-            searches_used,
-        ) = resolve_wikimedia_fallbacks(
-            video_number=video_number,
-            windows=windows,
-            decisions=decision_by_window,
-            media_index=media_index,
-            index_settings=index_settings,
-            settings=settings,
-            remaining_downloads=max(
-                0,
-                settings.wikimedia_max_downloads_per_video
-                - wikimedia_download_count,
-            ),
-            remaining_searches=max(
-                0,
-                settings.wikimedia_max_searches_per_video
-                - wikimedia_search_count,
-            ),
-        )
+        # Resolve in a few deterministic passes. Replacing one over-cap choice can
+        # reveal a later collision that was hidden by the original selector plan.
+        # The shared topic cache prevents repeated Pexels searches between passes.
+        for _repair_pass in range(max(3, len(windows))):
+            before_repair = json_fingerprint(
+                {
+                    key: value.model_dump(mode="json")
+                    for key, value in decision_by_window.items()
+                }
+            )
+            (
+                decision_by_window,
+                media_index,
+                pexels_downloads_used,
+                pexels_searches_used,
+            ) = resolve_pexels_fallbacks(
+                video_number=video_number,
+                windows=windows,
+                decisions=decision_by_window,
+                media_index=media_index,
+                index_settings=index_settings,
+                settings=settings,
+                remaining_downloads=max(
+                    0,
+                    settings.pexels_max_downloads_per_video
+                    - pexels_download_count,
+                ),
+                remaining_searches=max(
+                    0,
+                    settings.pexels_max_searches_per_video
+                    - pexels_search_count,
+                ),
+                video_usage_counts=video_usage_counts,
+                search_cache=pexels_search_cache,
+            )
+            pexels_download_count += pexels_downloads_used
+            pexels_search_count += pexels_searches_used
+            after_repair = json_fingerprint(
+                {
+                    key: value.model_dump(mode="json")
+                    for key, value in decision_by_window.items()
+                }
+            )
+            if after_repair == before_repair:
+                break
         decision_by_window = _resolve_context_safe_fallbacks(
             video_number,
             windows,
             decision_by_window,
         )
-        pexels_download_count += pexels_downloads_used
-        pexels_search_count += pexels_searches_used
-        wikimedia_download_count += downloads_used
-        wikimedia_search_count += searches_used
         assets_by_id = {
             item["asset_id"]: item
             for item in media_index.get("assets", [])
@@ -2711,8 +2721,6 @@ def run_media_selection(
         ),
         "pexels_download_count": pexels_download_count,
         "pexels_search_count": pexels_search_count,
-        "wikimedia_download_count": wikimedia_download_count,
-        "wikimedia_search_count": wikimedia_search_count,
         "selector_cache_hits": selector_cache_hits,
         "selector_requests_this_run": selector_requests_this_run,
         "story_count": len(timing_stories),
@@ -2799,6 +2807,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--confirm-ai-cost", action="store_true")
     parser.add_argument("--no-rescan", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--refresh-fallbacks",
+        action="store_true",
+        help="Rebuild local/Pexels fallback choices while reusing selector cache.",
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args()
 
@@ -2813,6 +2826,7 @@ def main() -> int:
             story_number=args.story,
             rescan=not args.no_rescan,
             force=args.force,
+            refresh_fallbacks=args.refresh_fallbacks,
             confirm_ai_cost=args.confirm_ai_cost,
             offline=args.offline,
         )

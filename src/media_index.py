@@ -52,7 +52,9 @@ SUPPORTED_EXTENSIONS = {
     ".tiff",
     ".webp",
 }
-EXCLUDED_IN_VIDEO_MEDIA_DIRECTORIES = frozenset({"thumbnails"})
+EXCLUDED_IN_VIDEO_MEDIA_DIRECTORIES = frozenset(
+    {"thumbnails", "wikimedia commons"}
+)
 GENERIC_FILENAME_TOKENS = {
     "copy",
     "download",

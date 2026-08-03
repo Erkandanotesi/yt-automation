@@ -1,132 +1,44 @@
-# Optional Pexels and Wikimedia Commons providers
+# Pexels fallback provider
 
-Each downloader stays in a separate module. They run only after the AI explicitly
-returns `images_are_irrelevant` for every local candidate. Disable either provider
-with `PEXELS_FALLBACK_ENABLED=false` or `WIKIMEDIA_FALLBACK_ENABLED=false`; the local
-media workflow continues unchanged.
+The production order is fixed:
 
-## Provider routing
+1. Select from the indexed local repositories.
+2. If every local candidate is misleading, map the narration window to a broad,
+   truthful photographic topic.
+3. Reuse an already downloaded Pexels photo when it matches that topic and remains
+   below `MEDIA_MAX_USES_PER_VIDEO`.
+4. Search Pexels once per topic pool, download enough distinct landscape photos for
+   the unresolved windows, and save them under
+   `Assets/Media/Online Retrieved/Pexels/`.
+5. If no grounded Pexels result exists, render a unique local neutral background.
+   This safe last resort never stops video production.
 
-The selector reuses a matching local download before making a network request. Pexels
-is tried first for general photographic scenes because its photo search is stronger
-for people, offices, devices, infrastructure, and conceptual technology imagery.
-Exact logo requests bypass Pexels and retain Wikimedia's strict title/entity gate.
-If Pexels cannot prove a general query from the API result rank and alt text,
-Wikimedia is tried next. If neither source is grounded, production uses the local
-context-safe card and does not fail.
+The provider receives text queries and context only. Image pixels are not sent to
+OpenAI. Exact company, person, and product names are deliberately broadened into
+photographic concepts such as cybersecurity, smart television, publishing, or
+cryptocurrency. This prevents literal but irrelevant matches such as a rocket for a
+software launch.
 
-Pexels downloads are stored under `Assets/Media/Online Retrieved/Pexels/` with an
-adjacent `.metadata.json` sidecar containing the photo page, photographer, Pexels
-license, retrieval query, relevance evidence, and checksum. The bottom-right source
-overlay credits the photographer and Pexels. The integration follows the official
-API requirement to authenticate with the `Authorization` header and respects the
-reported request limits; it never attempts to rotate keys or evade throttling.
+Downloaded files have descriptive filenames and JSON metadata sidecars containing
+the Pexels page, photographer, license, retrieval time, query, and relevance
+evidence. The renderer displays attribution at the bottom-right when required.
 
-## Why keep Wikimedia Commons
+Configuration:
 
-Wikimedia Commons has a stable, keyless MediaWiki API, structured creator/license
-metadata, full-resolution or resized download URLs, and strong coverage for named
-companies, products, people, locations, and logos. It is the first provider for exact
-tech-news entities. Openverse can be added later as a second provider for generic
-conceptual photography.
-
-Google Images and Yandex Images are discovery engines, not downloadable media
-repositories. Their thumbnails are never downloaded automatically.
-
-## Safety and relevance gates
-
-The standalone `src/online_media_stage.py` utility:
-
-1. searches only Wikimedia's file namespace and requests bitmap files;
-2. accepts public-domain/CC0, CC BY, and CC BY-SA metadata;
-3. rejects noncommercial, no-derivatives, unknown, undersized, or unsupported files;
-4. requires the complete entity phrase in the file title/object name—not merely in a
-   long description or broad category;
-5. scores query/context evidence but returns no result when the exact entity cannot be
-   proven;
-6. downloads only after explicit standalone confirmation or a confirmed production
-   AI-selection run;
-7. writes a descriptive filename and adjacent `.metadata.json` attribution sidecar.
-
-The API client sends a descriptive user agent, uses only one request at a time, and
-retries temporary throttling/server errors with backoff. Set `WIKIMEDIA_USER_AGENT`
-to a more specific value with your contact URL or email before regular production use.
-
-## Commands
-
-Search only:
-
-```powershell
-.\.venv\Scripts\python.exe src\online_media_stage.py `
-  --video 5 `
-  --query "Microsoft Outlook logo" `
-  --entity "Microsoft Outlook" `
-  --context "Microsoft Outlook Web Access OWA email cybersecurity attack"
+```dotenv
+PEXELS_API_KEY=
+PEXELS_FALLBACK_ENABLED=true
+PEXELS_MAX_DOWNLOADS_PER_VIDEO=20
+PEXELS_MAX_SEARCHES_PER_VIDEO=20
+PEXELS_REQUEST_INTERVAL=0.25
+PEXELS_REQUEST_RESULT_LIMIT=24
+PEXELS_SEARCH_LIMIT=8
+PEXELS_TIMEOUT=30
+PEXELS_MAX_DOWNLOAD_BYTES=25000000
+PEXELS_MIN_WIDTH=640
+PEXELS_MIN_HEIGHT=360
+PEXELS_MIN_RELEVANCE_SCORE=12
 ```
 
-Download the best accepted candidate:
-
-```powershell
-.\.venv\Scripts\python.exe src\online_media_stage.py `
-  --video 5 `
-  --query "Microsoft Outlook logo" `
-  --entity "Microsoft Outlook" `
-  --context "Microsoft Outlook Web Access OWA email cybersecurity attack" `
-  --download-best --confirm-download
-```
-
-Double-click `online_media.bat` for a search-only prompt. Search manifests are stored
-under `Video N/05_visuals/online_searches/`. Downloads and their sidecars are stored
-under `Assets/Media/Online Retrieved/Wikimedia Commons/` and are discovered by the
-normal media-index rescan.
-
-## Production fallback
-
-`src/media_selection_stage.py --confirm-ai-cost` lets the selector return an explicit
-irrelevant result plus a grounded exact entity and search query. The integration:
-
-1. reuses a matching indexed Commons asset before making a network request;
-2. caps searches and downloads across the complete video;
-3. throttles requests and stops further searches if Commons returns HTTP 429;
-4. downloads only the best exact-title, accepted-license candidate;
-5. rescans the media index and records the immutable selected path and checksum;
-6. propagates creator/license/source metadata into effects and render manifests;
-7. shows `Source: creator · Wikimedia Commons · license` at the bottom-right inside
-   the TV frame only when the license requires attribution.
-
-CC0 and public-domain images are intentionally rendered without a source label.
-
-## Verified trial
-
-The initial broad search returned two Motorola phone photos whose descriptions happened
-to mention Outlook. They were correctly treated as a failure and never downloaded.
-After tightening the title gate, the same workflow returned exactly one exact-title
-candidate: `Microsoft Outlook-Logo.wine.png`, marked CC0 on its Commons file page.
-
-The image was downloaded, visually inspected, indexed, and rendered into a separate
-six-second proof under `Video 5/05_visuals/online_trial/`. It was then selected by the
-production fallback for two Microsoft Outlook windows in Video 5 and included in the
-rebuilt final video. Its CC0 metadata correctly suppresses the attribution overlay.
-
-## Complete removal
-
-To stop using online media without deleting anything, set:
-
-```text
-PEXELS_FALLBACK_ENABLED=false
-WIKIMEDIA_FALLBACK_ENABLED=false
-```
-
-Pexels can be removed independently by disabling it and removing
-`src/pexels_media_stage.py`, `tests/test_pexels_media_stage.py`, and
-`Assets/Media/Online Retrieved/Pexels/`. Wikimedia can be removed independently by
-disabling it and removing:
-
-- `src/online_media_stage.py`
-- `online_media.bat`
-- `tests/test_online_media_stage.py`
-- `Assets/Media/Online Retrieved/Wikimedia Commons/`
-- each `Video N/05_visuals/online_searches/` and `online_trial/` folder
-
-Then run `media_index.bat` once. The disabled integration safely falls back to local
-candidates, so the rest of production remains usable.
+Searches are pooled by topic, so the search cap is not one request per visual
+window. A downloaded image can be used at most twice per video by default.
