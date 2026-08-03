@@ -216,6 +216,7 @@ create_video.bat
 news-studio.bat new --category tech --dry-run
 news-studio.bat new --category tech --confirm-api-costs
 news-studio.bat resume "Video N" --confirm-api-costs
+news-studio.bat resume "Video N" --from-stage effects --confirm-api-costs
 news-studio.bat status "Video N"
 news-studio.bat run-stage "Video N" captions
 news-studio.bat validate "Video N"
@@ -227,6 +228,14 @@ news-studio.bat render "Video N"
 `--dry-run` makes no writes and performs no provider requests. Paid/provider-backed
 stages do not begin without `--confirm-api-costs`. Individual story-image and publishing
 generators retain their own confirmation gates as a second safety layer.
+
+After `Continue from Video N` is selected in the interactive launcher, a second menu
+offers every completed section as `rebuild from here` plus the first unfinished section
+as the recommended default. Sections after an unfinished prerequisite are not offered.
+For a completed production whose YouTube upload was skipped, the default is
+`Upload/publish the completed package to YouTube`; this does not regenerate the title,
+thumbnail, render, or other provider-backed artifacts. The `--from-stage` option exposes
+the same safe rebuild boundary for direct CLI resumes.
 
 `create_video.bat` is the autonomous launcher. Every timed choice waits at least 120 seconds
 before taking its displayed default:

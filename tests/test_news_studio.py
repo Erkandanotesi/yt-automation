@@ -25,6 +25,7 @@ from news_studio import (
     execute_stage,
     interactive,
     main,
+    resume_section_choices,
     run_preflight,
     run_flow,
     timed_choice,
@@ -42,6 +43,145 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_resume_menu_stops_at_first_unfinished_stage(self) -> None:
+        status = {
+            "next_stage": "preview_approval",
+            "stages": {
+                stage: {
+                    "status": (
+                        "COMPLETE"
+                        if FLOW_STAGES.index(stage) < FLOW_STAGES.index("preview_approval")
+                        else "WAITING"
+                        if stage == "preview_approval"
+                        else "NOT_STARTED"
+                    )
+                }
+                for stage in FLOW_STAGES
+            },
+        }
+
+        options, targets, default = resume_section_choices(status)
+
+        self.assertEqual(default, "9")
+        self.assertEqual(targets["9"], "preview_approval")
+        self.assertNotIn("a", options)
+        self.assertIn("recommended next", options["9"])
+
+    def test_completed_project_resume_menu_defaults_to_youtube_upload(self) -> None:
+        status = {
+            "next_stage": None,
+            "stages": {
+                stage: {"status": "COMPLETE"} for stage in FLOW_STAGES
+            },
+        }
+
+        options, targets, default = resume_section_choices(status)
+
+        self.assertEqual(default, "u")
+        self.assertEqual(targets["b"], "publish")
+        self.assertEqual(targets["u"], "upload")
+        self.assertIn("YouTube", options["u"])
+
+    def test_dry_run_can_force_rebuild_from_completed_section(self) -> None:
+        status = {
+            "exists": True,
+            "next_stage": None,
+            "stages": {
+                stage: {"status": "COMPLETE", "detail": ""}
+                for stage in FLOW_STAGES
+            },
+        }
+        with patch("news_studio.collect_project_status", return_value=status):
+            result = run_flow(
+                17,
+                category="tech",
+                confirm_api_costs=False,
+                approve_current_preview=False,
+                recover_stale_lock=False,
+                dry_run=True,
+                start_stage="effects",
+            )
+
+        self.assertEqual(result["planned_stages"], ["effects"])
+
+    def test_resume_rejects_skipping_an_incomplete_prerequisite(self) -> None:
+        status = empty_status(Path("Video 17"))
+        status["exists"] = True
+        status["stages"]["news"]["status"] = "COMPLETE"
+
+        with (
+            patch("news_studio.collect_project_status", return_value=status),
+            self.assertRaisesRegex(RuntimeError, "complete these earlier sections"),
+        ):
+            run_flow(
+                17,
+                category="tech",
+                confirm_api_costs=True,
+                approve_current_preview=False,
+                recover_stale_lock=False,
+                dry_run=True,
+                start_stage="render",
+            )
+
+    def test_interactive_completed_resume_can_go_directly_to_upload_prompt(self) -> None:
+        status = {
+            "next_stage": None,
+            "stages": {
+                stage: {"status": "COMPLETE"} for stage in FLOW_STAGES
+            },
+        }
+        with (
+            patch("news_studio.run_preflight", return_value=True),
+            patch("news_studio.latest_project_number", return_value=17),
+            patch("news_studio._read_json", return_value={"category": "tech"}),
+            patch("news_studio.collect_project_status", return_value=status),
+            patch("news_studio.timed_choice", side_effect=["2", "u", "0"]),
+            patch("news_studio.run_flow") as run,
+            patch("news_studio.upload_project") as upload,
+        ):
+            exit_code = interactive()
+
+        self.assertEqual(exit_code, 0)
+        run.assert_not_called()
+        upload.assert_not_called()
+
+    def test_interactive_resume_passes_selected_section_to_first_flow(self) -> None:
+        status = {
+            "next_stage": "preview_approval",
+            "stages": {
+                stage: {
+                    "status": (
+                        "COMPLETE"
+                        if FLOW_STAGES.index(stage) < FLOW_STAGES.index("preview_approval")
+                        else "WAITING"
+                        if stage == "preview_approval"
+                        else "NOT_STARTED"
+                    )
+                }
+                for stage in FLOW_STAGES
+            },
+        }
+        with (
+            patch("news_studio.run_preflight", return_value=True),
+            patch("news_studio.latest_project_number", return_value=17),
+            patch("news_studio._read_json", return_value={"category": "tech"}),
+            patch("news_studio.collect_project_status", return_value=status),
+            patch("news_studio.api_cost_plan", return_value={}),
+            patch("news_studio.timed_choice", side_effect=["2", "9", "1", "0"]),
+            patch(
+                "news_studio.run_flow",
+                return_value={
+                    "status": "WAITING",
+                    "video_number": 17,
+                    "stage": "preview_approval",
+                },
+            ) as run,
+        ):
+            exit_code = interactive()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run.call_args.kwargs["start_stage"], "preview_approval")
+
     def test_render_recovery_reuses_passing_master_for_preview_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 17"

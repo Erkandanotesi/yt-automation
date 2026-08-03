@@ -81,6 +81,7 @@ STAGE_LABELS = {
     "render": "Encoding the final video",
     "publish": "Creating thumbnail and YouTube metadata",
 }
+RESUME_STAGE_KEYS = ("1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b")
 NETWORK_FAILURE_PATTERNS = (
     r"name resolution error|nameresolutionerror|getaddrinfo failed",
     r"temporary failure in name resolution|nodename nor servname provided",
@@ -1313,12 +1314,28 @@ def run_flow(
     dry_run: bool,
     manual_separator_mode: Literal["manual", "skip", "defer"] = "manual",
     progress: ProgressDisplay | None = None,
+    start_stage: str | None = None,
 ) -> dict:
     before = collect_project_status(video_number)
+    if start_stage is not None and start_stage not in FLOW_STAGES:
+        raise ValueError(f"Unknown resume start stage: {start_stage}")
+    start_index = FLOW_STAGES.index(start_stage) if start_stage else 0
+    if start_stage is not None:
+        incomplete_prerequisites = [
+            stage
+            for stage in FLOW_STAGES[:start_index]
+            if before["stages"][stage]["status"] != TERMINAL_COMPLETE
+        ]
+        if incomplete_prerequisites:
+            raise RuntimeError(
+                f"Cannot continue from {start_stage}; complete these earlier "
+                f"sections first: {', '.join(incomplete_prerequisites)}."
+            )
     planned = [
         stage
-        for stage in FLOW_STAGES
-        if before["stages"][stage]["status"] != TERMINAL_COMPLETE
+        for stage in FLOW_STAGES[start_index:]
+        if stage == start_stage
+        or before["stages"][stage]["status"] != TERMINAL_COMPLETE
     ]
     if dry_run:
         return {
@@ -1339,12 +1356,23 @@ def run_flow(
         }
     video_dir = project_dir(video_number)
     with ProjectLock(video_dir, recover_stale=recover_stale_lock):
-        _event(video_dir, {"type": "flow_started", "planned_stages": planned})
+        _event(
+            video_dir,
+            {
+                "type": "flow_started",
+                "planned_stages": planned,
+                "requested_start_stage": start_stage,
+            },
+        )
         if not planned and progress is not None:
             progress.complete_stage(len(FLOW_STAGES))
-        for stage in FLOW_STAGES:
+        for stage in FLOW_STAGES[start_index:]:
             current = collect_project_status(video_number)
-            if current["stages"][stage]["status"] == TERMINAL_COMPLETE:
+            force_selected_stage = stage == start_stage
+            if (
+                current["stages"][stage]["status"] == TERMINAL_COMPLETE
+                and not force_selected_stage
+            ):
                 continue
             completed_before = sum(
                 item["status"] == TERMINAL_COMPLETE
@@ -1603,6 +1631,35 @@ def print_api_cost_plan(plan: dict) -> None:
             print(f"  {label:22} {plan[key]}")
 
 
+def resume_section_choices(status: dict) -> tuple[dict[str, str], dict[str, str], str]:
+    """Build a safe resume menu up to the first unfinished section."""
+    next_stage = status.get("next_stage")
+    last_index = (
+        FLOW_STAGES.index(next_stage)
+        if next_stage in FLOW_STAGES
+        else len(FLOW_STAGES) - 1
+    )
+    options: dict[str, str] = {}
+    targets: dict[str, str] = {}
+    for index, stage in enumerate(FLOW_STAGES[: last_index + 1]):
+        key = RESUME_STAGE_KEYS[index]
+        state = status["stages"][stage]["status"]
+        note = "recommended next" if stage == next_stage else "rebuild from here"
+        options[key] = (
+            f"Stage {index + 1:02d}/{len(FLOW_STAGES):02d} - "
+            f"{STAGE_LABELS[stage]} [{state}; {note}]"
+        )
+        targets[key] = stage
+
+    if next_stage is None:
+        options["u"] = "Upload/publish the completed package to YouTube [recommended]"
+        targets["u"] = "upload"
+        default = "u"
+    else:
+        default = RESUME_STAGE_KEYS[last_index]
+    return options, targets, default
+
+
 def interactive() -> int:
     clear_console()
     print_header("NEWS STUDIO", "Autonomous technology-news production")
@@ -1619,7 +1676,7 @@ def interactive() -> int:
     )
     start_options = {"1": "Create a new Tech News video"}
     if latest is not None:
-        start_options["2"] = f"Resume {project_name(latest)}"
+        start_options["2"] = f"Continue from {project_name(latest)}"
     choice = timed_choice(
         "Choose the production action.",
         start_options,
@@ -1629,30 +1686,56 @@ def interactive() -> int:
     if choice == "1":
         video_number = next_project_number()
         category = "tech"
+        resume_start_stage = None
+        upload_only = False
     else:
         video_number = latest
         category = _read_json(project_dir(video_number) / "project_info.json").get(
             "category", "tech"
         )
+        status = collect_project_status(video_number)
+        section_options, section_targets, section_default = resume_section_choices(status)
+        clear_console()
+        print_header("NEWS STUDIO", f"Continue from: {project_name(video_number)}")
+        if status.get("next_stage"):
+            detected = status["next_stage"]
+            print(
+                f"Detected next section: Stage {FLOW_STAGES.index(detected) + 1:02d}/"
+                f"{len(FLOW_STAGES):02d} - {STAGE_LABELS[detected]}"
+            )
+        else:
+            print("Production package is complete; YouTube upload is ready.")
+        section_choice = timed_choice(
+            "Choose the section to continue from.",
+            section_options,
+            default=section_default,
+            timeout_seconds=decision_timeout,
+        )
+        section_target = section_targets[section_choice]
+        upload_only = section_target == "upload"
+        resume_start_stage = None if upload_only else section_target
 
-    clear_console()
-    print_header("NEWS STUDIO", f"Selected project: {project_name(video_number)}")
-    print_api_cost_plan(api_cost_plan(video_number))
-    confirmation = timed_choice(
-        "Allow the listed provider requests?",
-        {"1": "Continue with provider requests", "0": "Cancel safely"},
-        default="1",
-        timeout_seconds=decision_timeout,
-    )
-    if confirmation != "1":
-        print("Cancelled before any provider request.")
-        return 0
+    if not upload_only:
+        clear_console()
+        print_header("NEWS STUDIO", f"Selected project: {project_name(video_number)}")
+        print_api_cost_plan(api_cost_plan(video_number))
+        confirmation = timed_choice(
+            "Allow the listed provider requests?",
+            {"1": "Continue with provider requests", "0": "Cancel safely"},
+            default="1",
+            timeout_seconds=decision_timeout,
+        )
+        if confirmation != "1":
+            print("Cancelled before any provider request.")
+            return 0
 
     clear_console()
     progress_display = ProgressDisplay(video_number)
     separator_mode: Literal["manual", "skip", "defer"] = "defer"
     preview_approved = False
-    while True:
+    requested_start_stage = resume_start_stage
+    result = {"status": "COMPLETE", "video_number": video_number}
+    while not upload_only:
         result = run_flow(
             video_number,
             category=category,
@@ -1662,7 +1745,9 @@ def interactive() -> int:
             dry_run=False,
             manual_separator_mode=separator_mode,
             progress=progress_display,
+            start_stage=requested_start_stage,
         )
+        requested_start_stage = None
         if result.get("stage") == "manual_separators":
             clear_console()
             print_header(
@@ -1758,6 +1843,7 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument("--category", choices=("tech", "gaming"), default="tech")
         else:
             sub.add_argument("video")
+            sub.add_argument("--from-stage", choices=FLOW_STAGES)
         sub.add_argument("--confirm-api-costs", action="store_true")
         sub.add_argument("--approve-preview", action="store_true")
         sub.add_argument("--skip-separators", action="store_true")
@@ -1834,6 +1920,7 @@ def main() -> int:
                         if args.json or args.dry_run
                         else ProgressDisplay(number)
                     ),
+                    start_stage=getattr(args, "from_stage", None),
                 )
             elif args.command == "status":
                 result = collect_project_status(number)
