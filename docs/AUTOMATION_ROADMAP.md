@@ -299,7 +299,7 @@ This is the deliberate human pause.
 After news text and TTS are complete, display:
 
 > The summary and the original news texts are saved, waiting for the animation
-> production. Press 1 after ready, or 0 for cancelling all process.
+> production. Press Enter after ready, or 0 to cancel.
 
 The prompt must also show:
 
@@ -322,10 +322,11 @@ Recommended naming:
 
 ### Resume behavior
 
-On `1`, validate every required file with FFprobe:
+On Enter, validate every required file with FFprobe:
 
 - video decodes successfully;
-- expected resolution and frame rate;
+- supported frame rate; non-output resolutions are accepted and normalized with
+  aspect-ratio-preserving scale and padding during render;
 - supported pixel format;
 - non-zero duration;
 - audio presence is known and handled consistently.
@@ -334,7 +335,7 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
 
 ### Test
 
-- Missing file, corrupt file, wrong resolution, and valid file cases.
+- Missing file, corrupt file, alternate resolution, and valid file cases.
 - Close the console while waiting, then resume later without repeating prior stages.
 
 ### Implemented verification
@@ -344,15 +345,16 @@ On `0`, set state to `CANCELLED`, preserve all work, and print the resume comman
   `state.json`; closing the console preserves `WAITING`.
 - `resume_video.bat` opens the newest numbered project directly at this checkpoint,
   without repeating news, TTS, or alignment.
-- FFprobe checks container metadata, codec, resolution, frame rate, pixel format,
-  duration, and audio presence. FFmpeg then fully decodes every accepted stream.
+- FFprobe checks container metadata, input resolution, codec, frame rate, pixel format,
+  duration, and audio presence. Alternate resolutions are marked for normalization,
+  and FFmpeg fully decodes every accepted stream.
 - Audio presence follows a configurable policy and defaults to consistent across all
   separators.
 - Validated real separator durations replace placeholder durations in
   `story_timing.json`; separators remain opening overlays and do not delay narration.
 - File hashes invalidate `READY` if an approved separator is later changed or removed.
-- Thirty-seven offline tests pass, including five expected filenames, missing, corrupt,
-  wrong-resolution, mixed-audio, valid, cancel, close-window, and resume cases.
+- Offline tests cover expected filenames, missing and corrupt files, alternate-resolution
+  normalization, mixed audio, Enter-to-continue, cancel, close-window, and resume cases.
 
 ### Done when
 

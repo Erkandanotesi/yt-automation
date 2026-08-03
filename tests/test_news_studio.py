@@ -18,6 +18,7 @@ from news_studio import (
     _run_subprocess,
     _preview_status,
     approve_preview,
+    execute_stage,
     interactive,
     main,
     run_preflight,
@@ -241,6 +242,48 @@ class NewsStudioTests(unittest.TestCase):
                 timeout_seconds=0,
             )
         self.assertEqual(selected, "2")
+
+    def test_enter_selects_timed_choice_default_immediately(self) -> None:
+        fake_msvcrt = SimpleNamespace(kbhit=lambda: True, getwch=lambda: "\r")
+        with (
+            patch("news_studio.sys.stdin.isatty", return_value=True),
+            patch("news_studio.os.name", "nt"),
+            patch.dict("sys.modules", {"msvcrt": fake_msvcrt}),
+        ):
+            selected = timed_choice(
+                "Decision",
+                {"1": "continue", "0": "cancel"},
+                default="1",
+                timeout_seconds=30,
+            )
+        self.assertEqual(selected, "1")
+
+    def test_manual_separator_mode_waits_for_enter_then_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("news_studio.project_dir", return_value=root),
+                patch(
+                    "news_studio._validate_manual_checkpoint",
+                    side_effect=[False, True],
+                ) as validate,
+                patch("news_studio._run_subprocess") as run,
+                patch("news_studio.sys.stdin.isatty", return_value=True),
+                patch("builtins.input", return_value="") as read,
+            ):
+                result = execute_stage(
+                    15,
+                    "manual_separators",
+                    category="tech",
+                    confirm_api_costs=True,
+                    approve_current_preview=False,
+                    manual_separator_mode="manual",
+                )
+
+        self.assertEqual(result.status, "COMPLETE")
+        self.assertEqual(validate.call_count, 2)
+        read.assert_called_once()
+        self.assertEqual(run.call_args.args[2][-1], "prepare")
 
     def test_dry_run_does_not_create_project_or_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

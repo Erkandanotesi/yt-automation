@@ -554,6 +554,55 @@ class MediaSelectionTests(unittest.TestCase):
             self.assertEqual(sum(usage.values()), 6)
             self.assertTrue(all(count <= 2 for count in usage.values()))
 
+    def test_exhausted_reuse_cap_gets_unique_local_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exhausted = make_asset(
+                root,
+                "Media/exhausted.png",
+                ["technology"],
+                "cleared",
+            )
+            fallback = make_asset(
+                root,
+                "Media/context_safe.png",
+                ["neutral", "background"],
+                "cleared",
+            )
+            fallback["context_safe_fallback"] = True
+            window = {
+                "window_id": "story_03_archive_002",
+                "shortlist": [{**exhausted, "local_score": 10.0}],
+            }
+            decisions = {
+                window["window_id"]: WindowDecision(
+                    window_id=window["window_id"],
+                    selected_asset_id=exhausted["asset_id"],
+                    confidence=0.8,
+                    selection_reason="The original image matched the context.",
+                )
+            }
+            usage = Counter({exhausted["sha256"]: 2})
+
+            selected = _enforce_selection_constraints(
+                [window],
+                decisions,
+                {exhausted["asset_id"]: exhausted},
+                usage,
+                2,
+                fallback_factory=lambda _window: fallback,
+            )
+
+            self.assertEqual(
+                selected[0]["selected_asset"]["asset_id"],
+                fallback["asset_id"],
+            )
+            self.assertTrue(
+                selected[0]["selected_asset"]["context_safe_fallback"]
+            )
+            self.assertEqual(usage[exhausted["sha256"]], 2)
+            self.assertEqual(usage[fallback["sha256"]], 1)
+
     def test_square_brand_logo_is_not_rejected_as_crop_risk(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

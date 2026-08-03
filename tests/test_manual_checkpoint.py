@@ -221,7 +221,7 @@ class ManualCheckpointTests(unittest.TestCase):
                 "WAITING",
             )
 
-    def test_missing_corrupt_and_wrong_resolution_are_rejected(self) -> None:
+    def test_missing_and_corrupt_are_rejected_but_resolution_is_normalized(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             missing = root / "missing.mp4"
@@ -239,8 +239,10 @@ class ManualCheckpointTests(unittest.TestCase):
                 validate_separator_file(corrupt, test_spec())["errors"][0],
             )
             wrong_result = validate_separator_file(wrong, test_spec())
+            self.assertEqual(wrong_result["status"], "passed")
+            self.assertTrue(wrong_result["normalization_required"])
             self.assertTrue(
-                any("Resolution" in error for error in wrong_result["errors"])
+                any("scaled and padded" in warning for warning in wrong_result["warnings"])
             )
 
     def test_audio_presence_must_be_consistent(self) -> None:

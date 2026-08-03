@@ -338,7 +338,7 @@ class RenderStageTests(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertEqual(
                 command[command.index("-af") + 1],
-                "volume=-1dB,alimiter=limit=0.794:level=false",
+                "volume=-2dB,alimiter=limit=0.707:level=false",
             )
 
     def test_animated_tv_effect_preserves_alpha_and_skips_separator(self) -> None:

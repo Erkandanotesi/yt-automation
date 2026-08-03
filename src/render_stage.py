@@ -1093,7 +1093,7 @@ def _render_preview(final: Path, video_dir: Path, settings: RenderSettings) -> P
             "-pix_fmt",
             "yuv420p",
             "-af",
-            "volume=-1dB,alimiter=limit=0.794:level=false",
+            "volume=-2dB,alimiter=limit=0.707:level=false",
             "-c:a",
             "aac",
             "-b:a",
@@ -1632,6 +1632,20 @@ def render_preview_only(
         "preview": {"file": str(preview), "qa": preview_qa},
         "quality": {"status": preview_qa["status"]},
     }
+    if preview_qa["status"] == "passed":
+        # The archive gate independently reads this report, so persist the passing
+        # media QA before asking it to promote the project's news history.
+        atomic_write_json(report_path, report)
+        report["news_archive"] = NewsArchive().finalize_project(video_number)
+        if settings.cleanup_intermediates:
+            report.setdefault("intermediates", {})["final_cleanup"] = _cleanup_paths(
+                video_dir,
+                [video_dir / "08_render" / "intermediates"],
+                label="remaining intermediates after preview recovery",
+            )
+            report["intermediates"]["retained"] = False
+        else:
+            report.setdefault("intermediates", {})["retained"] = True
     atomic_write_json(report_path, report)
     state = load_json(video_dir / "state.json", "Stage state")
     state.setdefault("stages", {})[STAGE_NAME] = {

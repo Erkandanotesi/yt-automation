@@ -849,6 +849,35 @@ def approve_preview(video_number: int) -> dict:
     return approval
 
 
+def _validate_manual_checkpoint(
+    video_number: int,
+    progress: ProgressDisplay | None,
+) -> bool:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(source_file("manual_checkpoint.py")),
+            "--video",
+            str(video_number),
+            "--action",
+            "validate",
+        ],
+        cwd=AUTOMATION_ROOT,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    for line in result.stdout.splitlines(keepends=True):
+        if progress is not None:
+            progress.write_subprocess_line(line)
+        else:
+            print(line, end="")
+    return result.returncode == 0
+
+
 def execute_stage(
     video_number: int,
     stage: str,
@@ -913,29 +942,7 @@ def execute_stage(
                 stage,
                 "Manual separators skipped; images start at each chapter beginning.",
             )
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(source_file("manual_checkpoint.py")),
-                "--video",
-                str(video_number),
-                "--action",
-                "validate",
-            ],
-            cwd=AUTOMATION_ROOT,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        for line in result.stdout.splitlines(keepends=True):
-            if progress is not None:
-                progress.write_subprocess_line(line)
-            else:
-                print(line, end="")
-        if result.returncode != 0:
+        if not _validate_manual_checkpoint(video_number, progress):
             _run_subprocess(
                 video_dir,
                 stage,
@@ -948,11 +955,52 @@ def execute_stage(
                 ],
                 progress=progress,
             )
-            return StageResult(
-                TERMINAL_WAITING,
-                stage,
-                f"Add the separator files to {video_dir / '03_manual_separators'}, then resume.",
-            )
+            if not sys.stdin.isatty():
+                return StageResult(
+                    TERMINAL_WAITING,
+                    stage,
+                    f"Add the separator files to {video_dir / '03_manual_separators'}, then resume.",
+                )
+            while True:
+                try:
+                    choice = input(
+                        "\nThe folders are open. Save all separator files, then "
+                        "press Enter to validate and continue (or type 0 to stop): "
+                    ).strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCheckpoint remains waiting; generated work was preserved.")
+                    return StageResult(
+                        TERMINAL_WAITING,
+                        stage,
+                        "Manual separator work was left waiting.",
+                    )
+                if choice == "0":
+                    _run_subprocess(
+                        video_dir,
+                        stage,
+                        [
+                            "manual_checkpoint.py",
+                            "--video",
+                            str(video_number),
+                            "--action",
+                            "cancel",
+                        ],
+                        progress=progress,
+                    )
+                    return StageResult(
+                        TERMINAL_WAITING,
+                        stage,
+                        "Manual separator work was cancelled and preserved.",
+                    )
+                if choice not in {"", "1"}:
+                    print("Press Enter when ready, or type 0 to stop.")
+                    continue
+                if _validate_manual_checkpoint(video_number, progress):
+                    break
+                print(
+                    "Separator validation did not pass. Fix the listed files, "
+                    "then press Enter again."
+                )
     elif stage == "storyboard":
         _run_subprocess(
             video_dir,
@@ -1205,8 +1253,9 @@ def timed_choice(
         default_text = _paint(suffix, ANSI_YELLOW, enabled=color)
         print(f"  {key_text}. {label}{default_text}")
     print(
-        f"Press a choice key within {timeout_seconds:g} seconds; "
-        f"otherwise {default} is selected automatically: ",
+        f"Press Enter for the default, or a choice key within "
+        f"{timeout_seconds:g} seconds; otherwise {default} is selected "
+        "automatically: ",
         end="",
         flush=True,
     )
@@ -1221,6 +1270,9 @@ def timed_choice(
                 key = msvcrt.getwch()
                 if key == "\x03":
                     raise KeyboardInterrupt
+                if key in {"\r", "\n"}:
+                    selected = default
+                    break
                 if key in options:
                     selected = key
                     break
@@ -1232,7 +1284,9 @@ def timed_choice(
         readable, _, _ = select.select([sys.stdin], [], [], remaining)
         if readable:
             candidate = sys.stdin.readline().strip()
-            if candidate in options:
+            if not candidate:
+                selected = default
+            elif candidate in options:
                 selected = candidate
     else:
         time.sleep(timeout_seconds)

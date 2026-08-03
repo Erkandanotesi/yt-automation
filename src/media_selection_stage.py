@@ -1613,6 +1613,32 @@ def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict
     }
 
 
+def _context_safe_candidate(asset: dict) -> dict:
+    return {
+        "asset_id": asset["asset_id"],
+        "workspace_relative_path": asset["workspace_relative_path"],
+        "filename": asset["filename"],
+        "folder": str(Path(asset["absolute_path"]).parent),
+        "local_caption": "Context-safe neutral chapter background",
+        "keywords": ["neutral", "chapter", "background"],
+        "width": asset["width"],
+        "height": asset["height"],
+        "aspect_ratio": asset["aspect_ratio"],
+        "crop_retention_16_9": 1.0,
+        "quality_flags": [],
+        "license_status": "user_confirmed_no_copyright",
+        "prior_use_count": 0,
+        "sha256": asset["sha256"],
+        "local_score": 0.0,
+        "score_components": {},
+        "context_grounded": False,
+        "grounding_basis": "context_safe_neutral",
+        "distinctive_overlap_tokens": [],
+        "neutral_fallback": True,
+        "context_safe_fallback": True,
+    }
+
+
 def _resolve_context_safe_fallbacks(
     video_number: int,
     windows: list[dict],
@@ -1627,29 +1653,7 @@ def _resolve_context_safe_fallbacks(
         ):
             continue
         asset = _create_context_safe_fallback_asset(video_number, window)
-        candidate = {
-            "asset_id": asset["asset_id"],
-            "workspace_relative_path": asset["workspace_relative_path"],
-            "filename": asset["filename"],
-            "folder": str(Path(asset["absolute_path"]).parent),
-            "local_caption": "Context-safe neutral chapter background",
-            "keywords": ["neutral", "chapter", "background"],
-            "width": asset["width"],
-            "height": asset["height"],
-            "aspect_ratio": asset["aspect_ratio"],
-            "crop_retention_16_9": 1.0,
-            "quality_flags": [],
-            "license_status": "user_confirmed_no_copyright",
-            "prior_use_count": 0,
-            "sha256": asset["sha256"],
-            "local_score": 0.0,
-            "score_components": {},
-            "context_grounded": False,
-            "grounding_basis": "context_safe_neutral",
-            "distinctive_overlap_tokens": [],
-            "neutral_fallback": True,
-            "context_safe_fallback": True,
-        }
+        candidate = _context_safe_candidate(asset)
         window["shortlist"] = [
             candidate,
             *[
@@ -1680,6 +1684,7 @@ def _enforce_selection_constraints(
     assets_by_id: dict[str, dict],
     video_usage_counts: Counter[str],
     maximum_uses_per_video: int,
+    fallback_factory: Callable[[dict], dict] | None = None,
 ) -> list[dict]:
     selected: list[dict] = []
     previous_sha = ""
@@ -1783,10 +1788,30 @@ def _enforce_selection_constraints(
                 "A crop-risk fallback under the video reuse cap was necessary."
             )
         if chosen_id is None:
-            raise RuntimeError(
-                f"No image remains below the {maximum_uses_per_video}-use video cap "
-                f"for {window['window_id']}. Increase MEDIA_SHORTLIST_SIZE or add "
-                "more relevant assets."
+            if fallback_factory is None:
+                raise RuntimeError(
+                    f"No image remains below the {maximum_uses_per_video}-use video "
+                    f"cap for {window['window_id']}."
+                )
+            fallback_asset = fallback_factory(window)
+            fallback_candidate = _context_safe_candidate(fallback_asset)
+            fallback_sha = fallback_asset["sha256"]
+            if (
+                fallback_sha == previous_sha
+                or video_usage_counts[fallback_sha] >= maximum_uses_per_video
+            ):
+                raise RuntimeError(
+                    "Context-safe fallback was not unique for "
+                    f"{window['window_id']}."
+                )
+            window["shortlist"] = [fallback_candidate, *window["shortlist"]]
+            window.setdefault("_transient_assets", []).append(fallback_asset)
+            candidate_by_id[fallback_asset["asset_id"]] = fallback_candidate
+            assets_by_id[fallback_asset["asset_id"]] = fallback_asset
+            chosen_id = fallback_asset["asset_id"]
+            override_reason = (
+                "Every grounded shortlist image had reached the video reuse cap; "
+                "used a unique locally generated neutral background."
             )
         if chosen_id != decision.selected_asset_id and not override_reason:
             override_reason = (
@@ -2120,6 +2145,10 @@ def run_media_selection(
             assets_by_id,
             video_usage_counts,
             settings.maximum_uses_per_video,
+            fallback_factory=lambda window: _create_context_safe_fallback_asset(
+                video_number,
+                window,
+            ),
         )
         if settings.copy_selected_assets:
             _copy_selected(

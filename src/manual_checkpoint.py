@@ -436,6 +436,7 @@ def validate_separator_file(path: Path, spec: SeparatorSpec) -> dict:
         "filename": path.name,
         "status": "failed",
         "errors": [],
+        "warnings": [],
     }
     if not path.is_file():
         result["errors"].append("File is missing.")
@@ -456,10 +457,13 @@ def validate_separator_file(path: Path, spec: SeparatorSpec) -> dict:
             f"Duration {media['duration_seconds']:.3f}s is below "
             f"{spec.minimum_duration_seconds:.3f}s."
         )
-    if (media["width"], media["height"]) != (spec.width, spec.height):
-        result["errors"].append(
-            f"Resolution is {media['width']}×{media['height']}; "
-            f"expected {spec.width}×{spec.height}."
+    result["normalization_required"] = (
+        media["width"], media["height"]
+    ) != (spec.width, spec.height)
+    if result["normalization_required"]:
+        result["warnings"].append(
+            f"Resolution is {media['width']}×{media['height']}; it will be "
+            f"scaled and padded to {spec.width}×{spec.height} during render."
         )
     if abs(media["frame_rate"] - spec.fps) > spec.fps_tolerance:
         result["errors"].append(
@@ -773,7 +777,7 @@ def print_checkpoint(stage: dict) -> None:
     print()
     print(
         "The summary and the original news texts are saved, waiting for the "
-        "animation production. Press 1 after ready, or 0 for cancelling all process."
+        "animation production. Press Enter after ready, or 0 to cancel."
     )
     print()
     print(f"Project folder   : {stage['project_directory']}")
@@ -783,8 +787,9 @@ def print_checkpoint(stage: dict) -> None:
     for path in stage["expected_files"]:
         print(f"  - {Path(path).name}")
     print(
-        "Accepted video   : "
-        f"{spec['width']}x{spec['height']}, {spec['fps']} fps, "
+        "Output canvas    : "
+        f"{spec['width']}x{spec['height']}; other input resolutions are normalized. "
+        f"{spec['fps']} fps, "
         f"codec={','.join(spec['allowed_codecs'])}, "
         f"pixel_format={','.join(spec['allowed_pixel_formats'])}"
     )
@@ -798,6 +803,8 @@ def print_validation_failures(stage: dict) -> None:
     for item in validation.get("files", []):
         if item.get("status") == "passed":
             print(f"[PASS] {item['filename']}")
+            for warning in item.get("warnings", []):
+                print(f"       - {warning}")
         else:
             print(f"[FAIL] {item['filename']}")
             for error in item.get("errors", []):
@@ -819,7 +826,7 @@ def prompt_checkpoint(
         _, _, stage, _ = prepare_checkpoint(video_number, spec)
         print_checkpoint(stage)
         try:
-            choice = input("Selection [1/0]: ").strip()
+            choice = input("Press Enter when ready [0 cancels]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             print("Checkpoint remains WAITING. Resume later with:")
@@ -831,8 +838,8 @@ def prompt_checkpoint(
             print("Process cancelled. All generated files were preserved.")
             print(f"Resume later: {cancelled['resume_command']}")
             return "CANCELLED"
-        if choice != "1":
-            print("Invalid selection. Enter 1 when ready or 0 to cancel.")
+        if choice not in {"", "1"}:
+            print("Invalid selection. Press Enter when ready or 0 to cancel.")
             continue
 
         success, validated = validate_checkpoint(video_number, spec)
@@ -840,7 +847,7 @@ def prompt_checkpoint(
             print("All separator animations passed validation.")
             return "READY"
         print_validation_failures(validated)
-        print("Fix or replace the files, then press 1 again.")
+        print("Fix or replace the files, then press Enter again.")
 
 
 def parse_arguments() -> argparse.Namespace:
