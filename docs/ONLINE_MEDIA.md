@@ -1,11 +1,28 @@
-# Optional Wikimedia Commons provider
+# Optional Pexels and Wikimedia Commons providers
 
-The downloader stays in a separate module, but it is now available to the production
-Milestone 5 selector. It runs only after the AI explicitly returns
-`images_are_irrelevant` for every local candidate. Disable it at any time with
-`WIKIMEDIA_FALLBACK_ENABLED=false`; the local media workflow continues unchanged.
+Each downloader stays in a separate module. They run only after the AI explicitly
+returns `images_are_irrelevant` for every local candidate. Disable either provider
+with `PEXELS_FALLBACK_ENABLED=false` or `WIKIMEDIA_FALLBACK_ENABLED=false`; the local
+media workflow continues unchanged.
 
-## Why Wikimedia Commons first
+## Provider routing
+
+The selector reuses a matching local download before making a network request. Pexels
+is tried first for general photographic scenes because its photo search is stronger
+for people, offices, devices, infrastructure, and conceptual technology imagery.
+Exact logo requests bypass Pexels and retain Wikimedia's strict title/entity gate.
+If Pexels cannot prove a general query from the API result rank and alt text,
+Wikimedia is tried next. If neither source is grounded, production uses the local
+context-safe card and does not fail.
+
+Pexels downloads are stored under `Assets/Media/Online Retrieved/Pexels/` with an
+adjacent `.metadata.json` sidecar containing the photo page, photographer, Pexels
+license, retrieval query, relevance evidence, and checksum. The bottom-right source
+overlay credits the photographer and Pexels. The integration follows the official
+API requirement to authenticate with the `Authorization` header and respects the
+reported request limits; it never attempts to rotate keys or evade throttling.
+
+## Why keep Wikimedia Commons
 
 Wikimedia Commons has a stable, keyless MediaWiki API, structured creator/license
 metadata, full-resolution or resized download URLs, and strong coverage for named
@@ -96,16 +113,19 @@ rebuilt final video. Its CC0 metadata correctly suppresses the attribution overl
 To stop using online media without deleting anything, set:
 
 ```text
+PEXELS_FALLBACK_ENABLED=false
 WIKIMEDIA_FALLBACK_ENABLED=false
 ```
 
-For full removal, first disable the setting, then remove only:
+Pexels can be removed independently by disabling it and removing
+`src/pexels_media_stage.py`, `tests/test_pexels_media_stage.py`, and
+`Assets/Media/Online Retrieved/Pexels/`. Wikimedia can be removed independently by
+disabling it and removing:
 
 - `src/online_media_stage.py`
 - `online_media.bat`
-- `ONLINE_MEDIA.md`
 - `tests/test_online_media_stage.py`
-- `Assets/Media/Online Retrieved/`
+- `Assets/Media/Online Retrieved/Wikimedia Commons/`
 - each `Video N/05_visuals/online_searches/` and `online_trial/` folder
 
 Then run `media_index.bat` once. The disabled integration safely falls back to local

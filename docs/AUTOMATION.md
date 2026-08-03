@@ -17,7 +17,9 @@ Tech News/
 |   |       `-- shutter_sound.MP3
 |   |-- Media/
 |   |   |-- AI Generated/
-|   |   |-- Online Retrieved/Wikimedia Commons/
+|   |   |-- Online Retrieved/
+|   |       |-- Pexels/
+|   |       `-- Wikimedia Commons/
 |   |   `-- Thumbnails/
 |   |-- Media (No-Copyright)/
 |   |-- Overlays/
@@ -46,6 +48,7 @@ Tech News/
 |   |   |-- media_index.py
 |   |   |-- media_selection_stage.py
 |   |   |-- online_media_stage.py
+|   |   |-- pexels_media_stage.py
 |   |   |-- caption_stage.py
 |   |   |-- effects_stage.py
 |   |   |-- render_stage.py
@@ -191,11 +194,11 @@ news-studio.bat render "Video N"
 stages do not begin without `--confirm-api-costs`. Individual story-image and publishing
 generators retain their own confirmation gates as a second safety layer.
 
-`create_video.bat` is the autonomous launcher. Each ordinary choice waits 30 seconds
+`create_video.bat` is the autonomous launcher. Every timed choice waits at least 120 seconds
 before taking its displayed default:
 create a new Tech News project, allow the shown provider-cost plan, skip manual
-separators, and approve the checksum-bound preview. The final upload choice waits 120
-seconds and defaults to uploading the MP4 plus its thumbnail, title, description, and
+separators, and approve the checksum-bound preview. The final upload choice also waits
+at least 120 seconds and defaults to uploading the MP4 plus its thumbnail, title, description, and
 chapter metadata. Press the alternative key during the countdown to override any
 default. The timeout values can be changed with
 `AUTOMATION_DECISION_TIMEOUT_SECONDS` and `AUTOMATION_UPLOAD_TIMEOUT_SECONDS`.
@@ -279,17 +282,21 @@ The selector sends no local image pixels. Candidate metadata must now pass a loc
 context-grounding gate before Luna may select it: an exact company/product/person match
 or at least one distinctive non-generic context term is required. Entity context is
 carried across pronouns and split sentences, while choices below
-`MEDIA_MIN_AI_CONFIDENCE=0.45` are rejected in favor of the existing Wikimedia path.
+`MEDIA_MIN_AI_CONFIDENCE=0.45` are rejected in favor of the online-provider path.
 This improves precision without adding a vision request or another paid AI call.
 Visual timing stays precise without discarding grammatical context. Long AI-hero beats
-and archive windows are capped by `MEDIA_MAX_WINDOW_SECONDS` (7 seconds by default),
+and archive windows target 12 seconds and are capped by
+`MEDIA_MAX_WINDOW_SECONDS` (18 seconds by default),
 prefer cuts at periods, commas, semicolons, colons, question marks, and exclamation
 marks, and fall back to aligned phrase boundaries when needed. The selector receives
 both the exact timed clause and its complete containing sentence, so a long sentence
 can change images naturally while names such as Microsoft or Steve Jobs remain attached
 to later clauses. Ambiguous verbs such as `launch` never imply spaceflight unless the
 context also contains space-specific evidence such as a rocket, satellite, or orbit.
-If no acceptable local or Wikimedia result exists, FFmpeg creates a unique dark,
+Pexels handles grounded general photographic scenes first; exact logo requests go
+straight to Wikimedia Commons. If Pexels cannot prove a match from search rank and
+alt-text metadata, Wikimedia is tried next. If no acceptable local, Pexels, or
+Wikimedia result exists, FFmpeg creates a unique dark,
 context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
 chapter title remains visible, production continues without an API request, and no
 unrelated person, company, product, or event is implied.
@@ -311,7 +318,7 @@ Each raw per-story selector response is saved before validation under
 response without paying for the same selector request again.
 `MEDIA_MAX_USES_PER_VIDEO=2` is a hard
 SHA-256-based cap across the complete video, including generated hero images, local
-archive images, and Wikimedia downloads. Selection repairs and cached story resumes
+archive images, Pexels downloads, and Wikimedia downloads. Selection repairs and cached story resumes
 must respect the same limit.
 
 ## Environment-file health

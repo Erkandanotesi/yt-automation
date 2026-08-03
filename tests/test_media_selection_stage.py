@@ -27,6 +27,7 @@ from media_selection_stage import (
     coverage_quality,
     infer_scene_intent,
     prefer_explicit_company_logos,
+    resolve_pexels_fallbacks,
     resolve_wikimedia_fallbacks,
     run_media_selection,
     shortlist_assets,
@@ -358,6 +359,89 @@ class MediaSelectionTests(unittest.TestCase):
                 "distinctive_context",
             )
 
+    def test_weak_verb_overlap_does_not_ground_an_unrelated_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            unrelated = make_asset(
+                root,
+                "Media/new-york-court-blocks-kalshi.png",
+                ["york", "court", "block", "kalshi"],
+                "user_confirmed_no_copyright",
+            )
+            result = shortlist_assets(
+                {"assets": [unrelated]},
+                {
+                    "text": "Chrome may block a hijacker extension by default.",
+                    "entities": ["Chrome"],
+                    "scene_intent": "technology_concept",
+                    "visual_queries": [],
+                },
+                selection_settings(),
+            )
+
+            self.assertFalse(result[0]["context_grounded"])
+            self.assertNotIn("block", result[0]["distinctive_overlap_tokens"])
+
+    def test_other_current_story_hero_assets_are_excluded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            own = make_asset(
+                root,
+                "Media/chrome-browser.png",
+                ["chrome", "browser"],
+                "user_confirmed_no_copyright",
+            )
+            other_story = make_asset(
+                root,
+                "Media/chrome-extension.png",
+                ["chrome", "extension"],
+                "user_confirmed_no_copyright",
+            )
+            result = shortlist_assets(
+                {"assets": [own, other_story]},
+                {
+                    "text": "Chrome changed extension behavior.",
+                    "entities": ["Chrome"],
+                    "scene_intent": "technology_concept",
+                    "visual_queries": [],
+                },
+                selection_settings(),
+                excluded_sha={other_story["sha256"]},
+            )
+
+            self.assertEqual([item["asset_id"] for item in result], [own["asset_id"]])
+
+    def test_asset_already_used_twice_can_be_removed_before_ai_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exhausted = make_asset(
+                root,
+                "Media/chrome-exhausted.png",
+                ["chrome", "browser"],
+                "user_confirmed_no_copyright",
+            )
+            available = make_asset(
+                root,
+                "Media/chrome-available.png",
+                ["chrome", "extension"],
+                "user_confirmed_no_copyright",
+            )
+            result = shortlist_assets(
+                {"assets": [exhausted, available]},
+                {
+                    "text": "Chrome changed extension behavior.",
+                    "entities": ["Chrome"],
+                    "scene_intent": "technology_concept",
+                    "visual_queries": [],
+                },
+                selection_settings(),
+                excluded_sha={exhausted["sha256"]},
+            )
+
+            self.assertEqual(
+                [item["asset_id"] for item in result], [available["asset_id"]]
+            )
+
     def test_missing_related_image_uses_context_safe_card_without_failure(self) -> None:
         window = {
             "window_id": "story_01_archive_009",
@@ -540,6 +624,10 @@ class MediaSelectionTests(unittest.TestCase):
                         selected_asset_id=assets[0]["asset_id"],
                         confidence=0.8,
                         selection_reason="The preferred image matches this test window.",
+                        alternative_asset_ids=[
+                            assets[1]["asset_id"],
+                            assets[2]["asset_id"],
+                        ],
                     )
                     for window in windows
                 }
@@ -602,6 +690,46 @@ class MediaSelectionTests(unittest.TestCase):
             )
             self.assertEqual(usage[exhausted["sha256"]], 2)
             self.assertEqual(usage[fallback["sha256"]], 1)
+
+    def test_enforcer_never_uses_an_unreviewed_shortlist_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviewed = make_asset(root, "Media/reviewed.png", ["chrome"], "cleared")
+            unrelated = make_asset(root, "Media/rocket.png", ["rocket"], "cleared")
+            fallback = make_asset(root, "Media/safe.png", ["neutral"], "cleared")
+            fallback["context_safe_fallback"] = True
+            window = {
+                "window_id": "story_05_archive_001",
+                "shortlist": [
+                    {**reviewed, "local_score": 10.0, "context_grounded": True},
+                    {**unrelated, "local_score": 9.0, "context_grounded": True},
+                ],
+            }
+            decision = WindowDecision(
+                window_id=window["window_id"],
+                selected_asset_id=reviewed["asset_id"],
+                confidence=0.9,
+                selection_reason="The reviewed Chrome visual matches.",
+            )
+
+            selected = _enforce_selection_constraints(
+                [window],
+                {window["window_id"]: decision},
+                {
+                    reviewed["asset_id"]: reviewed,
+                    unrelated["asset_id"]: unrelated,
+                },
+                Counter({reviewed["sha256"]: 2}),
+                2,
+                fallback_factory=lambda _window: fallback,
+            )
+
+            self.assertEqual(
+                selected[0]["selected_asset"]["asset_id"], fallback["asset_id"]
+            )
+            self.assertNotEqual(
+                selected[0]["selected_asset"]["asset_id"], unrelated["asset_id"]
+            )
 
     def test_square_brand_logo_is_not_rejected_as_crop_risk(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -893,6 +1021,76 @@ class MediaSelectionTests(unittest.TestCase):
             self.assertEqual(used, 0)
             self.assertEqual(searches, 0)
             self.assertEqual(refreshed["assets"], [local, thumbnail, online])
+            self.assertEqual(
+                resolved[window["window_id"]].selected_asset_id,
+                online["asset_id"],
+            )
+
+    def test_existing_pexels_asset_is_reused_without_network(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = make_asset(
+                root,
+                "Local/generic_technology.png",
+                ["generic", "technology"],
+                "user_confirmed_no_copyright",
+            )
+            online = make_asset(
+                root,
+                "Online/pexels_data-center_engineers-and-servers_123.jpg",
+                ["data", "center", "engineers", "servers"],
+                "pexels_license",
+            )
+            online["source_url"] = "https://www.pexels.com/photo/example-123/"
+            online["creator"] = "Example Photographer"
+            online["license"] = {
+                "status": "pexels_license",
+                "name": "Pexels License",
+                "url": "https://www.pexels.com/license/",
+                "attribution_required": True,
+            }
+            window = {
+                "window_id": "story_01_archive_001",
+                "text": "Engineers investigated a data center server outage.",
+                "entities": ["data center"],
+                "scene_intent": "technical_infrastructure",
+                "visual_queries": [],
+                "shortlist": [
+                    {
+                        "asset_id": local["asset_id"],
+                        "sha256": local["sha256"],
+                        "quality_flags": [],
+                        "local_score": 1.0,
+                    }
+                ],
+            }
+            decision = WindowDecision(
+                window_id=window["window_id"],
+                relevance_status="images_are_irrelevant",
+                selected_asset_id=None,
+                confidence=0.85,
+                selection_reason="The local image does not depict infrastructure.",
+                online_search_query="data center engineers servers",
+                required_entity="data center",
+            )
+            with patch("pexels_media_stage.search_pexels") as online_search:
+                resolved, refreshed, used, searches = resolve_pexels_fallbacks(
+                    video_number=5,
+                    windows=[window],
+                    decisions={window["window_id"]: decision},
+                    media_index={"assets": [local, online]},
+                    index_settings=MediaIndexSettings(
+                        index_path=root / "index.json",
+                        roots=(MediaRoot("test", root, "unknown"),),
+                    ),
+                    settings=selection_settings(),
+                    remaining_downloads=1,
+                    remaining_searches=1,
+                )
+
+            online_search.assert_not_called()
+            self.assertEqual((used, searches), (0, 0))
+            self.assertEqual(refreshed["assets"], [local, online])
             self.assertEqual(
                 resolved[window["window_id"]].selected_asset_id,
                 online["asset_id"],

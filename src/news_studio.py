@@ -1405,8 +1405,14 @@ def interactive() -> int:
     if not run_preflight():
         return 1
     latest = latest_project_number()
-    decision_timeout = float(os.getenv("AUTOMATION_DECISION_TIMEOUT_SECONDS", "30"))
-    upload_timeout = float(os.getenv("AUTOMATION_UPLOAD_TIMEOUT_SECONDS", "120"))
+    decision_timeout = max(
+        120.0,
+        float(os.getenv("AUTOMATION_DECISION_TIMEOUT_SECONDS", "120")),
+    )
+    upload_timeout = max(
+        120.0,
+        float(os.getenv("AUTOMATION_UPLOAD_TIMEOUT_SECONDS", "120")),
+    )
     start_options = {"1": "Create a new Tech News video"}
     if latest is not None:
         start_options["2"] = f"Resume {project_name(latest)}"

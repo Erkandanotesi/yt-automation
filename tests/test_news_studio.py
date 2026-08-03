@@ -227,7 +227,7 @@ class NewsStudioTests(unittest.TestCase):
         upload.assert_called_once_with(6)
         self.assertTrue(
             all(
-                call.kwargs["timeout_seconds"] == 30
+                call.kwargs["timeout_seconds"] == 120
                 for call in choices.call_args_list[:-1]
             )
         )

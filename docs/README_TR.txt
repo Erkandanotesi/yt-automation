@@ -127,8 +127,9 @@ Kod karşılığı:
 
 data\indexes\media_index.json
 
-Hem `Assets\Media` hem `Assets\Media (No-Copyright)` kullanılır. Wikimedia Commons
-yalnızca yerel adayların ilgisiz olduğu kararı verildiğinde devreye girer.
+Hem `Assets\Media` hem `Assets\Media (No-Copyright)` kullanılır. Yerel adaylar
+ilgisizse genel fotoğraflar için Pexels, kesin marka ve logo eşleşmeleri için
+Wikimedia Commons devreye girer.
 
 8. YAYIN PAKETİ
 ---------------

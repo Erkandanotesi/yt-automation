@@ -42,6 +42,7 @@ from storyboard_stage import StoryboardSettings  # noqa: E402
 from media_index import MediaIndexSettings  # noqa: E402
 from media_selection_stage import MediaSelectionSettings  # noqa: E402
 from online_media_stage import OnlineMediaSettings  # noqa: E402
+from pexels_media_stage import PexelsMediaSettings  # noqa: E402
 from caption_stage import CaptionSettings  # noqa: E402
 from effects_stage import EffectsSettings, SUPPORTED_AUDIO  # noqa: E402
 from render_stage import RenderSettings  # noqa: E402
@@ -386,6 +387,26 @@ def collect_checks() -> list[Check]:
                 f"{media_selection_settings.maximum_window_seconds:g}s"
             ),
         )
+        if media_selection_settings.pexels_fallback_enabled:
+            try:
+                pexels_settings = PexelsMediaSettings.from_environment()
+                pexels_settings.validate()
+            except (RuntimeError, ValueError) as exc:
+                add("Pexels fallback configuration", False, str(exc))
+            else:
+                add(
+                    "Pexels fallback configuration",
+                    True,
+                    (
+                        f"search cap="
+                        f"{media_selection_settings.pexels_max_searches_per_video}; "
+                        f"download cap="
+                        f"{media_selection_settings.pexels_max_downloads_per_video}; "
+                        f"destination={pexels_settings.destination}"
+                    ),
+                )
+        else:
+            add("Pexels fallback configuration", True, "Disabled.")
         if media_selection_settings.wikimedia_fallback_enabled:
             try:
                 online_media_settings = OnlineMediaSettings.from_environment()
