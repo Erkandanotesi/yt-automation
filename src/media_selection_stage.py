@@ -404,11 +404,31 @@ def _split_uncovered_interval(
         if (
             windows
             and end - cursor < settings.minimum_window_seconds
-            and end - windows[-1][0] <= settings.maximum_window_seconds + 0.25
+            and end - windows[-1][0] <= settings.maximum_window_seconds + 0.001
         ):
             windows[-1] = (windows[-1][0], end)
+        elif windows and end - cursor < settings.minimum_window_seconds:
+            # A sentence-aligned split can leave a tiny tail. Rebalance the last
+            # two windows instead of extending one beyond the hard cadence limit.
+            replace_from = max(0, len(windows) - 2)
+            rebalance_start = windows[replace_from][0]
+            span = end - rebalance_start
+            segment_count = max(2, math.ceil(span / settings.maximum_window_seconds))
+            step = span / segment_count
+            windows[replace_from:] = [
+                (
+                    rebalance_start + step * index,
+                    rebalance_start + step * (index + 1),
+                )
+                for index in range(segment_count)
+            ]
         else:
             windows.append((cursor, end))
+    if any(
+        window_end - window_start > settings.maximum_window_seconds + 0.001
+        for window_start, window_end in windows
+    ):
+        raise RuntimeError("Archive-window splitting exceeded the hard maximum.")
     return windows
 
 

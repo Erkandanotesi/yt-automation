@@ -20,6 +20,7 @@ from media_selection_stage import (
     _load_selector_cache,
     _resolve_context_safe_fallbacks,
     _save_selector_cache,
+    _split_uncovered_interval,
     _validate_decisions,
     _window_excerpt,
     _window_text,
@@ -149,6 +150,24 @@ def make_asset(root: Path, name: str, keywords: list[str], license_status: str) 
 
 
 class MediaSelectionTests(unittest.TestCase):
+    def test_tiny_tail_is_rebalanced_without_exceeding_maximum_hold(self) -> None:
+        settings = replace(
+            selection_settings(),
+            minimum_window_seconds=5,
+            target_window_seconds=7,
+            maximum_window_seconds=9,
+        )
+        windows = _split_uncovered_interval(
+            0,
+            16.149,
+            [0, 7.082, 16.149],
+            settings,
+        )
+
+        self.assertAlmostEqual(windows[0][0], 0)
+        self.assertAlmostEqual(windows[-1][1], 16.149)
+        self.assertTrue(all(end - start <= 9.001 for start, end in windows))
+
     def test_explicit_company_name_promotes_one_commons_logo_window(self) -> None:
         story = {
             "named_entities": {

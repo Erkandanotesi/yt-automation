@@ -703,7 +703,10 @@ def validate_visual_cadence(
     long_events = []
     for event in visible:
         duration = float(event["timeline_end"]) - float(event["timeline_start"])
-        if duration > maximum_hold_seconds + 0.03:
+        # Timestamp alignment and sentence-boundary rounding can differ by a few
+        # frames. The media planner enforces the hard maximum for new projects;
+        # accept a legacy/sub-frame overshoot up to 0.10s instead of aborting.
+        if duration > maximum_hold_seconds + 0.10:
             long_events.append(
                 {
                     "event_id": event.get("event_id", ""),

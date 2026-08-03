@@ -291,6 +291,15 @@ directory, start/finish timestamps, complete child output, exit code, duration, 
 project recovery snapshot on failure. Orchestrated child commands also emit their full
 Python traceback to this log while the main console keeps only the concise error line.
 
+When a child stage reports a genuine connectivity failure (DNS resolution, timeout,
+connection reset/refusal, or an unreachable network), the orchestrator keeps the same
+stage on screen and waits indefinitely. It probes the configured endpoints every
+`NETWORK_RETRY_INTERVAL_SECONDS` seconds and reruns that same stage from its cached
+project state after connectivity returns. Provider validation, quota, authentication,
+and content errors are deliberately not treated as outages. Press Ctrl+C to cancel the
+otherwise indefinite wait. `NETWORK_PROBE_TARGETS` may be changed to a comma-separated
+list of `host:port` endpoints when the default probes are unsuitable.
+
 Media-selector output is treated as a recommendation rather than trusted routing data.
 Missing windows, foreign asset IDs, inconsistent relevance fields, and ungrounded
 online entities are repaired deterministically from that window's own shortlist and
@@ -341,7 +350,10 @@ Current-video hero checksums are reserved exclusively for their authored hero sl
 so an archived copy of the same generated pixels cannot reappear in an archive window.
 `EFFECTS_MAX_VISUAL_HOLD_SECONDS=9` is an independent final cadence gate: effects and
 render preparation stop if any still event, or any adjacent run of identical pixels,
-exceeds nine seconds. Full containing sentences still accompany shorter timed clauses
+meaningfully exceeds nine seconds. Newly split archive windows obey the hard limit;
+the effects validator accepts at most 0.10 seconds of timestamp/alignment rounding so
+an effective 9.067-second boundary cannot abort an otherwise valid cached project.
+Full containing sentences still accompany shorter timed clauses
 in the selector prompt, preserving relevance without creating long on-screen holds.
 The 60-second review proof now reads the actual effects-plan visual events and their
 real durations. It no longer substitutes three demonstration images lasting twenty

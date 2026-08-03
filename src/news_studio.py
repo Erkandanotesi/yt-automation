@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -80,6 +81,47 @@ STAGE_LABELS = {
     "render": "Encoding the final video",
     "publish": "Creating thumbnail and YouTube metadata",
 }
+NETWORK_FAILURE_PATTERNS = (
+    r"name resolution error|nameresolutionerror|getaddrinfo failed",
+    r"temporary failure in name resolution|nodename nor servname provided",
+    r"failed to establish a new connection|network is unreachable",
+    r"connection (?:timed out|reset|aborted|refused)",
+    r"connecttimeout|readtimeout|proxyerror|remotedisconnected",
+    r"max retries exceeded with url",
+    r"winerror\s+(?:10051|10054|10060|10061|11001)",
+)
+
+
+class NetworkStageError(RuntimeError):
+    def __init__(self, stage: str, log_path: Path) -> None:
+        super().__init__(f"Stage {stage} lost network connectivity. Log: {log_path}")
+        self.stage = stage
+        self.log_path = log_path
+
+
+def _is_network_failure(output: str) -> bool:
+    normalized = output.casefold()
+    return any(re.search(pattern, normalized) for pattern in NETWORK_FAILURE_PATTERNS)
+
+
+def _internet_available(timeout_seconds: float = 4.0) -> bool:
+    configured = os.getenv(
+        "NETWORK_PROBE_TARGETS",
+        "api.openai.com:443,api.elevenlabs.io:443,www.google.com:443,1.1.1.1:443",
+    )
+    for value in configured.split(","):
+        host, _, raw_port = value.strip().partition(":")
+        if not host:
+            continue
+        try:
+            with socket.create_connection(
+                (host, int(raw_port or "443")),
+                timeout=timeout_seconds,
+            ):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 def _enable_windows_ansi() -> bool:
@@ -649,6 +691,32 @@ class ProgressDisplay:
             self.stream.flush()
             self._active = False
 
+    def network_waiting(self, attempt: int, retry_seconds: float) -> None:
+        self._clear_live_line()
+        message = (
+            "[NETWORK WAITING] Internet connection was interrupted. "
+            f"Keeping this stage open; reconnect check #{attempt} in "
+            f"{retry_seconds:g}s. Press Ctrl+C only to cancel."
+        )
+        self.stream.write(
+            _paint(message, ANSI_BOLD + ANSI_YELLOW, enabled=self.color) + "\n"
+        )
+        self._active = False
+        self._draw(self._completed, "WAITING")
+
+    def network_resumed(self) -> None:
+        self._clear_live_line()
+        self.stream.write(
+            _paint(
+                "[NETWORK RESTORED] Retrying the same stage from its cached state.",
+                ANSI_GREEN,
+                enabled=self.color,
+            )
+            + "\n"
+        )
+        self._active = False
+        self._draw(self._completed, "RUNNING")
+
     def failed(self, completed: int) -> None:
         self._draw(completed, "FAILED")
         if self.live:
@@ -717,7 +785,7 @@ def _event(video_dir: Path, event: dict[str, Any]) -> None:
         output.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _run_subprocess(
+def _run_subprocess_once(
     video_dir: Path,
     stage: str,
     arguments: list[str],
@@ -777,8 +845,14 @@ def _run_subprocess(
                 f"Stage {stage} could not start. Log: {log_path}"
             ) from exc
         assert process.stdout is not None
+        output_tail: list[str] = []
+        network_failure_seen = False
         try:
             for line in process.stdout:
+                network_failure_seen = network_failure_seen or _is_network_failure(line)
+                output_tail.append(line)
+                if len(output_tail) > 500:
+                    del output_tail[:100]
                 if progress is not None:
                     progress.write_subprocess_line(line)
                 else:
@@ -808,16 +882,23 @@ def _run_subprocess(
             log.write("\n")
         log.flush()
     if return_code != 0:
+        event_type = (
+            "stage_network_interrupted"
+            if network_failure_seen or _is_network_failure("".join(output_tail))
+            else "stage_failed"
+        )
         _event(
             video_dir,
             {
-                "type": "stage_failed",
+                "type": event_type,
                 "stage": stage,
                 "exit_code": return_code,
                 "elapsed_seconds": elapsed,
                 "log_file": str(log_path),
             },
         )
+        if event_type == "stage_network_interrupted":
+            raise NetworkStageError(stage, log_path)
         raise RuntimeError(f"Stage {stage} failed. Log: {log_path}")
     _event(
         video_dir,
@@ -828,6 +909,61 @@ def _run_subprocess(
             "log_file": str(log_path),
         },
     )
+
+
+def _wait_for_internet(
+    *,
+    progress: ProgressDisplay | None,
+    attempt: int,
+) -> None:
+    try:
+        configured_retry = float(os.getenv("NETWORK_RETRY_INTERVAL_SECONDS", "15"))
+    except ValueError:
+        configured_retry = 15.0
+    retry_seconds = max(2.0, min(300.0, configured_retry))
+    while True:
+        if progress is not None:
+            progress.network_waiting(attempt, retry_seconds)
+        else:
+            print(
+                "[NETWORK WAITING] Internet connection was interrupted. "
+                f"Keeping this stage open; checking again in {retry_seconds:g}s. "
+                "Press Ctrl+C only to cancel.",
+                flush=True,
+            )
+        time.sleep(retry_seconds)
+        if _internet_available():
+            if progress is not None:
+                progress.network_resumed()
+            else:
+                print(
+                    "[NETWORK RESTORED] Retrying the same stage from its cached state.",
+                    flush=True,
+                )
+            return
+        attempt += 1
+
+
+def _run_subprocess(
+    video_dir: Path,
+    stage: str,
+    arguments: list[str],
+    *,
+    progress: ProgressDisplay | None = None,
+) -> None:
+    attempt = 1
+    while True:
+        try:
+            _run_subprocess_once(
+                video_dir,
+                stage,
+                arguments,
+                progress=progress,
+            )
+            return
+        except NetworkStageError:
+            _wait_for_internet(progress=progress, attempt=attempt)
+            attempt += 1
 
 
 def approve_preview(video_number: int) -> dict:

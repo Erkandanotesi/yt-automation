@@ -13,9 +13,11 @@ from unittest.mock import MagicMock, patch
 from file_utils import sha256_file
 from news_studio import (
     FLOW_STAGES,
+    NetworkStageError,
     ProgressDisplay,
     ProjectLock,
     _run_subprocess,
+    _is_network_failure,
     _preview_status,
     approve_preview,
     execute_stage,
@@ -38,6 +40,34 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_network_error_retries_same_stage_indefinitely_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 8"
+            root.mkdir()
+            interruption = NetworkStageError("news", root / "network.log")
+            with (
+                patch(
+                    "news_studio._run_subprocess_once",
+                    side_effect=[interruption, None],
+                ) as run_once,
+                patch("news_studio._wait_for_internet") as wait,
+            ):
+                _run_subprocess(root, "news", ["news_pipeline.py"])
+
+            self.assertEqual(run_once.call_count, 2)
+            wait.assert_called_once()
+
+    def test_network_failure_detection_excludes_provider_quota_errors(self) -> None:
+        self.assertTrue(
+            _is_network_failure(
+                "NameResolutionError: getaddrinfo failed for api.openai.com"
+            )
+        )
+        self.assertTrue(
+            _is_network_failure("HTTPSConnectionPool: Max retries exceeded with url")
+        )
+        self.assertFalse(_is_network_failure("HTTP 429 quota_exceeded"))
+
     def test_direct_resume_enables_progress_ui_unless_json_requested(self) -> None:
         arguments = SimpleNamespace(
             command="resume",

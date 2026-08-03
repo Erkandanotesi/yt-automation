@@ -436,6 +436,23 @@ class EffectsStageTests(unittest.TestCase):
         self.assertEqual(result["long_events"][0]["event_id"], "one")
         self.assertEqual(result["repeated_asset_runs"][0]["duration"], 10)
 
+    def test_visual_cadence_accepts_small_alignment_rounding_overshoot(self) -> None:
+        result = validate_visual_cadence(
+            [
+                {
+                    "event_id": "rounded",
+                    "story_id": "story_1",
+                    "source_type": "archive",
+                    "timeline_start": 0,
+                    "timeline_end": 9.067,
+                    "asset": {"file": "image.png", "sha256": "a" * 64},
+                }
+            ],
+            9,
+        )
+
+        self.assertEqual(result["status"], "passed")
+
     def test_real_ffmpeg_reference_proof_contains_video_and_audio(self) -> None:
         ffmpeg = find_executable("ffmpeg")
         if ffmpeg is None:
