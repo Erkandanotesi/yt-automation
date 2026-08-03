@@ -350,6 +350,23 @@ def collect_checks() -> list[Check]:
                 f"{storyboard_settings.maximum_image_requests_per_run}"
             ),
         )
+        try:
+            planned_story_count = int(os.getenv("TOP_N", "5"))
+        except ValueError:
+            planned_story_count = 5
+        required_image_requests = (
+            max(1, planned_story_count) * storyboard_settings.images_per_story
+        )
+        add(
+            "Full-run image request ceiling",
+            storyboard_settings.maximum_image_requests_per_run
+            >= required_image_requests,
+            (
+                f"requires up to {required_image_requests} for "
+                f"{planned_story_count} stories; configured="
+                f"{storyboard_settings.maximum_image_requests_per_run}"
+            ),
+        )
 
     try:
         media_index_settings = MediaIndexSettings.from_environment()

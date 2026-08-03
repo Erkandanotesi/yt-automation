@@ -839,6 +839,60 @@ class MediaSelectionTests(unittest.TestCase):
         self.assertTrue(window["shortlist"][0]["context_safe_fallback"])
         self.assertEqual(window["_transient_assets"], [asset])
 
+    def test_failed_online_search_salvages_grounded_local_instead_of_blank(self) -> None:
+        exact = {
+            "asset_id": "microsoft-sign",
+            "sha256": "1" * 64,
+            "filename": "microsoft-sign.jpg",
+            "local_caption": "Microsoft sign",
+            "local_score": 18.0,
+            "crop_retention_16_9": 1.0,
+            "context_grounded": True,
+            "grounding_basis": "exact_entity",
+            "score_components": {"entity_hits": ["Microsoft"]},
+        }
+        unrelated = {
+            "asset_id": "rocket",
+            "sha256": "2" * 64,
+            "filename": "rocket.jpg",
+            "local_caption": "rocket launch",
+            "local_score": 30.0,
+            "crop_retention_16_9": 1.0,
+            "context_grounded": False,
+            "grounding_basis": "broad_or_weak_match",
+            "score_components": {},
+        }
+        window = {
+            "window_id": "story_01_archive_008",
+            "text": "Microsoft's Tay chatbot was discussed.",
+            "shortlist": [unrelated, exact],
+        }
+        decision = WindowDecision(
+            window_id=window["window_id"],
+            relevance_status="images_are_irrelevant",
+            confidence=0.8,
+            selection_reason="Pexels returned no sufficiently grounded result.",
+            online_search_query="Microsoft Tay chatbot",
+            required_entity="Microsoft Tay",
+        )
+
+        with patch(
+            "media_selection_stage._create_context_safe_fallback_asset"
+        ) as blank_factory:
+            resolved = _resolve_context_safe_fallbacks(
+                17,
+                [window],
+                {window["window_id"]: decision},
+                video_usage_counts=Counter(),
+                maximum_uses_per_video=2,
+            )
+
+        blank_factory.assert_not_called()
+        self.assertEqual(
+            resolved[window["window_id"]].selected_asset_id,
+            "microsoft-sign",
+        )
+
     def test_entity_context_is_carried_into_pronoun_window(self) -> None:
         story = {
             "title": "OpenAI prepares a new developer platform",

@@ -204,7 +204,8 @@ identity because the archive hashes normalized content.
 Archive-image decisions use each window plus the complete story title and entity
 context. Exact names are kept for local matching, then broadened into truthful photo
 topics only when Pexels is needed. If no grounded image exists, the window uses a
-unique local neutral fallback instead of failing the complete production run.
+grounded local recovery image. If no usable image exists at all, it creates a
+visibly designed contextual graphic instead of a solid-color or empty frame.
 
 Only folders named exactly `Video N` participate in project numbering.
 
@@ -340,12 +341,13 @@ that initial shortlist. A cached Luna-low planner turns the complete sentence co
 of unresolved windows into precise Pexels searches, preserving visible names such as
 Google Earth and trying descriptive alternatives only when needed. Compatible windows
 are pooled so one query can supply several distinct images. If no acceptable local or
-Pexels result exists, FFmpeg creates a unique dark,
-context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
-chapter title remains visible, production continues without an API request, and no
-unrelated person, company, product, or event is implied.
+Pexels result exists, the selector salvages the strongest slightly relevant grounded
+local visual below the reuse cap. Only when no usable image exists does FFmpeg create
+a unique, visibly designed context graphic under `05_visuals/safe_fallbacks/`; solid
+blank frames are prohibited. The persistent chapter title remains visible, production
+continues without an API request, and no unrelated person, product, or event is implied.
 Fallback uniqueness is verified from the rendered file checksum. If FFmpeg color
-quantization makes two digest-derived neutral cards pixel-identical, the renderer
+quantization makes two digest-derived graphics pixel-identical, the renderer
 tries deterministic local variants until it produces distinct pixels; this collision
 cannot abort archive selection or consume another AI request.
 Legacy Commons download folders and folders named `Thumbnails` are excluded both when the media index is scanned and when

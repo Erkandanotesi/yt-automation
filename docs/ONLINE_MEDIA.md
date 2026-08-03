@@ -16,8 +16,10 @@ The production order is fixed:
    download enough distinct landscape photos for
    the unresolved windows, and save them under
    `Assets/Media/Online Retrieved/Pexels/`.
-6. If no grounded Pexels result exists, render a unique local neutral background.
-   This safe last resort never stops video production.
+6. If no grounded Pexels result exists, recover the strongest slightly relevant,
+   context-grounded local candidate that remains under the reuse cap.
+7. Only when no usable image exists at all, render a visibly designed contextual
+   technology graphic. A solid-color or empty frame is never used.
 
 The query planner receives text and metadata only; image pixels are not sent to
 OpenAI. It keeps a named company or product when that name describes something that

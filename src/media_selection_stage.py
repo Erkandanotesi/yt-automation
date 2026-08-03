@@ -1877,7 +1877,7 @@ def resolve_pexels_fallbacks(
                     selection_reason=(
                         "The current local choice is neutral, missing, adjacent to "
                         "identical pixels, or beyond the two-use cap; try the "
-                        "Pexels topic pool before rendering a neutral card."
+                        "Pexels topic pool before local recovery."
                     ),
                     online_search_query=current.online_search_query,
                     required_entity=current.required_entity,
@@ -2006,7 +2006,7 @@ def resolve_pexels_fallbacks(
     # Reserve candidates already chosen by the local/AI phase in this story.
     # Without this preview of future enforcement, a Pexels pool can allocate the
     # same checksum to an unresolved window and only discover the two-use
-    # collision later, when the neutral-card fallback is the sole remaining choice.
+    # collision later, when local recovery is the sole remaining choice.
     unresolved_ids = {window["window_id"] for window in unresolved}
     for window in windows:
         if window["window_id"] in unresolved_ids:
@@ -2248,7 +2248,7 @@ def resolve_pexels_fallbacks(
         )
     return updated, refreshed, downloads_used, searches_used
 def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict:
-    """Create a unique neutral card when no honest photographic match exists."""
+    """Create a visibly designed context graphic when no honest image exists."""
     ffmpeg = find_executable("ffmpeg")
     if ffmpeg is None:
         raise RuntimeError("FFmpeg is required for the context-safe image fallback.")
@@ -2257,7 +2257,7 @@ def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict
     variant = max(0, int(window.get("_context_safe_variant", 0)))
     variant_suffix = f"_v{variant:02d}" if variant else ""
     output = output_dir / (
-        f"{window['window_id']}_context_safe{variant_suffix}.png"
+        f"{window['window_id']}_context_graphic{variant_suffix}.png"
     )
     identity = "|".join(
         [
@@ -2268,13 +2268,28 @@ def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict
         ]
     )
     digest = sha256_text(identity)
-    # Dark, restrained, and unique per window. The persistent chapter title remains
-    # visible above it, so this does not invent a person, product, logo, or event.
+    # Dark, restrained, and unique per window. A grid and layered panels prevent
+    # this last-resort asset from appearing as a blank frame. The persistent
+    # chapter title supplies context without inventing a person, logo, or event.
     red = 14 + int(digest[0:2], 16) % 18
     green = 25 + int(digest[2:4], 16) % 22
     blue = 42 + int(digest[4:6], 16) % 30
     color = f"0x{red:02x}{green:02x}{blue:02x}"
+    accent_red = 28 + int(digest[6:8], 16) % 42
+    accent_green = 62 + int(digest[8:10], 16) % 58
+    accent_blue = 92 + int(digest[10:12], 16) % 72
+    accent = f"0x{accent_red:02x}{accent_green:02x}{accent_blue:02x}"
     if not output.is_file():
+        visual_filter = (
+            f"color=c={color}:s=1280x720:d=0.04,"
+            "drawgrid=w=80:h=80:t=1:c=white@0.10,"
+            "drawbox=x=90:y=80:w=1100:h=560:t=4:c=white@0.16,"
+            f"drawbox=x=155:y=145:w=970:h=430:t=fill:c={accent}@0.16,"
+            "drawbox=x=210:y=205:w=860:h=12:t=fill:c=white@0.22,"
+            "drawbox=x=210:y=250:w=620:h=8:t=fill:c=white@0.15,"
+            "drawbox=x=210:y=500:w=360:h=8:t=fill:c=white@0.15,"
+            "vignette=PI/5"
+        )
         completed = subprocess.run(
             [
                 str(ffmpeg),
@@ -2284,7 +2299,7 @@ def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict
                 "-f",
                 "lavfi",
                 "-i",
-                f"color=c={color}:s=1280x720:d=0.04",
+                visual_filter,
                 "-frames:v",
                 "1",
                 "-y",
@@ -2323,6 +2338,7 @@ def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict
         },
         "quality_flags": [],
         "context_safe_fallback": True,
+        "context_graphic": True,
     }
 
 
@@ -2332,8 +2348,8 @@ def _context_safe_candidate(asset: dict) -> dict:
         "workspace_relative_path": asset["workspace_relative_path"],
         "filename": asset["filename"],
         "folder": str(Path(asset["absolute_path"]).parent),
-        "local_caption": "Context-safe neutral chapter background",
-        "keywords": ["neutral", "chapter", "background"],
+        "local_caption": "Designed context-safe technology graphic",
+        "keywords": ["designed", "context", "technology", "graphic"],
         "width": asset["width"],
         "height": asset["height"],
         "aspect_ratio": asset["aspect_ratio"],
@@ -2349,6 +2365,7 @@ def _context_safe_candidate(asset: dict) -> dict:
         "distinctive_overlap_tokens": [],
         "neutral_fallback": True,
         "context_safe_fallback": True,
+        "context_graphic": True,
     }
 
 
@@ -2356,15 +2373,95 @@ def _resolve_context_safe_fallbacks(
     video_number: int,
     windows: list[dict],
     decisions: dict[str, WindowDecision],
+    *,
+    video_usage_counts: Counter[str] | None = None,
+    maximum_uses_per_video: int = 2,
 ) -> dict[str, WindowDecision]:
     updated = dict(decisions)
+    projected_usage = Counter(video_usage_counts or {})
+    previous_sha = ""
     for window in windows:
         current = updated[window["window_id"]]
         if (
             current.relevance_status != "images_are_irrelevant"
             and current.selected_asset_id
         ):
+            selected = next(
+                (
+                    candidate
+                    for candidate in window.get("shortlist", [])
+                    if candidate.get("asset_id") == current.selected_asset_id
+                ),
+                None,
+            )
+            if selected and selected.get("sha256"):
+                projected_usage[selected["sha256"]] += 1
+                previous_sha = selected["sha256"]
             continue
+
+        salvageable = [
+            candidate
+            for candidate in window.get("shortlist", [])
+            if candidate.get("sha256")
+            and not candidate.get("neutral_fallback", False)
+            and not candidate.get("context_safe_fallback", False)
+            and candidate.get("context_grounded", False)
+            and candidate.get("grounding_basis")
+            in {"exact_entity", "distinctive_context", "pexels_topic_concept"}
+            and projected_usage[candidate["sha256"]] < maximum_uses_per_video
+            and candidate["sha256"] != previous_sha
+        ]
+
+        def salvage_rank(candidate: dict) -> tuple:
+            components = candidate.get("score_components", {})
+            entity_hits = components.get("entity_hits", [])
+            multiword_entity = any(
+                len(tokenize(str(entity))) >= 2 for entity in entity_hits
+            )
+            identity = normalize_search_text(
+                " ".join(
+                    [
+                        str(candidate.get("filename", "")),
+                        str(candidate.get("local_caption", "")),
+                    ]
+                )
+            )
+            simple_brand_visual = any(
+                token in set(tokenize(identity))
+                for token in {"logo", "sign", "office", "headquarters"}
+            )
+            basis = candidate.get("grounding_basis")
+            return (
+                3 if basis == "exact_entity" else 2 if basis == "pexels_topic_concept" else 1,
+                bool(multiword_entity),
+                bool(simple_brand_visual),
+                float(candidate.get("local_score", 0)),
+                float(candidate.get("crop_retention_16_9", 0)),
+            )
+
+        salvageable.sort(key=salvage_rank, reverse=True)
+        if salvageable:
+            chosen = salvageable[0]
+            projected_usage[chosen["sha256"]] += 1
+            previous_sha = chosen["sha256"]
+            updated[window["window_id"]] = WindowDecision(
+                window_id=window["window_id"],
+                relevance_status="relevant",
+                selected_asset_id=chosen["asset_id"],
+                confidence=0.4,
+                selection_reason=(
+                    "No exact online photograph was available. Used the strongest "
+                    "slightly relevant, context-grounded local visual instead of "
+                    "showing an empty fallback frame."
+                ),
+                alternative_asset_ids=[
+                    candidate["asset_id"] for candidate in salvageable[1:4]
+                ],
+                online_search_query=current.online_search_query,
+                required_entity=current.required_entity,
+            )
+            continue
+
         asset = _create_context_safe_fallback_asset(video_number, window)
         candidate = _context_safe_candidate(asset)
         window["shortlist"] = [
@@ -2383,8 +2480,8 @@ def _resolve_context_safe_fallbacks(
             confidence=1.0,
             selection_reason=(
                 "No sufficiently grounded local or Pexels image was available. "
-                "Used a locally generated neutral chapter background rather than "
-                "showing misleading visual evidence."
+                "Used a locally generated, visibly designed context graphic rather "
+                "than an empty frame or misleading visual evidence."
             ),
             alternative_asset_ids=[],
         )
@@ -2548,7 +2645,7 @@ def _enforce_selection_constraints(
             chosen_id = fallback_asset["asset_id"]
             override_reason = (
                 "Every grounded shortlist image had reached the video reuse cap; "
-                "used a unique locally generated neutral background."
+                "used a unique locally generated context graphic."
             )
         if chosen_id != decision.selected_asset_id and not override_reason:
             override_reason = (
@@ -3103,6 +3200,8 @@ def run_media_selection(
             video_number,
             windows,
             decision_by_window,
+            video_usage_counts=video_usage_counts,
+            maximum_uses_per_video=settings.maximum_uses_per_video,
         )
         assets_by_id = {
             item["asset_id"]: item
