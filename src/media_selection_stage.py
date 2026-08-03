@@ -1870,12 +1870,17 @@ def _create_context_safe_fallback_asset(video_number: int, window: dict) -> dict
         raise RuntimeError("FFmpeg is required for the context-safe image fallback.")
     output_dir = project_dir(video_number) / "05_visuals" / "safe_fallbacks"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output = output_dir / f"{window['window_id']}_context_safe.png"
+    variant = max(0, int(window.get("_context_safe_variant", 0)))
+    variant_suffix = f"_v{variant:02d}" if variant else ""
+    output = output_dir / (
+        f"{window['window_id']}_context_safe{variant_suffix}.png"
+    )
     identity = "|".join(
         [
             window["window_id"],
             window.get("text", ""),
             " ".join(window.get("entities", [])),
+            f"variant={variant}",
         ]
     )
     digest = sha256_text(identity)
@@ -2120,17 +2125,28 @@ def _enforce_selection_constraints(
                     f"No image remains below the {maximum_uses_per_video}-use video "
                     f"cap for {window['window_id']}."
                 )
-            fallback_asset = fallback_factory(window)
-            fallback_candidate = _context_safe_candidate(fallback_asset)
-            fallback_sha = fallback_asset["sha256"]
-            if (
-                fallback_sha == previous_sha
-                or video_usage_counts[fallback_sha] >= maximum_uses_per_video
-            ):
+            fallback_asset = None
+            # FFmpeg's RGB-to-YUV conversion can quantize nearby digest-derived
+            # colors into identical pixels. Render deterministic variants until the
+            # actual file checksum, not merely its filename, is unique for this slot.
+            for variant in range(1, 65):
+                candidate_asset = fallback_factory(
+                    {**window, "_context_safe_variant": variant}
+                )
+                candidate_sha = candidate_asset["sha256"]
+                if (
+                    candidate_sha != previous_sha
+                    and video_usage_counts[candidate_sha]
+                    < maximum_uses_per_video
+                ):
+                    fallback_asset = candidate_asset
+                    break
+            if fallback_asset is None:
                 raise RuntimeError(
-                    "Context-safe fallback was not unique for "
+                    "Could not render a unique context-safe fallback after 64 variants for "
                     f"{window['window_id']}."
                 )
+            fallback_candidate = _context_safe_candidate(fallback_asset)
             window["shortlist"] = [fallback_candidate, *window["shortlist"]]
             window.setdefault("_transient_assets", []).append(fallback_asset)
             candidate_by_id[fallback_asset["asset_id"]] = fallback_candidate

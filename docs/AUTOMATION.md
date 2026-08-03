@@ -343,6 +343,10 @@ Wikimedia result exists, FFmpeg creates a unique dark,
 context-safe chapter background under `05_visuals/safe_fallbacks/`. The persistent
 chapter title remains visible, production continues without an API request, and no
 unrelated person, company, product, or event is implied.
+Fallback uniqueness is verified from the rendered file checksum. If FFmpeg color
+quantization makes two digest-derived neutral cards pixel-identical, the renderer
+tries deterministic local variants until it produces distinct pixels; this collision
+cannot abort archive selection or consume another AI request.
 With `WIKIMEDIA_BRAND_LOGOS_ENABLED=true`, the first archive window that explicitly
 speaks each detected company name prefers an exact logo already in the local archive,
 or a commercially reusable Wikimedia Commons logo when no local logo is selected.

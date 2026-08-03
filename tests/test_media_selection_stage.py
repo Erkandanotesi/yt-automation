@@ -353,6 +353,66 @@ class MediaSelectionTests(unittest.TestCase):
             self.assertEqual(asset["height"], 720)
             self.assertTrue(asset["context_safe_fallback"])
 
+    @unittest.skipUnless(find_executable("ffmpeg"), "FFmpeg is not available")
+    def test_context_safe_variant_has_distinct_rendered_pixels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 5"
+            root.mkdir()
+            window = {
+                "window_id": "story_02_archive_008",
+                "text": "A neutral fallback scene.",
+                "entities": [],
+            }
+            with patch("media_selection_stage.project_dir", return_value=root):
+                base = _create_context_safe_fallback_asset(5, window)
+                variant = _create_context_safe_fallback_asset(
+                    5,
+                    {**window, "_context_safe_variant": 1},
+                )
+
+            self.assertNotEqual(base["sha256"], variant["sha256"])
+            self.assertNotEqual(base["absolute_path"], variant["absolute_path"])
+
+    def test_enforcer_retries_after_a_fallback_checksum_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exhausted = make_asset(root, "Media/exhausted.png", ["tech"], "cleared")
+            collision = make_asset(root, "Media/collision.png", ["neutral"], "cleared")
+            unique = make_asset(root, "Media/unique.png", ["neutral"], "cleared")
+            collision["context_safe_fallback"] = True
+            unique["context_safe_fallback"] = True
+            window = {
+                "window_id": "story_02_archive_008",
+                "shortlist": [{**exhausted, "local_score": 10.0}],
+            }
+            calls: list[int] = []
+
+            def fallback_factory(value: dict) -> dict:
+                variant = int(value.get("_context_safe_variant", 0))
+                calls.append(variant)
+                return collision if variant == 1 else unique
+
+            selected = _enforce_selection_constraints(
+                [window],
+                {
+                    window["window_id"]: WindowDecision(
+                        window_id=window["window_id"],
+                        selected_asset_id=exhausted["asset_id"],
+                        confidence=0.8,
+                        selection_reason="Reviewed asset.",
+                    )
+                },
+                {exhausted["asset_id"]: exhausted},
+                Counter({exhausted["sha256"]: 2, collision["sha256"]: 2}),
+                2,
+                fallback_factory=fallback_factory,
+            )
+
+            self.assertEqual(calls, [1, 2])
+            self.assertEqual(
+                selected[0]["selected_asset"]["asset_id"], unique["asset_id"]
+            )
+
     def test_one_distinctive_context_term_is_relevant_enough(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
