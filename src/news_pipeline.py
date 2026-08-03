@@ -1384,9 +1384,26 @@ preserve attribution.
 """
         review_brief = ""
 
+    number_delivery_brief = """
+Optimize summary_en for natural ElevenLabs Turbo speech. Minimize digit-heavy
+phrasing and preserve the meaning rather than mechanically copying every numeral.
+- Prefer a rounded spoken quantity when exact precision is not essential. For
+  example, write about four thousand instead of 4,357.
+- Spell quantities as words. Write twenty-two percent, four million dollars, and
+  three gigabytes; do not write 22%, $4M, 3GB, comma-separated numerals, or K/M/B
+  number abbreviations.
+- Use about, nearly, more than, or roughly whenever rounding an exact source value.
+- Keep an exact number only when its precision materially changes the claim, such
+  as a model or software version, a legal deadline, a price, or a safety threshold.
+  Even then, use a clear speech-friendly form where possible.
+- Do not add, calculate, or infer quantities absent from SOURCE TEXT.
+These rules apply to summary_en, not to verbatim source phrases in factual_review.
+"""
+
     prompt = f"""
 {writing_brief.strip()}
 {delivery_brief.strip()}
+{number_delivery_brief.strip()}
 {review_brief.strip()}
 
 ORIGINAL TITLE:
@@ -1439,6 +1456,7 @@ skeptical, privacy-conscious, warm, legally cautious, ElevenLabs-ready style.
 directions. Do not use direct quotations or quotation marks. Rebuild
 factual_review using only verbatim phrases found in SOURCE;
 omit any review item that would require paraphrasing.
+{number_delivery_brief.strip()}
 
 VALIDATION ERROR:
 {validation_error}

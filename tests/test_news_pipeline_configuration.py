@@ -188,6 +188,18 @@ class NewsPipelineConfigurationTests(unittest.TestCase):
         self.assertIn("ORIGINAL TITLE:\nOriginal technology headline", prompt)
         self.assertIn("SOURCE:\nExample Feed", prompt)
         self.assertIn("SOURCE TEXT:\nComplete supplied article.", prompt)
+        self.assertIn(
+            "write about four thousand instead of 4,357",
+            prompt,
+        )
+        self.assertIn(
+            "do not write 22%, $4M, 3GB, comma-separated numerals",
+            prompt,
+        )
+        self.assertIn(
+            "Keep an exact number only when its precision materially changes",
+            prompt,
+        )
         self.assertNotIn("legally cautious", prompt)
         self.assertNotIn("Before returning", prompt)
         self.assertNotIn("Otherwise sound normal", prompt)
