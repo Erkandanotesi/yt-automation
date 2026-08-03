@@ -193,6 +193,18 @@ class NewsPipelineConfigurationTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
+            "Never convert a four-digit or larger statistic word-for-word",
+            prompt,
+        )
+        self.assertIn(
+            "do not turn 4,585 into four thousand five",
+            prompt,
+        )
+        self.assertIn(
+            "A value being present in\n  SOURCE TEXT is not, by itself, a reason",
+            prompt,
+        )
+        self.assertIn(
             "do not write 22%, $4M, 3GB, comma-separated numerals",
             prompt,
         )

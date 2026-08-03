@@ -1389,6 +1389,15 @@ Optimize summary_en for natural ElevenLabs Turbo speech. Minimize digit-heavy
 phrasing and preserve the meaning rather than mechanically copying every numeral.
 - Prefer a rounded spoken quantity when exact precision is not essential. For
   example, write about four thousand instead of 4,357.
+- Never convert a four-digit or larger statistic word-for-word into an equally
+  exact spoken number. For example, do not turn 4,585 into four thousand five
+  hundred eighty-five. Write about four thousand six hundred, roughly forty-six
+  hundred, or simply thousands, according to the precision the story needs.
+- Round four-digit and larger counts to a natural speaking unit by default. Exact
+  precision is allowed only when changing or rounding the value would materially
+  alter a legal threshold, price, safety limit, software/model version, vote total,
+  scientific result, or the central factual comparison. A value being present in
+  SOURCE TEXT is not, by itself, a reason to preserve every digit.
 - Spell quantities as words. Write twenty-two percent, four million dollars, and
   three gigabytes; do not write 22%, $4M, 3GB, comma-separated numerals, or K/M/B
   number abbreviations.
