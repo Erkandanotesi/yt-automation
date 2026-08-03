@@ -155,7 +155,10 @@ whole hours. For example, `24` accepts feed entries published during the precedi
 `MIN_SCORE` is the primary editorial threshold (currently `50`). If primary stories
 are rejected and fewer than `TOP_N` remain, the pipeline attempts the best lower-ranked
 RSS reserves in order; those reserves still must pass every source, duplicate, and
-factual-quality gate. A rerun restores the validated prefix of an incomplete project.
+factual-quality gate. AI-selected stories always remain above locally appended
+reserves: a reserve's recency/keyword pre-score cannot promote an item that the model
+omitted into the lead position. A rerun restores the validated prefix of an incomplete
+project.
 News ranking uses `OPENAI_NEWS_SELECTION_MODEL=gpt-5.6-luna` with
 `OPENAI_NEWS_SELECTION_REASONING_EFFORT=medium` and receives up to
 `NEWS_SELECTION_CANDIDATE_COUNT=40` candidates in its single selection request. The
@@ -170,6 +173,20 @@ Rejected sources never occupy a video slot. The news stage immediately tries the
 next ranked RSS candidate from a 15-story reserve prepared in the same ranking call.
 If the feeds still cannot supply the requested number of valid articles, the project
 is marked incomplete; broken material is never used merely to fill the quota.
+The broad Tom's Hardware feed is excluded because its mixture of benchmarks, reviews,
+shopping posts, and news was not reliable enough for the general Tech Reports queue.
+
+An editorially wrong story in an unfinished project can be replaced from that
+project's saved RSS pool without regenerating the other four summaries:
+
+```text
+.venv\Scripts\python.exe src\news_pipeline.py --video 17 --category tech --repair-existing --replace-order 1 --replacement-url "https://example.com/replacement" --confirm-ai-cost
+```
+
+The replacement must come from `aday_haberler.json` and from a feed that is still
+enabled. The command creates a recoverable project backup, invalidates stale stage
+manifests, and preserves unaffected story artifacts. Any manual separator for the
+replaced chapter must be recreated before resume.
 
 Run a provider-free live feed audit with:
 

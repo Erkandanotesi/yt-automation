@@ -264,11 +264,26 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--replace-order",
+        type=int,
+        help="Editorially replace this story order in a completed project.",
+    )
+    parser.add_argument(
+        "--replacement-url",
+        help=(
+            "Exact URL from the project's saved RSS candidate pool to use with "
+            "--replace-order. The candidate's feed must still be enabled."
+        ),
+    )
+    parser.add_argument(
         "--confirm-ai-cost",
         action="store_true",
         help="Confirm paid summary calls required by --repair-existing.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if (args.replace_order is not None or args.replacement_url) and not args.repair_existing:
+        parser.error("--replace-order/--replacement-url require --repair-existing.")
+    return args
 
 
 def configure_run(args: argparse.Namespace) -> None:
@@ -324,6 +339,8 @@ configure_run(
         top=None,
         reset=False,
         repair_existing=False,
+        replace_order=None,
+        replacement_url=None,
         confirm_ai_cost=False,
     )
 )
@@ -967,6 +984,7 @@ def save_candidates(candidates: list[dict]) -> None:
                 "index": index,
                 "title": candidate["title"],
                 "source": candidate["source"],
+                "feed_url": candidate.get("feed_url", ""),
                 "published_utc": safe_iso_datetime(candidate["published"]),
                 "url": candidate["url"],
                 "rough_score": candidate["rough_score"],
@@ -1169,7 +1187,12 @@ CANDIDATES:
         # The model may deliberately return fewer than the requested reserve count.
         # Keep the remaining RSS candidates as lower-priority local reserves so a
         # duplicate or unreadable primary does not leave an otherwise valid project
-        # one story short. All normal source, duplicate, and factual gates still run.
+        # one story short. A local pre-score must never promote an AI-omitted reserve
+        # above an AI-selected story; that previously turned a high-recency hardware
+        # benchmark into Video 17's lead story even though the model did not select it.
+        # All normal source, duplicate, and factual gates still run.
+        valid.sort(key=lambda item: item.score, reverse=True)
+        reserve_ceiling = min(99, valid[-1].score - 1) if valid else 100
         for index, candidate in enumerate(ranking_pool):
             if len(valid) >= target_count:
                 break
@@ -1180,16 +1203,21 @@ CANDIDATES:
             ) or clustered_content_reasons(candidate):
                 continue
             used_indexes.add(index)
+            reserve_score = min(
+                reserve_ceiling,
+                min(100, max(0, round(candidate["rough_score"]))),
+            )
             valid.append(
                 RankedNews(
                     index=index,
-                    score=min(100, max(0, round(candidate["rough_score"]))),
+                    score=max(0, reserve_score),
                     reason=(
                         "Local ranked reserve added because the AI returned fewer "
                         "backup candidates than requested."
                     ),
                 )
             )
+            reserve_ceiling = max(0, reserve_score - 1)
 
         return sorted(valid, key=lambda item: item.score, reverse=True)[:target_count]
 
@@ -1739,6 +1767,38 @@ def repair_existing_project() -> dict:
         canonical_url(str(record["url"])): _repair_candidate(record)
         for record in candidate_records
     }
+    forced_order = ARGS.replace_order
+    replacement_url = canonical_url(ARGS.replacement_url or "")
+    if (forced_order is None) != (not replacement_url):
+        raise ValueError(
+            "--replace-order and --replacement-url must be supplied together."
+        )
+    replacement_candidate: dict | None = None
+    if forced_order is not None:
+        if not 1 <= forced_order <= len(project_info.get("stories", [])):
+            raise ValueError("--replace-order is outside the project's story range.")
+        replacement_candidate = candidates_by_url.get(replacement_url)
+        if replacement_candidate is None:
+            raise ValueError("--replacement-url is not in aday_haberler.json.")
+        enabled_feeds = set(load_feed_urls())
+        saved_feed = str(replacement_candidate.get("feed_url", ""))
+        enabled_hosts = {
+            urlsplit(url).netloc.casefold() for url in enabled_feeds
+        }
+        replacement_host = urlsplit(replacement_url).netloc.casefold()
+        if not (
+            (saved_feed and saved_feed in enabled_feeds)
+            or (not saved_feed and replacement_host in enabled_hosts)
+        ):
+            raise ValueError(
+                "The replacement candidate's RSS feed is no longer enabled."
+            )
+        current_urls = {
+            canonical_url(str(story.get("source_url", "")))
+            for story in project_info.get("stories", [])
+        }
+        if replacement_url in current_urls:
+            raise ValueError("The replacement URL is already used in this project.")
 
     inspected: list[dict] = []
     seen_source_hashes: dict[str, int] = {}
@@ -1755,7 +1815,7 @@ def repair_existing_project() -> dict:
         source_hash = sha256_text(re.sub(r"\s+", " ", source_text).casefold())
         matches = source_matches_title(story["source_title"], source_text)
         duplicate_of = seen_source_hashes.get(source_hash)
-        if not matches or duplicate_of is not None:
+        if not matches or duplicate_of is not None or order == forced_order:
             affected_orders.append(order)
         else:
             seen_source_hashes[source_hash] = order
@@ -1786,7 +1846,11 @@ def repair_existing_project() -> dict:
         story = inspected_item["story"]
         order = int(story["order"])
         url = canonical_url(str(story["source_url"]))
-        candidate = candidates_by_url.get(url)
+        candidate = (
+            replacement_candidate
+            if order == forced_order
+            else candidates_by_url.get(url)
+        )
         if candidate is None:
             raise RuntimeError(
                 f"Saved RSS candidate is missing for story order {order}: {url}"
@@ -1794,7 +1858,11 @@ def repair_existing_project() -> dict:
         ranking = RankedNews(
             index=0,
             score=int(story["score"]),
-            reason=str(story.get("ranking_reason", "")),
+            reason=(
+                "Editorial replacement selected from the saved, enabled RSS pool."
+                if order == forced_order
+                else str(story.get("ranking_reason", ""))
+            ),
         )
         if order in affected_orders:
             article_text = extract_article_text(candidate)
@@ -1806,7 +1874,11 @@ def repair_existing_project() -> dict:
         prepared.append(
             {
                 "order": order,
-                "story_id": story["story_id"],
+                "story_id": (
+                    story_id_for(candidate)
+                    if order == forced_order
+                    else story["story_id"]
+                ),
                 "candidate": candidate,
                 "ranking": ranking,
                 "summary": summary,
@@ -1814,6 +1886,22 @@ def repair_existing_project() -> dict:
                 "old_text_path": inspected_item["text_path"],
                 "old_original_path": inspected_item["original_path"],
                 "old_validation": story.get("validation", {}),
+                "archive_record": (
+                    {}
+                    if order == forced_order
+                    else {
+                        "archive_id": story.get("news_archive_id", ""),
+                        "source_file": story.get("news_archive_source_file", ""),
+                        "content_sha256": story.get(
+                            "news_archive_content_sha256", ""
+                        ),
+                    }
+                ),
+                "duplicate_decision": (
+                    {}
+                    if order == forced_order
+                    else story.get("duplicate_check", {})
+                ),
             }
         )
 
@@ -1874,6 +1962,12 @@ def repair_existing_project() -> dict:
             if item["order"] not in affected_orders
         ],
         "backup_directory": str(backup_path),
+        "editorial_replacement": {
+            "order": forced_order,
+            "url": replacement_url,
+        }
+        if forced_order is not None
+        else {},
     }
     save_project_info(
         len(candidate_records),

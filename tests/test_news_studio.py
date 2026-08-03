@@ -17,6 +17,7 @@ from news_studio import (
     ProgressDisplay,
     ProjectLock,
     _run_subprocess,
+    _tts_complete,
     _is_network_failure,
     _preview_status,
     approve_preview,
@@ -40,6 +41,47 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_changed_story_invalidates_tts_and_preview_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 17"
+            news = root / "Haberler"
+            audio = root / "Sesler"
+            news.mkdir(parents=True)
+            audio.mkdir()
+            current_text = news / "01_story_new.txt"
+            current_text.write_text("replacement", encoding="utf-8")
+            old_audio = audio / "01_story_old.mp3"
+            old_audio.write_bytes(b"old audio")
+            (root / "project_info.json").write_text(
+                json.dumps({
+                    "stories": [{
+                        "story_id": "story_new",
+                        "text": str(current_text),
+                        "narration_sha256": sha256_file(current_text),
+                    }]
+                }),
+                encoding="utf-8",
+            )
+            (audio / "tts_info.json").write_text(
+                json.dumps({
+                    "files": [{
+                        "text_file": str(news / "01_story_old.txt"),
+                        "text_sha256": "old",
+                        "audio_file": str(old_audio),
+                        "audio_sha256": sha256_file(old_audio),
+                        "status": "cached",
+                    }]
+                }),
+                encoding="utf-8",
+            )
+            (root / "story_timing.json").write_text(
+                json.dumps({"stories": [{"story_id": "story_old"}]}),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(_tts_complete(root))
+            self.assertEqual(_preview_status(root)[0], "NOT_STARTED")
+
     def test_network_error_retries_same_stage_indefinitely_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 8"
@@ -377,12 +419,18 @@ class NewsStudioTests(unittest.TestCase):
                 json.dumps({"effects_plan_sha256": sha256_file(effects_plan)}),
                 encoding="utf-8",
             )
-            with patch("news_studio.project_dir", return_value=root):
+            with (
+                patch("news_studio.project_dir", return_value=root),
+                patch(
+                    "effects_stage.effects_status",
+                    return_value={"status": "EFFECTS_READY"},
+                ),
+            ):
                 approve_preview(6)
-            self.assertEqual(_preview_status(root)[0], "COMPLETE")
+                self.assertEqual(_preview_status(root)[0], "COMPLETE")
 
-            proof.write_bytes(b"preview-v2")
-            self.assertEqual(_preview_status(root)[0], "WAITING")
+                proof.write_bytes(b"preview-v2")
+                self.assertEqual(_preview_status(root)[0], "WAITING")
 
 
 if __name__ == "__main__":

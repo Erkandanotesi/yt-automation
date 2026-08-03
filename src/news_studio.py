@@ -26,7 +26,7 @@ from file_locations import (
     project_name,
     source_file,
 )
-from file_utils import atomic_write_json, sha256_file
+from file_utils import atomic_write_json, sha256_file, sha256_text
 from news_archive import NewsArchive
 
 
@@ -212,6 +212,19 @@ def _tts_complete(video_dir: Path) -> bool:
     files = manifest.get("files", [])
     if not stories or len(files) != len(stories):
         return False
+    files_by_text = {
+        Path(str(item.get("text_file", ""))).name: item for item in files
+    }
+    for story in stories:
+        text_path = Path(str(story.get("text", "")))
+        item = files_by_text.get(text_path.name)
+        if (
+            item is None
+            or not text_path.is_file()
+            or item.get("text_sha256")
+            != sha256_text(text_path.read_text(encoding="utf-8").strip())
+        ):
+            return False
     for item in files:
         path = Path(str(item.get("audio_file", "")))
         if item.get("status") not in {"generated", "regenerated", "cached"} or not path.is_file():
@@ -238,7 +251,9 @@ def _alignment_complete(video_dir: Path) -> bool:
     project = _read_json(video_dir / "project_info.json")
     timing = _read_json(video_dir / "story_timing.json")
     stories = timing.get("stories", [])
-    if not project.get("stories") or len(stories) != len(project["stories"]):
+    project_story_ids = [item.get("story_id") for item in project.get("stories", [])]
+    timing_story_ids = [item.get("story_id") for item in stories]
+    if not project_story_ids or timing_story_ids != project_story_ids:
         return False
     tts = _read_json(video_dir / "Sesler" / "tts_info.json")
     return all(
@@ -248,11 +263,16 @@ def _alignment_complete(video_dir: Path) -> bool:
 
 
 def _storyboard_complete(video_dir: Path) -> bool:
+    project = _read_json(video_dir / "project_info.json")
     manifest = _read_json(video_dir / "04_storyboard" / "storyboard.json")
     quality = manifest.get("quality", {})
     if quality.get("status") != "passed" or not quality.get(
         "all_images_generated_and_validated"
     ):
+        return False
+    if [item.get("story_id") for item in manifest.get("stories", [])] != [
+        item.get("story_id") for item in project.get("stories", [])
+    ]:
         return False
     images = [
         image
@@ -269,8 +289,13 @@ def _storyboard_complete(video_dir: Path) -> bool:
 
 
 def _archive_visuals_complete(video_dir: Path) -> bool:
+    project = _read_json(video_dir / "project_info.json")
     manifest = _read_json(video_dir / "05_visuals" / "media_plan.json")
     if manifest.get("quality", {}).get("status") != "passed":
+        return False
+    if [item.get("story_id") for item in manifest.get("stories", [])] != [
+        item.get("story_id") for item in project.get("stories", [])
+    ]:
         return False
     assets = [
         window.get("selected_asset", {})
@@ -284,11 +309,16 @@ def _archive_visuals_complete(video_dir: Path) -> bool:
 
 
 def _captions_complete(video_dir: Path, state: dict) -> bool:
+    project = _read_json(video_dir / "project_info.json")
     manifest = _read_json(video_dir / "06_captions" / "captions.json")
     if (
         state.get("captions", {}).get("status") != "CAPTIONS_READY"
         or manifest.get("quality", {}).get("status") != "passed"
     ):
+        return False
+    if [item.get("story_id") for item in manifest.get("stories", [])] != [
+        item.get("story_id") for item in project.get("stories", [])
+    ]:
         return False
     if not _file_matches(
         manifest.get("combined_srt_file"), manifest.get("combined_srt_sha256")
@@ -355,6 +385,20 @@ def _publish_complete(video_dir: Path, state: dict) -> bool:
 def _preview_status(video_dir: Path) -> tuple[str, str]:
     proof = video_dir / "07_effects" / "milestone6_reference_60s.mp4"
     approval_path = video_dir / "orchestration" / "preview_approval.json"
+    project = _read_json(video_dir / "project_info.json")
+    timing = _read_json(video_dir / "story_timing.json")
+    if [item.get("story_id") for item in project.get("stories", [])] != [
+        item.get("story_id") for item in timing.get("stories", [])
+    ]:
+        return "NOT_STARTED", "The review preview is stale after news changed."
+    try:
+        from effects_stage import effects_status
+
+        current_effects = effects_status(parse_video_number(video_dir.name))
+    except (ImportError, OSError, RuntimeError, ValueError):
+        current_effects = {"status": "NOT_STARTED"}
+    if current_effects.get("status") != "EFFECTS_READY":
+        return "NOT_STARTED", "The review preview is stale after timeline inputs changed."
     if not proof.is_file():
         return "NOT_STARTED", "The 60-second review preview has not been rendered."
     proof_report = _read_json(proof.with_suffix(".json"))

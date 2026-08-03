@@ -31,6 +31,7 @@ class NewsPipelineConfigurationTests(unittest.TestCase):
             "https://stratechery.com/feed/",
             "https://theverge.com/rss/tech/index.xml",
             "https://www.engadget.com/rss.xml",
+            "https://www.tomshardware.com/feeds/all",
         }
         self.assertTrue(blocked.isdisjoint(urls))
         self.assertIn(
@@ -260,6 +261,43 @@ class NewsPipelineConfigurationTests(unittest.TestCase):
         self.assertEqual(
             ai_call.call_args.kwargs["openai_reasoning_effort"], "medium"
         )
+
+    def test_local_reserve_cannot_outrank_ai_selected_story(self) -> None:
+        now = news_pipeline.datetime.now(news_pipeline.timezone.utc)
+        candidates = [
+            {
+                "title": "Recent benchmark omitted by the editor",
+                "source": "General hardware feed",
+                "published": now,
+                "rss_text": "A benchmark rather than a major news event.",
+                "rough_score": 100,
+            },
+            {
+                "title": "Major privacy change selected by the editor",
+                "source": "Technology news feed",
+                "published": now,
+                "rss_text": "A platform changed privacy controls for its users.",
+                "rough_score": 60,
+            },
+        ]
+        ai_result = news_pipeline.RankingResult(
+            selected=[
+                news_pipeline.RankedNews(
+                    index=1,
+                    score=82,
+                    reason="Material privacy news.",
+                )
+            ]
+        )
+        with (
+            patch.object(news_pipeline, "TOP_N", 1),
+            patch.object(news_pipeline, "RANKING_RESERVE", 1),
+            patch.object(news_pipeline, "structured_ai_call", return_value=ai_result),
+        ):
+            ranked = news_pipeline.rank_candidates(candidates, "Technology news")
+
+        self.assertEqual([item.index for item in ranked], [1, 0])
+        self.assertLess(ranked[1].score, ranked[0].score)
 
     def test_incomplete_project_reuses_validated_story_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
