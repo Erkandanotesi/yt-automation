@@ -367,6 +367,19 @@ def _render_complete(video_dir: Path, state: dict) -> bool:
     )
 
 
+def _render_recovery_action(video_dir: Path) -> str:
+    """Reuse a passing master when only the low-resolution preview failed QA."""
+    report = _read_json(video_dir / "08_render" / "render_report.json")
+    final = report.get("final", {})
+    final_qa = final.get("qa", {})
+    if (
+        final_qa.get("status") == "passed"
+        and _file_matches(final.get("file"), final_qa.get("sha256"))
+    ):
+        return "preview"
+    return "render"
+
+
 def _publish_complete(video_dir: Path, state: dict) -> bool:
     if state.get("publish", {}).get("status") != "PUBLISH_READY":
         return False
@@ -1255,10 +1268,17 @@ def execute_stage(
                     stage,
                     "The current preview must be approved before the final render.",
                 )
+        render_action = _render_recovery_action(video_dir)
         _run_subprocess(
             video_dir,
             stage,
-            ["render_stage.py", "--video", str(video_number), "--action", "render"],
+            [
+                "render_stage.py",
+                "--video",
+                str(video_number),
+                "--action",
+                render_action,
+            ],
             progress=progress,
         )
     elif stage == "publish":

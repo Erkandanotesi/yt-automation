@@ -1093,7 +1093,11 @@ def _render_preview(final: Path, video_dir: Path, settings: RenderSettings) -> P
             "-pix_fmt",
             "yuv420p",
             "-af",
-            "volume=-2dB,alimiter=limit=0.707:level=false",
+            # The FFmpeg 8 alimiter filter can restore level toward full scale
+            # during AAC encoding on this build. Fixed attenuation is predictable:
+            # every accepted master is already at or below -1 dB sample peak, so
+            # this leaves ample headroom for AAC overshoot in the preview.
+            "volume=-3dB",
             "-c:a",
             "aac",
             "-b:a",

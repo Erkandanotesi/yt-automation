@@ -20,6 +20,7 @@ from news_studio import (
     _tts_complete,
     _is_network_failure,
     _preview_status,
+    _render_recovery_action,
     approve_preview,
     execute_stage,
     interactive,
@@ -41,6 +42,33 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_render_recovery_reuses_passing_master_for_preview_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "Video 17"
+            render = root / "08_render"
+            render.mkdir(parents=True)
+            final = render / "Video 17_final.mp4"
+            final.write_bytes(b"passing master")
+            (render / "render_report.json").write_text(
+                json.dumps(
+                    {
+                        "final": {
+                            "file": str(final),
+                            "qa": {
+                                "status": "passed",
+                                "sha256": sha256_file(final),
+                            },
+                        },
+                        "preview": {"qa": {"status": "failed"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(_render_recovery_action(root), "preview")
+            final.write_bytes(b"changed master")
+            self.assertEqual(_render_recovery_action(root), "render")
+
     def test_changed_story_invalidates_tts_and_preview_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "Video 17"
