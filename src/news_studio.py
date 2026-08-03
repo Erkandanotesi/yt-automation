@@ -310,6 +310,16 @@ def _archive_visuals_complete(video_dir: Path) -> bool:
 
 
 def _captions_complete(video_dir: Path, state: dict) -> bool:
+    try:
+        from caption_stage import caption_status
+
+        current_status = caption_status(
+            video_number=parse_video_number(video_dir.name)
+        )
+    except (ImportError, RuntimeError, ValueError):
+        return False
+    if not current_status.get("current", False):
+        return False
     project = _read_json(video_dir / "project_info.json")
     manifest = _read_json(video_dir / "06_captions" / "captions.json")
     if (

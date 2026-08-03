@@ -19,6 +19,7 @@ from news_studio import (
     _run_subprocess,
     _tts_complete,
     _is_network_failure,
+    _captions_complete,
     _preview_status,
     _render_recovery_action,
     approve_preview,
@@ -43,6 +44,20 @@ def empty_status(root: Path) -> dict:
 
 
 class NewsStudioTests(unittest.TestCase):
+    def test_caption_completion_rejects_stale_global_timing(self) -> None:
+        with (
+            patch(
+                "caption_stage.caption_status",
+                return_value={"status": "STALE", "current": False},
+            ),
+        ):
+            self.assertFalse(
+                _captions_complete(
+                    Path("Video 18"),
+                    {"captions": {"status": "CAPTIONS_READY"}},
+                )
+            )
+
     def test_resume_menu_stops_at_first_unfinished_stage(self) -> None:
         status = {
             "next_stage": "preview_approval",

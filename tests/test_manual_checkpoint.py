@@ -167,10 +167,10 @@ class ManualCheckpointTests(unittest.TestCase):
             self.assertEqual(timing["required_separator_count"], 0)
             self.assertEqual(timing["stories"][0]["narration"]["start"], 0.0)
             self.assertEqual(timing["stories"][0]["separator"]["duration"], 0.0)
-            self.assertEqual(timing["stories"][1]["narration"]["start"], 3.0)
+            self.assertEqual(timing["stories"][1]["narration"]["start"], 4.0)
             self.assertEqual(
                 timing["stories"][1]["sentences"][0]["timeline_start"],
-                3.0,
+                4.0,
             )
 
     def test_checkpoint_opens_news_then_separator_folder(self) -> None:
@@ -288,7 +288,7 @@ class ManualCheckpointTests(unittest.TestCase):
                 first["narration"]["start"],
             )
             self.assertEqual(
-                first["narration"]["end"] + 1.0,
+                first["narration"]["end"] + 2.0,
                 second["separator"]["start"],
             )
             self.assertEqual(

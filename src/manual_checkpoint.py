@@ -549,7 +549,7 @@ def apply_validated_separators(timing: dict, validation: dict) -> dict:
         raise ValueError("Separator validation count does not match story count.")
 
     cursor = 0.0
-    inter_story_gap = float(timing.get("inter_story_gap_seconds", 1.0))
+    inter_story_gap = float(timing.get("inter_story_gap_seconds", 2.0))
     if inter_story_gap < 0:
         raise ValueError("INTER_STORY_GAP_SECONDS cannot be negative.")
     updated_stories: list[dict] = []
@@ -647,7 +647,7 @@ def apply_skipped_separators(timing: dict) -> dict:
     stories = timing.get("stories", [])
     if not stories:
         raise ValueError("Cannot skip separators for an empty story timeline.")
-    inter_story_gap = float(timing.get("inter_story_gap_seconds", 1.0))
+    inter_story_gap = float(timing.get("inter_story_gap_seconds", 2.0))
     if inter_story_gap < 0:
         raise ValueError("INTER_STORY_GAP_SECONDS cannot be negative.")
 
