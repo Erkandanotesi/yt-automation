@@ -591,7 +591,7 @@ Starting mix targets should be treated as test values, not laws:
   and cover less than 3% of the program. The paired glitch SFX is generated locally.
 - User-supplied background music is reproducibly shuffled per video. Each story gets a
   different song when enough tracks exist; long songs are trimmed, short songs repeat
-  only inside that story, and adjacent songs overlap with a one-second fade-out/fade-in.
+  only inside that story, and adjacent songs overlap with a three-second fade-out/fade-in.
   Every assignment, checksum, license, source duration, timeline window, and loop count
   is recorded.
 - `effects_video.bat` produces the plan and a real 60-second H.264/AAC reference

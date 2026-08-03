@@ -108,8 +108,8 @@ class EffectsSettings:
     music_speech_gain_db: float = -22.0
     music_separator_gain_db: float = -16.0
     music_loop_crossfade_seconds: float = 0.35
-    music_section_crossfade_seconds: float = 1.0
-    music_fade_seconds: float = 1.0
+    music_section_crossfade_seconds: float = 3.0
+    music_fade_seconds: float = 3.0
     proof_width: int = 960
     proof_height: int = 540
     editing_reference_file: Path = EDITING_REFERENCE_FILE
@@ -193,10 +193,10 @@ class EffectsSettings:
                 os.getenv("BACKGROUND_MUSIC_LOOP_CROSSFADE_SECONDS", "0.35")
             ),
             music_section_crossfade_seconds=float(
-                os.getenv("BACKGROUND_MUSIC_SECTION_CROSSFADE_SECONDS", "1.0")
+                os.getenv("BACKGROUND_MUSIC_SECTION_CROSSFADE_SECONDS", "3.0")
             ),
             music_fade_seconds=float(
-                os.getenv("BACKGROUND_MUSIC_FADE_SECONDS", "1")
+                os.getenv("BACKGROUND_MUSIC_FADE_SECONDS", "3")
             ),
             proof_width=int(os.getenv("EFFECTS_PROOF_WIDTH", "960")),
             proof_height=int(os.getenv("EFFECTS_PROOF_HEIGHT", "540")),
