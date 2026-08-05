@@ -273,11 +273,17 @@ class RenderStageTests(unittest.TestCase):
                 patch("render_stage._ffmpeg", return_value=Path("ffmpeg")),
                 patch("render_stage._run") as run,
             ):
-                _mix_audio_track(root, plan, [], RenderSettings())
+                _mix_audio_track(
+                    root,
+                    plan,
+                    [],
+                    RenderSettings(voiceover_gain_db=-6.0),
+                )
 
             command = run.call_args.args[0]
             filters = command[command.index("-filter_complex") + 1]
             self.assertEqual(command.count("-stream_loop"), 2)
+            self.assertIn("volume=0.501187,adelay=0|0[voice0]", filters)
             self.assertIn("atrim=duration=10.5", filters)
             self.assertIn("afade=t=out:st=9.5:d=1.0", filters)
             self.assertIn("adelay=9500|9500[music1]", filters)

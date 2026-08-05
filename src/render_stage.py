@@ -87,6 +87,7 @@ class RenderSettings:
     final_crf: int = 20
     preview_crf: int = 25
     preset: str = "veryfast"
+    voiceover_gain_db: float = 0.0
     separator_audio_gain_db: float = -9.0
     final_target_lufs: float = -14.0
     final_true_peak_db: float = -1.5
@@ -113,6 +114,7 @@ class RenderSettings:
             final_crf=int(os.getenv("RENDER_FINAL_CRF", "20")),
             preview_crf=int(os.getenv("RENDER_PREVIEW_CRF", "25")),
             preset=os.getenv("RENDER_PRESET", "veryfast").strip(),
+            voiceover_gain_db=float(os.getenv("VOICEOVER_GAIN_DB", "0")),
             separator_audio_gain_db=float(
                 os.getenv("SEPARATOR_AUDIO_GAIN_DB", "-9")
             ),
@@ -153,6 +155,8 @@ class RenderSettings:
             raise ValueError("Render CRF values must be between 0 and 35.")
         if not self.preset:
             raise ValueError("RENDER_PRESET cannot be empty.")
+        if not -24 <= self.voiceover_gain_db <= 12:
+            raise ValueError("VOICEOVER_GAIN_DB must be between -24 and 12 dB.")
         if self.caption_margin_vertical < 0:
             raise ValueError("CAPTION_MARGIN_VERTICAL cannot be negative.")
         if not 12 <= self.title_font_size <= 96:
@@ -978,6 +982,7 @@ def _compose_final(
     )
 
     audio_labels = []
+    voiceover_gain = _db_factor(settings.voiceover_gain_db)
     for offset, narration in enumerate(plan["narration"]):
         index = narration_start_index + offset
         delay = round(float(narration["start"]) * 1000)
@@ -986,6 +991,7 @@ def _compose_final(
         filters.append(
             f"[{index}:a]atrim=start=0:end={duration},asetpts=PTS-STARTPTS,"
             f"aresample=48000,aformat=channel_layouts=stereo,"
+            f"volume={voiceover_gain:.6f},"
             f"adelay={delay}|{delay}[{label}]"
         )
         audio_labels.append(f"[{label}]")
@@ -1330,6 +1336,7 @@ def _mix_audio_track(
         next_input_index += 1
     filters = []
     labels = []
+    voiceover_gain = _db_factor(settings.voiceover_gain_db)
     for index, narration in enumerate(plan["narration"]):
         delay = round(float(narration["start"]) * 1000)
         duration = float(narration["duration"])
@@ -1337,6 +1344,7 @@ def _mix_audio_track(
         filters.append(
             f"[{index}:a]atrim=start=0:end={duration},asetpts=PTS-STARTPTS,"
             f"aresample=48000,aformat=channel_layouts=stereo,"
+            f"volume={voiceover_gain:.6f},"
             f"adelay={delay}|{delay}[{label}]"
         )
         labels.append(f"[{label}]")

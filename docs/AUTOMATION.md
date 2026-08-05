@@ -298,11 +298,15 @@ inspected; press any key only when ready to close it.
 The image-only animated TV overlay keeps its native alpha but defaults to 18% overall
 opacity; the additional procedural noise/dropout glitch is disabled by default. The
 static TV frame remains fully opaque and the animated overlay remains disabled during
-manual separators. `paper_sound.MP3` plays at every news-section start at `-10.0 dB`.
+manual separators. The `SOUND LEVELS` block in `.env` keeps voiceover, separator,
+paper/shutter/glitch SFX, background-music ducking, and final master loudness controls
+in one place. Values ending in `_GAIN_DB` use `0` for unchanged level, negative values
+for quieter audio, and positive values for louder audio. Music and final program
+targets use LUFS; the final peak ceiling remains in dB.
 Smooth archive-image zoom now uses `EFFECTS_MOTION_SCALE=1.025` and hero-image zoom
 uses `EFFECTS_HERO_MOTION_SCALE=1.01875`, a 25% increase in zoom distance while
 retaining cubic subpixel motion.
-`shutter_sound.MP3` plays at `-10.0 dB` on every third actual image event; separators and repeated
+`shutter_sound.MP3` plays on every third actual image event; separators and repeated
 inter-story hold frames are not counted, and a shutter cue hidden by a separator moves
 to that image's first visible frame.
 
