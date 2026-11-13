@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from file_locations import resolve_portable_path  # noqa: E402
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):
@@ -222,7 +224,10 @@ def summary_files(video_dir: Path) -> list[Path]:
                 "News project is incomplete; TTS will not run until project_info.json status is complete."
             )
         story_records = project_info.get("stories", [])
-        files = [Path(item["text"]) for item in story_records]
+        files = [
+            resolve_portable_path(item["text"], video_dir=video_dir)
+            for item in story_records
+        ]
         expected = int(project_info.get("expected_count", len(files)))
         if len(files) != expected:
             raise RuntimeError(

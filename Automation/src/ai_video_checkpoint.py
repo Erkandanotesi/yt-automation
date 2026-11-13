@@ -153,9 +153,11 @@ def prepare(video_number: int, *, open_folder: bool = True) -> dict:
     existing = load_json(existing_path, "AI-video checkpoint manifest") if existing_path.is_file() else {}
     if existing.get("status") == "READY" and status(video_number).get("status") == "READY":
         if open_folder and hasattr(os, "startfile"):
-            prompt = Path(str(existing.get("combined_prompt_file", "")))
-            if prompt.is_file():
-                os.startfile(prompt)  # type: ignore[attr-defined]
+            raw_prompt = str(existing.get("combined_prompt_file", "")).strip()
+            if raw_prompt:
+                prompt = resolve_portable_path(raw_prompt, video_dir=video_dir)
+                if prompt.is_file():
+                    os.startfile(prompt)  # type: ignore[attr-defined]
             os.startfile(checkpoint_directory(video_dir))  # type: ignore[attr-defined]
         return existing
     entries = _expected_entries(video_dir)

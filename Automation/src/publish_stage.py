@@ -367,8 +367,8 @@ def _lead_story(project: dict, storyboard: dict) -> tuple[dict, dict, str, str]:
         or planned.get("highest_ranked") is True
     ):
         raise RuntimeError("Lead storyboard does not mark story 01 as the editorial lead.")
-    narration_path = Path(lead["text"])
-    source_path = Path(lead["original"])
+    narration_path = resolve_portable_path(lead["text"])
+    source_path = resolve_portable_path(lead["original"])
     narration = narration_path.read_text(encoding="utf-8").strip()
     original = source_path.read_text(encoding="utf-8").strip()
     if not narration or not original:
@@ -1513,9 +1513,9 @@ def build_publish_package(
                 lead_text_unchanged = (
                     prev_lead.get("story_id") == lead.get("story_id")
                     and prev_lead.get("narration_sha256")
-                    == sha256_file(Path(lead["text"]))
+                    == sha256_file(resolve_portable_path(lead["text"], video_dir=video_dir))
                     and prev_lead.get("original_sha256")
-                    == sha256_file(Path(lead["original"]))
+                    == sha256_file(resolve_portable_path(lead["original"], video_dir=video_dir))
                     and cached.get("model") == settings.model
                 )
             except Exception:  # noqa: BLE001
@@ -1682,7 +1682,9 @@ def build_publish_package(
             item["width"] == 1280 and item["height"] == 720
             for item in thumbnails["variants"]
         ),
-        "phone_preview_created": Path(thumbnails["phone_preview_file"]).is_file(),
+        "phone_preview_created": resolve_portable_path(
+            thumbnails["phone_preview_file"], video_dir=video_dir
+        ).is_file(),
         "fixed_thumbnail_alignment_recorded": thumbnails["alignment_template"][
             "template_id"
         ] in {
@@ -1691,8 +1693,8 @@ def build_publish_package(
             "tech_reports_ai_headline_v2",
         },
         "thumbnail_archived_with_metadata": (
-            Path(thumbnail_archive["file"]).is_file()
-            and Path(thumbnail_archive["metadata_file"]).is_file()
+            resolve_portable_path(thumbnail_archive["file"]).is_file()
+            and resolve_portable_path(thumbnail_archive["metadata_file"]).is_file()
         ),
     }
     if not all(
@@ -1718,8 +1720,12 @@ def build_publish_package(
             "source_url": lead["source_url"],
             "score": lead.get("score"),
             "ranking_reason": lead.get("ranking_reason", ""),
-            "narration_sha256": sha256_file(Path(lead["text"])),
-            "original_sha256": sha256_file(Path(lead["original"])),
+            "narration_sha256": sha256_file(
+                resolve_portable_path(lead["text"], video_dir=video_dir)
+            ),
+            "original_sha256": sha256_file(
+                resolve_portable_path(lead["original"], video_dir=video_dir)
+            ),
         },
         "title_candidates": candidates,
         "recommended_title": publishing_copy.recommended_title,
@@ -1896,8 +1902,8 @@ def update_publish_title(video_number: int, new_title: str) -> dict:
         atomic_write_json(package_path, package)
 
         archive_meta = package.get("thumbnail_asset_archive", {})
-        if isinstance(archive_meta, dict) and archive_meta.get("metadata_file"):
-            archive_meta_path = Path(str(archive_meta["metadata_file"]))
+        if isinstance(archive_meta, dict) and str(archive_meta.get("metadata_file", "")).strip():
+            archive_meta_path = resolve_portable_path(str(archive_meta["metadata_file"]))
             if archive_meta_path.is_file():
                 try:
                     metadata = load_json(archive_meta_path, "Thumbnail archive metadata")

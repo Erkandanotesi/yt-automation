@@ -762,7 +762,7 @@ def upload_from_manifest(
         manifest["metadata"]["status"]["publishAt"] = validation[
             "scheduled_publish_at"
         ]
-        video_path = Path(validation["video_file"])
+        video_path = resolve_portable_path(validation["video_file"])
         video_media = google["MediaFileUpload"](
             str(video_path),
             mimetype="video/mp4",
@@ -842,7 +842,7 @@ def upload_from_manifest(
             scheduled_publish_at=validation["scheduled_publish_at"],
         )
 
-    thumbnail_path = Path(validation["thumbnail_file"])
+    thumbnail_path = resolve_portable_path(validation["thumbnail_file"])
     thumbnail_response = _upload_thumbnail(
         youtube,
         google,

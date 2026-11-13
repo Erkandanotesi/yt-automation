@@ -36,7 +36,7 @@ from file_utils import (  # noqa: E402
     report_cli_error,
     sha256_file,
 )
-from file_locations import project_dir, project_name  # noqa: E402
+from file_locations import project_dir, project_name, resolve_portable_path  # noqa: E402
 from news_archive import NewsArchive  # noqa: E402
 from motion_filters import (  # noqa: E402
     MOTION_RENDERER_VERSION,
@@ -304,7 +304,7 @@ def _ass_escape_text(value: str) -> str:
 def _story_title_text(item: dict) -> str:
     text = str(item.get("text", "")).strip()
     if not text and item.get("text_file"):
-        path = Path(str(item["text_file"]))
+        path = resolve_portable_path(str(item["text_file"]))
         if path.is_file():
             text = path.read_text(encoding="utf-8-sig").strip()
     return _compact_story_title(text or "Tech News", int(item.get("order", 1)))
@@ -723,15 +723,17 @@ def build_render_plan(
         raise RuntimeError("Effects plan has no visual events.")
     referenced = []
     for event in visuals:
-        path = Path(event["asset"]["file"])
+        asset_dict = event["asset"]
+        path = resolve_portable_path(asset_dict["file"], video_dir=video_dir)
         if not path.is_file():
             raise FileNotFoundError(f"Visual asset is missing: {path}")
+        asset_dict["file"] = str(path)
         referenced.append({"file": str(path), "sha256": sha256_file(path)})
     separators = []
     if not timing.get("quality", {}).get("manual_separators_skipped", False):
         for story in timing.get("stories", []):
             item = story["separator"]
-            path = Path(item["file"])
+            path = resolve_portable_path(item["file"], video_dir=video_dir)
             if not path.is_file():
                 raise FileNotFoundError(f"Separator is missing: {path}")
             separators.append(
@@ -748,7 +750,7 @@ def build_render_plan(
             )
     narration = []
     for story in timing.get("stories", []):
-        path = Path(story["audio_file"])
+        path = resolve_portable_path(story["audio_file"], video_dir=video_dir)
         if not path.is_file():
             raise FileNotFoundError(f"Narration is missing: {path}")
         narration.append(
@@ -762,8 +764,9 @@ def build_render_plan(
                 "sha256": sha256_file(path),
             }
         )
-    caption_file = Path(
-        captions.get("combined_ass_file") or captions["combined_srt_file"]
+    caption_file = resolve_portable_path(
+        captions.get("combined_ass_file") or captions["combined_srt_file"],
+        video_dir=video_dir,
     )
     output_dir = video_dir / "08_render"
     title_dir = output_dir / "titles"
@@ -820,26 +823,55 @@ def build_render_plan(
             "native_video_assets",
             "generated_separator_summary_images",
         ]
-    frame_file = Path(frame["file"]) if frame.get("file") else None
-    image_tv_effect = effects.get("image_tv_effect") or {"enabled": False}
+    frame_file = (
+        resolve_portable_path(frame["file"], video_dir=video_dir)
+        if frame.get("file")
+        else None
+    )
+    if frame_file is not None:
+        frame["file"] = str(frame_file)
+    image_tv_effect = dict(effects.get("image_tv_effect") or {"enabled": False})
     if image_tv_effect.get("enabled"):
-        effect_file = Path(image_tv_effect.get("file", ""))
+        effect_file = resolve_portable_path(
+            image_tv_effect.get("file", ""),
+            video_dir=video_dir,
+        )
         if not effect_file.is_file():
             raise FileNotFoundError(f"Animated TV effect is missing: {effect_file}")
         if sha256_file(effect_file) != image_tv_effect.get("sha256"):
             raise RuntimeError("Animated TV effect changed after effects planning.")
         if image_tv_effect.get("native_alpha") is not True:
             raise RuntimeError("Animated TV effect must preserve native alpha.")
+        image_tv_effect["file"] = str(effect_file)
     music = effects.get("audio", {}).get("background_music")
-    sfx = effects.get("audio", {}).get("glitch_sfx", {})
+    if isinstance(music, dict):
+        music = dict(music)
+        if music.get("track_file"):
+            music["track_file"] = str(
+                resolve_portable_path(music["track_file"], video_dir=video_dir)
+            )
+        if music.get("tracks"):
+            resolved_tracks = []
+            for track in music["tracks"]:
+                item = dict(track)
+                if item.get("track_file"):
+                    item["track_file"] = str(
+                        resolve_portable_path(item["track_file"], video_dir=video_dir)
+                    )
+                resolved_tracks.append(item)
+            music["tracks"] = resolved_tracks
+    sfx = dict(effects.get("audio", {}).get("glitch_sfx", {}))
+    if sfx.get("file"):
+        sfx["file"] = str(resolve_portable_path(sfx["file"], video_dir=video_dir))
     timeline_sfx = effects.get("audio", {}).get("timeline_sfx", {})
     timeline_sfx_assets = timeline_sfx.get("assets", {})
     for asset_id, asset in timeline_sfx_assets.items():
-        path = Path(asset.get("file", ""))
+        path = resolve_portable_path(asset.get("file", ""), video_dir=video_dir)
         if not path.is_file():
             raise FileNotFoundError(f"Timeline SFX asset is missing ({asset_id}): {path}")
         if sha256_file(path) != asset.get("sha256"):
             raise RuntimeError(f"Timeline SFX asset changed after planning: {path}")
+        asset["file"] = str(path)
     for event in timeline_sfx.get("events", []):
         if event.get("sound") not in timeline_sfx_assets:
             raise RuntimeError(
@@ -1014,7 +1046,7 @@ def _render_visual_segment(
     maximum_scale = float(motion.get("maximum_scale", 1.0))
     command = [
         str(_ffmpeg()), "-hide_banner", "-loglevel", "error",
-        "-i", event["asset"]["file"],
+        "-i", str(resolve_portable_path(event["asset"]["file"], video_dir=output.parents[2])),
     ]
     if event.get("asset", {}).get("kind") == "video":
         # User clips are visual-only inputs. Trim deterministically to the
@@ -1300,7 +1332,7 @@ def _normalize_separators(
     directory.mkdir(parents=True, exist_ok=True)
     outputs = []
     for item in plan["separators"]:
-        source = Path(item["file"])
+        source = resolve_portable_path(item["file"], video_dir=video_dir)
         output = directory / f"{int(item['order']):02d}_separator_normalized.mp4"
         fingerprint = json_fingerprint(
             {
@@ -1459,18 +1491,19 @@ def _compose_final(
         command.extend(
             [
                 "-loop", "1", "-framerate", str(settings.fps),
-                "-t", str(plan["duration_seconds"]), "-i", frame["file"],
+                "-t", str(plan["duration_seconds"]),
+                "-i", str(resolve_portable_path(frame["file"], video_dir=video_dir)),
             ]
         )
     else:
         frame_index = -1
     narration_start_index = 1 + len(separators) + (1 if frame_index >= 0 else 0)
     for narration in plan["narration"]:
-        command.extend(["-i", narration["file"]])
+        command.extend(["-i", str(resolve_portable_path(narration["file"], video_dir=video_dir))])
     music_index = narration_start_index + len(plan["narration"])
     music = plan.get("background_music")
     if music and music.get("track_file"):
-        command.extend(["-stream_loop", "-1", "-i", music["track_file"]])
+        command.extend(["-stream_loop", "-1", "-i", str(resolve_portable_path(music["track_file"], video_dir=video_dir))])
     else:
         music_index = -1
     sfx_index = (
@@ -1480,7 +1513,7 @@ def _compose_final(
     )
     sfx = plan.get("glitch_sfx") or {}
     if sfx.get("file") and plan.get("glitch_events"):
-        command.extend(["-i", sfx["file"]])
+        command.extend(["-i", str(resolve_portable_path(sfx["file"], video_dir=video_dir))])
     else:
         sfx_index = -1
 
@@ -1519,7 +1552,7 @@ def _compose_final(
         filters.append(f"[{current}][frame]overlay=0:0:shortest=1[vframed]")
         current = "vframed"
     filters.append(
-        f"[{current}]subtitles=filename='{_filter_path(Path(plan['captions']['file']))}',"
+        f"[{current}]subtitles=filename='{_filter_path(resolve_portable_path(plan['captions']['file'], video_dir=video_dir))}',"
         "setparams=range=limited,format=yuv420p[vout]"
     )
 
@@ -1698,7 +1731,7 @@ def _compose_video_track(
     if image_tv_effect.get("enabled") and image_tv_effect.get("file"):
         effect_index = next_input_index
         command.extend(
-            ["-stream_loop", "-1", "-i", str(image_tv_effect["file"])]
+            ["-stream_loop", "-1", "-i", str(resolve_portable_path(image_tv_effect["file"], video_dir=video_dir))]
         )
         next_input_index += 1
     page_flip_events = plan.get("page_flip", {}).get("events", [])
@@ -1711,7 +1744,7 @@ def _compose_video_track(
     frame_index = next_input_index
     frame = plan.get("tv_frame") or {}
     if frame.get("file"):
-        command.extend(["-i", frame["file"]])
+        command.extend(["-i", str(resolve_portable_path(frame["file"], video_dir=video_dir))])
     else:
         frame_index = -1
     filters = ["[0:v]setpts=PTS-STARTPTS[vbase]"]
@@ -1810,8 +1843,13 @@ def _compose_video_track(
     story_titles = plan.get("story_titles", [])
     if story_titles:
         title_overlay = plan.get("story_title_overlay") or {}
-        title_ass_path = Path(str(title_overlay.get("file", "")))
-        if not title_ass_path.is_file():
+        raw_title_ass = str(title_overlay.get("file", "")).strip()
+        title_ass_path = (
+            resolve_portable_path(raw_title_ass, video_dir=video_dir)
+            if raw_title_ass
+            else Path("")
+        )
+        if not raw_title_ass or not title_ass_path.is_file():
             title_overlay = _write_story_title_ass(
                 story_titles,
                 video_dir / "08_render" / "titles" / "story_titles_paper.ass",
@@ -1831,7 +1869,7 @@ def _compose_video_track(
         next_label = f"vattribution{index}"
         filters.append(
             f"[{current}]drawtext=textfile='"
-            f"{_filter_path(Path(attribution['text_file']))}':reload=0:"
+            f"{_filter_path(resolve_portable_path(attribution['text_file'], video_dir=video_dir))}':reload=0:"
             f"fontcolor=white@0.94:fontsize={settings.attribution_font_size}:"
             "text_align=R:box=1:boxcolor=black@0.68:boxborderw=8:"
             f"x=w-text_w-{settings.attribution_margin_right + 8}:"
@@ -1840,7 +1878,7 @@ def _compose_video_track(
         )
         current = next_label
     filters.append(
-        f"[{current}]subtitles=filename='{_filter_path(Path(plan['captions']['file']))}':"
+        f"[{current}]subtitles=filename='{_filter_path(resolve_portable_path(plan['captions']['file'], video_dir=video_dir))}':"
         "force_style='Alignment=2,"
         f"MarginV={settings.caption_margin_vertical},Outline=2,Shadow=0'[vout]"
     )
@@ -1870,7 +1908,7 @@ def _mix_audio_track(
         "-filter_complex_threads", "1",
     ]
     for narration in plan["narration"]:
-        command.extend(["-i", narration["file"]])
+        command.extend(["-i", str(resolve_portable_path(narration["file"], video_dir=video_dir))])
     separator_start_index = len(plan["narration"])
     for path in separators:
         command.extend(["-i", str(path)])
@@ -1882,7 +1920,7 @@ def _mix_audio_track(
         if playlist:
             for track in playlist:
                 music_inputs.append((next_input_index, track))
-                command.extend(["-stream_loop", "-1", "-i", track["track_file"]])
+                command.extend(["-stream_loop", "-1", "-i", str(resolve_portable_path(track["track_file"], video_dir=video_dir))])
                 next_input_index += 1
         elif music.get("track_file"):
             # Backward compatibility for effects plans made before per-story music.
@@ -1893,13 +1931,13 @@ def _mix_audio_track(
                 "fade_in_seconds": music["fade_in_seconds"],
                 "fade_out_seconds": music["fade_out_seconds"],
             }))
-            command.extend(["-stream_loop", "-1", "-i", music["track_file"]])
+            command.extend(["-stream_loop", "-1", "-i", str(resolve_portable_path(music["track_file"], video_dir=video_dir))])
             next_input_index += 1
     sfx = plan.get("glitch_sfx") or {}
     sfx_index = -1
     if sfx.get("file") and plan.get("glitch_events"):
         sfx_index = next_input_index
-        command.extend(["-i", sfx["file"]])
+        command.extend(["-i", str(resolve_portable_path(sfx["file"], video_dir=video_dir))])
         next_input_index += 1
     timeline_sfx = plan.get("timeline_sfx") or {}
     timeline_sfx_indices: dict[str, int] = {}
@@ -1910,7 +1948,7 @@ def _mix_audio_track(
         ):
             continue
         timeline_sfx_indices[asset_id] = next_input_index
-        command.extend(["-i", asset["file"]])
+        command.extend(["-i", str(resolve_portable_path(asset["file"], video_dir=video_dir))])
         next_input_index += 1
     filters = []
     labels = []
@@ -2345,7 +2383,7 @@ def finalize_passing_render(
     for label in ("final", "preview"):
         item = report.get(label, {})
         qa = item.get("qa", {})
-        path = Path(str(item.get("file", "")))
+        path = resolve_portable_path(str(item.get("file", "")), video_dir=video_dir)
         if (
             qa.get("status") != "passed"
             or not path.is_file()

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from file_locations import resolve_portable_path
 from file_utils import atomic_write_json, atomic_write_text, json_fingerprint, sha256_file
 
 
@@ -54,7 +55,12 @@ def _ordered_stories(project: dict) -> list[dict]:
             ("text", "narration_sha256"),
             ("original", "source_sha256"),
         ):
-            path = Path(str(story.get(path_key, "")))
+            raw_path = str(story.get(path_key, "")).strip()
+            if not raw_path:
+                raise RuntimeError(
+                    f"Story artifact path is missing for {path_key} before lead selection."
+                )
+            path = resolve_portable_path(raw_path)
             expected_hash = str(story.get(hash_key, ""))
             if not path.is_file() or not expected_hash or sha256_file(path) != expected_hash:
                 raise RuntimeError(
@@ -154,7 +160,9 @@ def finalize_lead_story(
         story["order"] = order
 
     combined = "\n\n".join(
-        Path(str(story["text"])).read_text(encoding="utf-8").strip()
+        resolve_portable_path(str(story["text"]), video_dir=video_dir)
+        .read_text(encoding="utf-8")
+        .strip()
         for story in reordered
     ).strip()
     atomic_write_text(video_dir / "video_script.txt", combined + "\n")

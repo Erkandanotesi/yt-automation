@@ -476,9 +476,16 @@ class NewsArchive:
         items: list[dict] = []
         used_urls: set[str] = set()
         for story in sorted(project.get("stories", []), key=lambda item: int(item["order"])):
-            source_path = Path(str(story.get("original", "")))
-            narration_path = Path(str(story.get("text", "")))
-            if not source_path.is_file() or not narration_path.is_file():
+            raw_source = str(story.get("original", "")).strip()
+            raw_narration = str(story.get("text", "")).strip()
+            source_path = resolve_portable_path(raw_source) if raw_source else Path("")
+            narration_path = resolve_portable_path(raw_narration) if raw_narration else Path("")
+            if (
+                not raw_source
+                or not raw_narration
+                or not source_path.is_file()
+                or not narration_path.is_file()
+            ):
                 raise RuntimeError(f"Completed project story files are missing: {story.get('story_id')}")
             result = self.inspect_and_store(
                 canonical_url=str(story.get("source_url", "")),
@@ -621,8 +628,13 @@ class NewsArchive:
             except (OSError, json.JSONDecodeError):
                 continue
             for story in manifest.get("stories", []):
-                source_path = Path(str(story.get("original", "")))
-                summary_path = Path(str(story.get("text", "")))
+                raw_source = str(story.get("original", "")).strip()
+                raw_summary = str(story.get("text", "")).strip()
+                if not raw_source or not raw_summary:
+                    skipped += 1
+                    continue
+                source_path = resolve_portable_path(raw_source, video_dir=project_dir)
+                summary_path = resolve_portable_path(raw_summary, video_dir=project_dir)
                 if not source_path.is_file() or not summary_path.is_file():
                     skipped += 1
                     continue

@@ -206,9 +206,9 @@ def generate_voiceover_preview(video_number: int) -> dict[str, Any]:
         raise RuntimeError("Voiceover synthesis produced no audio files.")
 
     staged_audio_paths = [
-        Path(str(item["audio_file"]))
+        resolve_portable_path(str(item["audio_file"]))
         for item in staged_files
-        if isinstance(item, dict) and item.get("audio_file")
+        if isinstance(item, dict) and str(item.get("audio_file", "")).strip()
     ]
 
     _progress("Combining story voiceovers into preview audio...")
@@ -714,9 +714,11 @@ def save_voiceover_reset(video_number: int) -> dict[str, Any]:
     _progress(f"Saving new voiceover files for {project_name(video_number)}...")
     updated_entries: list[dict[str, Any]] = []
     for item in staged_files:
-        staged_audio = Path(str(item["audio_file"]))
-        staged_alignment = Path(str(item["alignment_file"]))
-        text_path = Path(str(item["text_file"]))
+        staged_audio = resolve_portable_path(str(item["audio_file"]), video_dir=video_dir)
+        staged_alignment = resolve_portable_path(
+            str(item["alignment_file"]), video_dir=video_dir
+        )
+        text_path = resolve_portable_path(str(item["text_file"]), video_dir=video_dir)
         target_audio = audio_dir / f"{text_path.stem}.mp3"
         target_alignment = alignment_dir / f"{text_path.stem}.alignment.json"
         text_name = text_path.name
@@ -743,9 +745,11 @@ def save_voiceover_reset(video_number: int) -> dict[str, Any]:
         updated_entries.append(entry)
 
     combined_output = audio_dir / f"{project_name(video_number)}_voiceover.mp3"
-    staged_preview = Path(str(staged.get("preview_file", "")))
-    if staged_preview.is_file():
-        shutil.copy2(staged_preview, combined_output)
+    raw_preview = str(staged.get("preview_file", "")).strip()
+    if raw_preview:
+        staged_preview = resolve_portable_path(raw_preview, video_dir=video_dir)
+        if staged_preview.is_file():
+            shutil.copy2(staged_preview, combined_output)
 
     tts_info = {
         "schema_version": 2,

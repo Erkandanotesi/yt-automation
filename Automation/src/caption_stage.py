@@ -457,7 +457,10 @@ def build_story_cues(
     if alignment.get("quality", {}).get("status") != "passed":
         raise RuntimeError(f"Alignment quality failed for {story.get('story_id')}.")
     canonical_text = str(alignment.get("canonical_text", ""))
-    text_path = Path(story.get("text_file", ""))
+    raw_text = str(story.get("text_file", "")).strip()
+    if not raw_text:
+        raise FileNotFoundError("Canonical narration path is missing from timing metadata.")
+    text_path = resolve_portable_path(raw_text)
     if not text_path.is_file():
         raise FileNotFoundError(f"Canonical narration not found: {text_path}")
     approved_text = text_path.read_text(encoding="utf-8").strip()

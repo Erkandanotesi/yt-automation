@@ -679,7 +679,10 @@ def _apply_ai_video_overrides(video_dir: Path, storyboard: dict) -> tuple[dict, 
     by_id = {item["story_id"]: item for item in entries}
     for story in overridden.get("stories", []):
         entry = by_id[story["story_id"]]
-        clip = Path(str(entry.get("file", "")))
+        raw_clip = str(entry.get("file", "")).strip()
+        if not raw_clip:
+            raise RuntimeError(f"AI-generated story video path is missing for {story['story_id']}")
+        clip = resolve_portable_path(raw_clip, video_dir=video_dir)
         expected_sha = str(entry.get("sha256", ""))
         if not clip.is_file() or not expected_sha or sha256_file(clip) != expected_sha:
             raise RuntimeError(f"AI-generated story video is missing or changed: {clip}")
@@ -3633,9 +3636,16 @@ def _load_visual_director_plan(
     force: bool,
 ) -> tuple[dict, str]:
     """Plan scene types from the approved article and the existing timed windows."""
-    text_path = Path(str(story.get("text_file", ""))).expanduser()
+    raw_text = str(story.get("text_file", "")).strip()
+    if not raw_text:
+        raise FileNotFoundError(
+            f"Visual director news text path missing for {story.get('story_id')}"
+        )
+    text_path = Path(raw_text).expanduser()
     if not text_path.is_absolute():
         text_path = video_dir / text_path
+    else:
+        text_path = resolve_portable_path(text_path, video_dir=video_dir)
     if not text_path.is_file():
         raise FileNotFoundError(
             f"Visual director news text not found for {story.get('story_id')}: {text_path}"
@@ -4113,9 +4123,11 @@ def run_media_selection(
         for image in storyboard_story.get("images", []):
             checksum = str(image.get("generation", {}).get("file_sha256", ""))
             if not checksum:
-                image_path = Path(str(image.get("output_file", "")))
-                if image_path.is_file():
-                    checksum = sha256_file(image_path)
+                raw_output = str(image.get("output_file", "")).strip()
+                if raw_output:
+                    image_path = resolve_portable_path(raw_output)
+                    if image_path.is_file():
+                        checksum = sha256_file(image_path)
             if checksum:
                 video_usage_counts[checksum] += 1
                 current_hero_owners.setdefault(checksum, set()).add(

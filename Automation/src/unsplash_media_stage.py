@@ -27,7 +27,13 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 SCRIPT_DIR = SOURCE_ROOT.parent
 load_dotenv(SCRIPT_DIR / ".env")
 
-from file_locations import ASSETS_ROOT, MEDIA_INDEX_ROOT, WORKSPACE_ROOT, project_dir  # noqa: E402
+from file_locations import (  # noqa: E402
+    ASSETS_ROOT,
+    MEDIA_INDEX_ROOT,
+    WORKSPACE_ROOT,
+    project_dir,
+    resolve_portable_path,
+)
 from file_utils import (  # noqa: E402
     atomic_write_bytes,
     atomic_write_json,
@@ -640,7 +646,7 @@ def _record_cached_usage(
     context: str,
 ) -> dict:
     """Add new grounding provenance without changing the downloaded bytes."""
-    sidecar_path = Path(result["sidecar"])
+    sidecar_path = resolve_portable_path(result["sidecar"])
     try:
         sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -670,7 +676,7 @@ def _record_cached_usage(
         sidecar["query_history"] = history
         atomic_write_json(sidecar_path, sidecar)
     return _download_result(
-        Path(result["file"]),
+        resolve_portable_path(result["file"]),
         sidecar_path,
         sidecar,
         cached=True,

@@ -38,7 +38,13 @@ from file_utils import (  # noqa: E402
     sha256_file,
     sha256_text,
 )
-from file_locations import ASSETS_ROOT, PROJECTS_ROOT, project_dir, project_name  # noqa: E402
+from file_locations import (  # noqa: E402
+    ASSETS_ROOT,
+    PROJECTS_ROOT,
+    project_dir,
+    project_name,
+    resolve_portable_path,
+)
 from separator_policy import require_separator_checkpoint  # noqa: E402
 from tooling import find_executable  # noqa: E402
 
@@ -259,7 +265,10 @@ def archive_approved_images(
         for image in story.get("images", []):
             if image.get("validation", {}).get("status") != "passed":
                 continue
-            source = Path(image.get("output_file", ""))
+            raw_output = str(image.get("output_file", "")).strip()
+            if not raw_output:
+                continue
+            source = resolve_portable_path(raw_output)
             if not source.is_file():
                 continue
             destination = settings.archive_directory / _descriptive_archive_name(
@@ -372,8 +381,8 @@ def load_story_contexts(
         timed = timing_by_id.get(story_id)
         if timed is None:
             raise RuntimeError(f"Timing is missing for story {story_id}.")
-        narration_path = Path(story["text"])
-        source_path = Path(story["original"])
+        narration_path = resolve_portable_path(story["text"], video_dir=video_dir)
+        source_path = resolve_portable_path(story["original"], video_dir=video_dir)
         if not narration_path.is_file() or not source_path.is_file():
             raise FileNotFoundError(
                 f"Narration/source pair is incomplete for story {story_id}."
@@ -1355,10 +1364,15 @@ def image_input_fingerprint(image: dict, settings: StoryboardSettings) -> str:
 def _cached_image_is_current(
     image: dict,
     settings: StoryboardSettings,
+    *,
+    video_dir: Path | None = None,
 ) -> bool:
     generation = image.get("generation", {})
     validation = image.get("validation", {})
-    path = Path(image.get("output_file", ""))
+    raw_output = str(image.get("output_file", "")).strip()
+    if not raw_output:
+        return False
+    path = resolve_portable_path(raw_output, video_dir=video_dir)
     if (
         generation.get("input_fingerprint")
         != image_input_fingerprint(image, settings)
@@ -1416,7 +1430,7 @@ def generate_storyboard_images(
         1
         for story in selected_stories
         for image in story["images"]
-        if force or not _cached_image_is_current(image, settings)
+        if force or not _cached_image_is_current(image, settings, video_dir=video_dir)
     )
     if needed > request_limit:
         raise RuntimeError(
@@ -1430,9 +1444,15 @@ def generate_storyboard_images(
         for image in story.get("images", []):
             validation = image.get("validation", {})
             if validation.get("status") == "passed":
+                raw_output = str(image.get("output_file", "")).strip()
+                resolved_label = (
+                    str(resolve_portable_path(raw_output, video_dir=video_dir))
+                    if raw_output
+                    else "unknown"
+                )
                 approved_hashes.append(
                     (
-                        image.get("output_file", "unknown"),
+                        resolved_label,
                         validation.get("perceptual_dhash", ""),
                     )
                 )
@@ -1441,11 +1461,15 @@ def generate_storyboard_images(
     completed_requests = 0
     for story in selected_stories:
         for image in story["images"]:
-            if not force and _cached_image_is_current(image, settings):
+            if not force and _cached_image_is_current(
+                image, settings, video_dir=video_dir
+            ):
                 image["generation"]["status"] = "cached"
                 continue
             prompt = image["prompt"]
-            output_path = Path(image["output_file"])
+            output_path = resolve_portable_path(
+                image["output_file"], video_dir=video_dir
+            )
             fingerprint = image_input_fingerprint(image, settings)
             comparison_hashes = [
                 (label, value)
@@ -1532,7 +1556,10 @@ def generate_storyboard_images(
         len(story.get("images", [])) == settings.images_per_story
         and all(
             image.get("validation", {}).get("status") == "passed"
-            and Path(image["output_file"]).is_file()
+            and bool(str(image.get("output_file", "")).strip())
+            and resolve_portable_path(
+                str(image["output_file"]), video_dir=video_dir
+            ).is_file()
             for image in story["images"]
         )
         for story in stories
@@ -1706,7 +1733,10 @@ def render_storyboard_proof(
         )
     if len(images) != settings.images_per_story or not all(
         image.get("validation", {}).get("status") == "passed"
-        and Path(image.get("output_file", "")).is_file()
+        and bool(str(image.get("output_file", "")).strip())
+        and resolve_portable_path(
+            str(image["output_file"]), video_dir=video_dir
+        ).is_file()
         for image in images
     ):
         raise RuntimeError(
@@ -1725,9 +1755,24 @@ def render_storyboard_proof(
     )
     if timed_story is None:
         raise RuntimeError("Story timing is missing for the proof.")
-    separator_path = Path(timed_story["separator"].get("file", ""))
-    narration_path = Path(timed_story.get("audio_file", ""))
-    if not separator_path.is_file() or not narration_path.is_file():
+    raw_separator = str(timed_story["separator"].get("file", "")).strip()
+    separator_path = (
+        resolve_portable_path(raw_separator, video_dir=video_dir)
+        if raw_separator
+        else Path("")
+    )
+    raw_narration = str(timed_story.get("audio_file", "")).strip()
+    narration_path = (
+        resolve_portable_path(raw_narration, video_dir=video_dir)
+        if raw_narration
+        else Path("")
+    )
+    if (
+        not raw_separator
+        or not separator_path.is_file()
+        or not raw_narration
+        or not narration_path.is_file()
+    ):
         raise FileNotFoundError("Proof separator or narration audio is missing.")
 
     ffmpeg = find_executable("ffmpeg")

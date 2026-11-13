@@ -28,7 +28,12 @@ SOURCE_ROOT = Path(__file__).resolve().parent
 SCRIPT_DIR = SOURCE_ROOT.parent
 load_dotenv(SCRIPT_DIR / ".env")
 
-from file_locations import ASSETS_ROOT, WORKSPACE_ROOT, project_dir  # noqa: E402
+from file_locations import (  # noqa: E402
+    ASSETS_ROOT,
+    WORKSPACE_ROOT,
+    project_dir,
+    resolve_portable_path,
+)
 from file_utils import atomic_write_json, sha256_file  # noqa: E402
 from media_index import normalize_search_text  # noqa: E402
 from provider_rate_limits import record_observation  # noqa: E402
@@ -697,7 +702,7 @@ def _stream_download(url: str, temporary: Path, settings: StockVideoSettings) ->
 
 
 def _record_cached_usage(result: dict, *, query: str, context: str) -> dict:
-    sidecar_path = Path(result["sidecar"])
+    sidecar_path = resolve_portable_path(result["sidecar"])
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     history = sidecar.get("query_history", [])
     if not isinstance(history, list):
@@ -715,7 +720,12 @@ def _record_cached_usage(result: dict, *, query: str, context: str) -> dict:
         history.append({"query": query, "context": context})
         sidecar["query_history"] = history
         atomic_write_json(sidecar_path, sidecar)
-    return _download_result(Path(result["file"]), sidecar_path, sidecar, cached=True)
+    return _download_result(
+        resolve_portable_path(result["file"]),
+        sidecar_path,
+        sidecar,
+        cached=True,
+    )
 
 
 def download_stock_video(

@@ -49,6 +49,7 @@ from file_locations import (  # noqa: E402 - .env must be loaded first
     AUTOMATION_ROOT,
     project_dir,
     project_name,
+    resolve_portable_path,
 )
 
 def env_bool(name: str, default: bool) -> bool:
@@ -1083,7 +1084,10 @@ def summary_files(video_dir: Path) -> list[Path]:
                 "project_info.json status is complete."
             )
         story_records = project_info.get("stories", [])
-        files = [Path(item["text"]) for item in story_records]
+        files = [
+            resolve_portable_path(item["text"], video_dir=news_dir.parent)
+            for item in story_records
+        ]
         expected = int(project_info.get("expected_count", len(files)))
         if len(files) != expected:
             raise RuntimeError(

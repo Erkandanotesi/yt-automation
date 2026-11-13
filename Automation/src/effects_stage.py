@@ -1157,12 +1157,12 @@ def _music_plan(
     }
 
 
-def _separator_events(timing: dict) -> list[dict]:
+def _separator_events(timing: dict, video_dir: Path | None = None) -> list[dict]:
     if timing.get("quality", {}).get("manual_separators_skipped", False):
         return []
     events = []
     for story in timing.get("stories", []):
-        path = Path(story["separator"]["file"])
+        path = resolve_portable_path(story["separator"]["file"], video_dir=video_dir)
         if not path.is_file():
             raise FileNotFoundError(f"Validated separator is missing: {path}")
         events.append({
@@ -1177,19 +1177,22 @@ def _separator_events(timing: dict) -> list[dict]:
     return events
 
 
-def _narration_events(timing: dict) -> list[dict]:
-    return [
-        {
-            "story_id": story["story_id"],
-            "story_order": int(story["order"]),
-            "file": story["audio_file"],
-            "sha256": sha256_file(Path(story["audio_file"])),
-            "start": round(float(story["narration"]["start"]), 6),
-            "end": round(float(story["narration"]["end"]), 6),
-            "duration": round(float(story["narration"]["duration"]), 6),
-        }
-        for story in timing.get("stories", [])
-    ]
+def _narration_events(timing: dict, video_dir: Path | None = None) -> list[dict]:
+    events = []
+    for story in timing.get("stories", []):
+        audio_path = resolve_portable_path(story["audio_file"], video_dir=video_dir)
+        events.append(
+            {
+                "story_id": story["story_id"],
+                "story_order": int(story["order"]),
+                "file": str(audio_path),
+                "sha256": sha256_file(audio_path),
+                "start": round(float(story["narration"]["start"]), 6),
+                "end": round(float(story["narration"]["end"]), 6),
+                "duration": round(float(story["narration"]["duration"]), 6),
+            }
+        )
+    return events
 
 
 def _input_fingerprint(
@@ -1424,9 +1427,9 @@ def render_reference_proof(
     if captions_file is not None:
         inputs.append(captions_file)
     for overlay in [*(story_titles or []), *(source_attributions or [])]:
-        text_file = Path(str(overlay.get("text_file", "")))
-        if text_file:
-            inputs.append(text_file)
+        raw_text_file = str(overlay.get("text_file", "")).strip()
+        if raw_text_file:
+            inputs.append(resolve_portable_path(raw_text_file))
     for path in inputs:
         if not path.is_file():
             raise FileNotFoundError(f"Reference proof input is missing: {path}")
@@ -1690,7 +1693,7 @@ def render_reference_proof(
         next_label = f"vattribution{index}"
         filters.append(
             f"[{current_video}]drawtext=textfile='"
-            f"{_ffmpeg_filter_path(Path(attribution['text_file']))}':reload=0:"
+            f"{_ffmpeg_filter_path(resolve_portable_path(attribution['text_file']))}':reload=0:"
             f"fontcolor=white@0.94:fontsize={attribution_font_size}:"
             "text_align=R:box=1:boxcolor=black@0.68:"
             f"boxborderw={attribution_border}:"
@@ -1978,31 +1981,36 @@ def render_project_reference_proof(
             )
         if end <= start + 0.001:
             continue
-        reference_images.append(Path(event["asset"]["file"]))
+        reference_images.append(resolve_portable_path(event["asset"]["file"], video_dir=video_dir))
         image_durations.append(end - start)
         visual_kinds.append(str(event.get("asset", {}).get("kind", "image")))
         visual_source_types.append(str(event.get("source_type", "archive")))
         cursor = end
     if cursor < proof_duration - 0.03:
         raise RuntimeError("Reference proof visual timeline does not cover 60 seconds.")
-    narration_file = Path(stories[0]["audio_file"])
+    narration_file = resolve_portable_path(stories[0]["audio_file"], video_dir=video_dir)
     first_separator = stories[0].get("separator") or {}
-    separator_file = Path(first_separator["file"]) if first_separator.get("file") else None
+    separator_file = (
+        resolve_portable_path(first_separator["file"], video_dir=video_dir)
+        if first_separator.get("file")
+        else None
+    )
     separator_duration = first_separator.get("duration")
     generated = ensure_default_audio_assets(settings)
     music_plan = effects_plan.get("audio", {}).get("background_music", {})
     proof_tracks = music_plan.get("tracks") or []
     if proof_tracks:
-        music_file = Path(proof_tracks[0]["track_file"])
+        music_file = resolve_portable_path(proof_tracks[0]["track_file"], video_dir=video_dir)
     else:
         music_file, _ = select_music_track(settings)
     captions_manifest = load_json(
         video_dir / "06_captions" / "captions.json",
         "Caption manifest",
     )
-    captions_file = Path(
+    captions_file = resolve_portable_path(
         captions_manifest.get("combined_ass_file")
-        or captions_manifest["combined_srt_file"]
+        or captions_manifest["combined_srt_file"],
+        video_dir=video_dir,
     )
     from render_stage import _compact_source_attribution, _compact_story_title
 
@@ -2173,8 +2181,9 @@ def build_effects_plan(
     if glitch_coverage > 0.03:
         raise RuntimeError("Glitch coverage exceeds the 3% readability cap.")
     use_ass_captions = bool(captions.get("combined_ass_file"))
-    captions_file = Path(
-        captions.get("combined_ass_file") or captions["combined_srt_file"]
+    captions_file = resolve_portable_path(
+        captions.get("combined_ass_file") or captions["combined_srt_file"],
+        video_dir=video_dir,
     )
     expected_caption_sha = captions.get(
         "combined_ass_sha256" if use_ass_captions else "combined_srt_sha256",
@@ -2185,8 +2194,8 @@ def build_effects_plan(
         or sha256_file(captions_file) != expected_caption_sha
     ):
         raise RuntimeError("Caption file is missing or changed after caption planning.")
-    separators = _separator_events(timing)
-    narrations = _narration_events(timing)
+    separators = _separator_events(timing, video_dir=video_dir)
+    narrations = _narration_events(timing, video_dir=video_dir)
     plan = {
         "schema_version": EFFECTS_SCHEMA_VERSION,
         "video_number": video_number,

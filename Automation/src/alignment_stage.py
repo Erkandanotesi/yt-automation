@@ -40,7 +40,7 @@ from file_utils import (  # noqa: E402
     sha256_file,
     sha256_text,
 )
-from file_locations import project_dir, project_name  # noqa: E402
+from file_locations import project_dir, project_name, resolve_portable_path  # noqa: E402
 from tooling import find_executable  # noqa: E402
 
 
@@ -104,11 +104,11 @@ def load_project_records(video_dir: Path) -> tuple[dict, dict, list[dict]]:
 
     stories: list[dict] = []
     for story in project_info.get("stories", []):
-        text_path = Path(story["text"])
+        text_path = resolve_portable_path(story["text"], video_dir=video_dir)
         tts_entry = tts_by_text.get(text_path.name)
         if tts_entry is None:
             raise RuntimeError(f"TTS metadata is missing for {text_path.name}.")
-        audio_path = Path(tts_entry["audio_file"])
+        audio_path = resolve_portable_path(tts_entry["audio_file"], video_dir=video_dir)
         if not text_path.is_file() or not audio_path.is_file():
             raise FileNotFoundError(
                 f"Story text/audio pair is incomplete: {text_path}, {audio_path}"
@@ -494,7 +494,9 @@ def render_diagnostic(video_dir: Path, timing: dict, story_number: int) -> Path:
         raise RuntimeError("FFmpeg is required for the timing diagnostic.")
 
     story = timing["stories"][story_number - 1]
-    alignment_dir = Path(story["alignment_file"]).parent
+    alignment_dir = resolve_portable_path(
+        story["alignment_file"], video_dir=video_dir
+    ).parent
     ass_path = alignment_dir / f"{story_number:02d}_timing_diagnostic.ass"
     output_path = video_dir / f"timing_diagnostic_story_{story_number:02d}.mp4"
     atomic_write_text(ass_path, diagnostic_ass(story))

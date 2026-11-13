@@ -30,7 +30,7 @@ from file_utils import (  # noqa: E402
     report_cli_error,
     sha256_file,
 )
-from file_locations import project_dir, project_name  # noqa: E402
+from file_locations import project_dir, project_name, resolve_portable_path  # noqa: E402
 from tooling import find_executable  # noqa: E402
 
 
@@ -201,9 +201,12 @@ def write_combined_original_news(video_dir: Path, timing: dict) -> Path:
         project_story = project_stories.get(str(story.get("story_id", "")), {})
         original_value = str(project_story.get("original", "")).strip()
         if original_value:
-            original_path = Path(original_value)
+            original_path = resolve_portable_path(original_value, video_dir=video_dir)
         else:
-            text_path = Path(str(story.get("text_file", "")))
+            raw_text = str(story.get("text_file", "")).strip()
+            if not raw_text:
+                raise RuntimeError("Missing story text_file path for combined news export.")
+            text_path = resolve_portable_path(raw_text, video_dir=video_dir)
             original_path = text_path.with_name(f"{text_path.stem}-orijinal.txt")
         if not original_path.is_file():
             raise FileNotFoundError(
@@ -235,8 +238,8 @@ def checkpoint_input_fingerprint(
 ) -> str:
     stories = []
     for story in timing.get("stories", []):
-        audio_path = Path(story["audio_file"])
-        alignment_path = Path(story["alignment_file"])
+        audio_path = resolve_portable_path(story["audio_file"])
+        alignment_path = resolve_portable_path(story["alignment_file"])
         stories.append(
             {
                 "order": story["order"],
@@ -282,7 +285,10 @@ def ready_files_are_current(stage: dict) -> bool:
     if not validated:
         return False
     for item in validated:
-        path = Path(item.get("path", ""))
+        raw_path = str(item.get("path", "")).strip()
+        if not raw_path:
+            return False
+        path = resolve_portable_path(raw_path)
         expected = item.get("sha256", "")
         if not path.is_file() or not expected:
             return False
@@ -385,8 +391,8 @@ def open_checkpoint_folders(
         return []
     open_function = opener or _open_directory
     paths = [
-        Path(stage["combined_news_file"]),
-        Path(stage["separator_directory"]),
+        resolve_portable_path(stage["combined_news_file"]),
+        resolve_portable_path(stage["separator_directory"]),
     ]
     opened: list[Path] = []
     for path in paths:

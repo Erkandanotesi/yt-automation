@@ -39,6 +39,7 @@ from content_validation import (
     validate_narration,
     word_count,
 )
+from file_locations import resolve_portable_path
 from file_utils import (
     atomic_write_json,
     atomic_write_text,
@@ -1878,8 +1879,14 @@ def load_incomplete_created_items(candidates: list[dict]) -> list[dict]:
         order = int(story["order"])
         if order != len(restored) + 1:
             break
-        text_path = Path(str(story.get("text", "")))
-        original_path = Path(str(story.get("original", "")))
+        raw_text = str(story.get("text", "")).strip()
+        raw_original = str(story.get("original", "")).strip()
+        if not raw_text or not raw_original:
+            break
+        text_path = resolve_portable_path(raw_text, video_dir=PROJECT_INFO_PATH.parent)
+        original_path = resolve_portable_path(
+            raw_original, video_dir=PROJECT_INFO_PATH.parent
+        )
         if not text_path.is_file() or not original_path.is_file():
             break
         if (
@@ -2001,8 +2008,12 @@ def repair_existing_project() -> dict:
     affected_orders: list[int] = []
     for story in project_info.get("stories", []):
         order = int(story["order"])
-        text_path = Path(story["text"])
-        original_path = Path(story["original"])
+        text_path = resolve_portable_path(
+            story["text"], video_dir=PROJECT_INFO_PATH.parent
+        )
+        original_path = resolve_portable_path(
+            story["original"], video_dir=PROJECT_INFO_PATH.parent
+        )
         if not text_path.is_file() or not original_path.is_file():
             raise FileNotFoundError(
                 f"Existing story files are missing for story order {order}."
