@@ -207,7 +207,14 @@ echo Running environment checks...
 ".venv\Scripts\python.exe" "src\env_doctor.py"
 echo.
 ".venv\Scripts\python.exe" "src\preflight.py"
+if %ERRORLEVEL% NEQ 0 (
+    echo [WARN] Preflight reported issues above.
+)
+
+if exist ".venv" (
+    ".venv\Scripts\python.exe" -c "import pathlib; pathlib.Path('.venv/.launcher_stamp').write_text(str(pathlib.Path('.').resolve()) + '\n', encoding='utf-8')"
+)
 
 echo.
-echo Setup complete! Launch the app via create_video_app.bat or CLI via create_video.bat.
+echo Setup complete! Launch yt-automation.exe or create_video_app.bat or CLI via create_video.bat.
 if not "%NO_PAUSE%"=="1" pause

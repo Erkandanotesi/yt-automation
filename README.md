@@ -6,11 +6,13 @@ End-to-end automated YouTube Tech & Gaming News video production suite: RSS inge
 
 ```text
 Tech News/
+├── yt-automation.exe          # All-in-one launcher (auto-runs setup if needed, then launches UI)
 ├── setup.bat                  # One-click portable environment setup & repair
 ├── create_video_app.bat       # Launch the NewsStudio desktop app
 ├── create_video.bat           # Run the autonomous video creation CLI workflow
 ├── news-studio.bat            # CLI wrapper for Automation/src/news_studio.py
 ├── Automation/                # Core Python pipeline, WPF desktop UI, tests & docs
+│   ├── launcher/              # Source & build script for root yt-automation.exe
 │   ├── NewsStudio.App/        # .NET 10 WPF desktop interface
 │   ├── src/                   # Pipeline modules (all paths via file_locations.py)
 │   ├── config/                # RSS OPML feeds & channel editorial profiles
@@ -26,17 +28,17 @@ Tech News/
 
 ## Quick Setup (Fresh Machine or Relocated Folder)
 
-This project uses workspace-relative path resolution (`Automation/src/file_locations.py`), so you can clone or move the entire folder anywhere without breaking references.
+This project uses workspace-relative path resolution (`Automation/src/file_locations.py`), so you can clone, rename, or move the entire folder anywhere without breaking references.
 
-1. Run `setup.bat` from the repository root (or `Automation\setup.bat`).
+1. Double-click `yt-automation.exe` (or run `setup.bat`).
+   - On first run, fresh machine, or after moving/renaming the folder, `yt-automation.exe` automatically runs `Automation\setup.bat`:
    - Repairs or creates `Automation\.venv` (handles relocated virtual environments automatically)
-   - Installs Python dependencies (`Automation\requirements.txt`)
-   - Installs Playwright Chromium and `motion_engine` JS assets
+   - Installs Python dependencies (`Automation\requirements.txt`), Playwright Chromium, and `motion_engine` JS assets
    - Ensures local `ffmpeg` / `ffprobe` are present in `Automation\tools\ffmpeg\`
    - Initializes `Automation\.env`, `Automation\config\feeds.opml`, and `Automation\config\channel_profile.txt` from templates if missing
    - Builds `Automation\NewsStudio.App` if the .NET SDK is installed
 2. Add your API keys and YouTube OAuth client secret under `Automation\.env` and `Automation\.youtube_credentials\` (never committed to Git).
-3. Launch with `create_video_app.bat` (Desktop UI) or `create_video.bat` (CLI).
+3. From then on, `yt-automation.exe` opens the Desktop UI directly (`yt-automation.exe --cli` runs the console workflow).
 
 ## Verification & Maintenance
 
