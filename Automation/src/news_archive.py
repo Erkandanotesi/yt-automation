@@ -20,6 +20,7 @@ from file_locations import (
     PROJECTS_ROOT,
     project_dir,
     project_name,
+    resolve_portable_path,
 )
 from file_utils import atomic_write_json, atomic_write_text, sha256_text, stable_story_id
 
@@ -231,9 +232,12 @@ class NewsArchive:
         limit = self.settings.ai_text_character_limit
         previous: list[dict] = []
         for item in candidates:
-            source_path = Path(str(item.get("source_file", "")))
+            raw_source = str(item.get("source_file", "")).strip()
+            source_path = (
+                resolve_portable_path(raw_source) if raw_source else Path("")
+            )
             previous_text = str(item.get("_article_text", ""))
-            if source_path.is_file():
+            if raw_source and source_path.is_file():
                 previous_text = source_path.read_text(encoding="utf-8")
             if not previous_text:
                 continue
@@ -249,9 +253,12 @@ class NewsArchive:
                     "text": previous_text[:limit],
                 }
             )
-        current_path = Path(str(record.get("source_file", "")))
+        raw_current = str(record.get("source_file", "")).strip()
+        current_path = (
+            resolve_portable_path(raw_current) if raw_current else Path("")
+        )
         current_text = str(record.get("_article_text", ""))
-        if current_path.is_file():
+        if raw_current and current_path.is_file():
             current_text = current_path.read_text(encoding="utf-8")
         return {
             "new_file": {
@@ -665,7 +672,11 @@ class NewsArchive:
             "archive_root": str(self.root),
             "record_count": len(records),
             "used_record_count": sum(bool(item.get("uses")) for item in records),
-            "source_file_count": sum(Path(str(item.get("source_file", ""))).is_file() for item in records),
+            "source_file_count": sum(
+                bool(str(item.get("source_file", "")).strip())
+                and resolve_portable_path(str(item.get("source_file", ""))).is_file()
+                for item in records
+            ),
             "comparison_cache_count": len(self.load_cache()["comparisons"]),
         }
 
