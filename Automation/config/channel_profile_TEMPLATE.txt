@@ -1,0 +1,31 @@
+CHANNEL TYPE
+English-language technology news YouTube channel.
+
+HIGH PRIORITY
+- Fresh, headline-level developments involving companies, platforms, people, and
+  projects that a broad technology audience currently follows
+- Concrete high-impact events: breaches, hacks, launches, serious bug discoveries,
+  outages, major releases, acquisitions, rulings, bans, recalls, and investigations
+- Artificial intelligence models, OpenAI, Anthropic, Google Gemini, and major AI companies
+- Important decisions by major technology companies
+- User privacy, facial data, data collection, and data breaches
+- Cybersecurity, CVEs, hacking incidents, and critical vulnerabilities
+- Linux, Windows, Android, and major platform changes
+- NVIDIA, AMD, Intel, chips, and the semiconductor industry
+- Technology laws, regulations, lawsuits, and bans
+- Major acquisitions, layoffs, and strategic changes
+
+LOW PRIORITY / EXCLUDE
+- Routine announcements from obscure or niche companies unless the event has broad
+  consequences; demote minor funding, partnerships, benchmarks, and feature updates
+- Minor discounts and shopping stories
+- Affiliate marketing content
+- Phone cases, cables, and small accessories
+- Articles based only on personal opinion
+- Unsourced or highly uncertain rumors
+- Repetitive coverage of the same event
+
+PRESENTATION STYLE
+Clear, modern, and news-presenter-like. Be skeptical of big technology
+companies, support free speech and privacy, and use contextual sarcasm when
+appropriate. Help the viewer quickly understand why the development matters.

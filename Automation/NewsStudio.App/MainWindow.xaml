@@ -1,0 +1,2418 @@
+<Window x:Class="NewsStudio.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:controls="clr-namespace:NewsStudio.App.Controls"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="News Studio"
+        Icon="Assets/TechLogoIcon.png"
+        Width="1280" Height="820" MinWidth="1024" MinHeight="690"
+        WindowStartupLocation="CenterScreen"
+        WindowState="Maximized"
+        WindowStyle="SingleBorderWindow" AllowsTransparency="False"
+        Background="#01000000"
+        Loaded="Window_Loaded" Closing="Window_Closing"
+        KeyDown="Window_KeyDown">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="46" ResizeBorderThickness="6"
+                            GlassFrameThickness="0" CornerRadius="10"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Grid x:Name="RootGrid" Background="{DynamicResource WindowBackgroundBrush}"
+          TextElement.Foreground="{DynamicResource TextPrimaryBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="46" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Compact Fluent title bar -->
+        <Grid Grid.Row="0" Background="Transparent"
+              MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                <Image Source="Assets/TechLogo.png" Width="38" Height="28" Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="HighQuality" />
+                <TextBlock Text="News Studio" Margin="10,0,0,0" FontSize="13"
+                           FontWeight="SemiBold" VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                <Button Style="{StaticResource CaptionButtonStyle}" Click="MinimizeButton_Click"
+                        Content="&#xE921;" />
+                <Button Style="{StaticResource CaptionButtonStyle}" Click="MaximizeButton_Click"
+                        Content="&#xE922;" />
+                <Button Style="{StaticResource CloseCaptionButtonStyle}" Click="CloseButton_Click"
+                        Content="&#xE8BB;" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Collapsible Fluent navigation side panel -->
+            <Border x:Name="SidebarBorder" Grid.Column="0" Width="244" ClipToBounds="True"
+                    Background="{DynamicResource NavigationBrush}"
+                    BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,1,1,0">
+                <Grid Margin="10,10,10,12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Row 0: Three-lines hamburger button + Channel studio title -->
+                    <Grid Margin="2,0,2,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="SidebarToggleButton"
+                                Style="{StaticResource SidebarIconButtonStyle}"
+                                Click="SidebarToggleButton_Click"
+                                ToolTip="Collapse navigation"
+                                AutomationProperties.Name="Toggle navigation pane">
+                            <TextBlock Text="&#xE700;" FontFamily="Segoe Fluent Icons" FontSize="15.5" />
+                        </Button>
+                        <TextBlock x:Name="SidebarHeaderTitle" Grid.Column="1"
+                                   Text="CHANNELS" Margin="10,0,0,0"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                    </Grid>
+
+                    <!-- Row 1: Channel type branches (Tech News + extensible future channels) -->
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <!-- Tech News Branch Header -->
+                            <Button x:Name="TechBranchHeaderButton"
+                                    Style="{StaticResource SidebarCardButtonStyle}"
+                                    Padding="9,7" Margin="0,0,0,4"
+                                    Click="TechBranchHeaderButton_Click"
+                                    ToolTip="Tech News branch">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Width="22" Height="22" CornerRadius="6"
+                                            Background="{DynamicResource AccentTintBrush}">
+                                        <TextBlock Text="&#xE99A;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource AccentBrush}" />
+                                    </Border>
+                                    <TextBlock x:Name="TechBranchTitleText" Grid.Column="1"
+                                               Text="Tech News" Margin="9,0,0,0" FontSize="13" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="TechBranchChevron" Grid.Column="2"
+                                               Text="&#xE70D;" FontFamily="Segoe Fluent Icons" FontSize="10.5"
+                                               VerticalAlignment="Center" Margin="6,0,0,0"
+                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                </Grid>
+                            </Button>
+
+                            <!-- Indented Tech News Subtree -->
+                            <Border x:Name="TechBranchContainer" Margin="13,0,0,8" Padding="8,0,0,0"
+                                    BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1.5,0,0,0">
+                                <StackPanel x:Name="TechBranchItemsPanel">
+                                    <RadioButton x:Name="ProductionNav" Style="{StaticResource NavButtonStyle}"
+                                                 IsChecked="True" Checked="Navigation_Checked"
+                                                 ToolTip="Tech News · Production">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE768;" FontFamily="Segoe Fluent Icons" FontSize="15.5" Width="26"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock x:Name="ProductionNavLabel" Text="Production" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </RadioButton>
+                                    <RadioButton x:Name="HistoryNav" Style="{StaticResource NavButtonStyle}"
+                                                 Checked="Navigation_Checked"
+                                                 ToolTip="Tech News · Productions">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons" FontSize="15.5" Width="26"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock x:Name="HistoryNavLabel" Text="Productions" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </RadioButton>
+                                    <RadioButton x:Name="QuotaNav" Style="{StaticResource NavButtonStyle}"
+                                                 Checked="Navigation_Checked"
+                                                 ToolTip="Tech News · API &amp; Quota">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE9D9;" FontFamily="Segoe Fluent Icons" FontSize="15.5" Width="26"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock x:Name="QuotaNavLabel" Text="API &amp; Quota" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </RadioButton>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Extensible Future Channel Types Preview -->
+                            <Button x:Name="FutureChannelHintButton"
+                                    Style="{StaticResource SidebarCardButtonStyle}"
+                                    Padding="9,7" Margin="0,2,0,0" Opacity="0.75"
+                                    Click="ProfileSelectorButton_Click"
+                                    ToolTip="Other channel types (coming soon) · Click to view channels">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Width="22" Height="22" CornerRadius="6"
+                                            Background="{DynamicResource SurfaceBrush}"
+                                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                        <TextBlock Text="&#xE710;" FontFamily="Segoe Fluent Icons" FontSize="10.5"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </Border>
+                                    <StackPanel x:Name="FutureChannelHintTextPanel" Grid.Column="1" Margin="9,0,0,0"
+                                                VerticalAlignment="Center">
+                                        <TextBlock Text="Add channel" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        <TextBlock Text="More channel types soon" FontSize="10.5"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </Grid>
+                            </Button>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- Row 2: Compact bottom utility bar (single Theme switch + Folder + Icon-only Settings) & Channel Profile -->
+                    <StackPanel Grid.Row="2" Margin="0,10,0,0">
+                        <Border x:Name="SidebarToolsBorder" Padding="7,6" CornerRadius="10" Margin="0,0,0,8"
+                                Background="{DynamicResource SurfaceAltBrush}"
+                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                            <Grid x:Name="SidebarToolsGrid">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition x:Name="ToolsSpacerColumn" Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition x:Name="ToolsGapColumn" Width="4" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Single theme switcher (Sun/Moon pill when expanded, icon button when collapsed) -->
+                                <ToggleButton x:Name="ThemeModeToggleButton" Grid.Row="0" Grid.Column="0"
+                                              Style="{StaticResource ThemeModeToggleStyle}"
+                                              HorizontalAlignment="Left"
+                                              AutomationProperties.Name="Light or dark theme"
+                                              ToolTip="Toggle Light / Dark theme"
+                                              Click="ThemeModeToggleButton_Click" />
+
+                                <Button x:Name="CompactThemeButton" Grid.Row="0" Grid.Column="0"
+                                        Style="{StaticResource SidebarIconButtonStyle}"
+                                        Visibility="Collapsed" HorizontalAlignment="Center"
+                                        ToolTip="Toggle Light / Dark theme"
+                                        Click="CompactThemeButton_Click">
+                                    <TextBlock x:Name="CompactThemeGlyph" Text="&#xE706;"
+                                               FontFamily="Segoe Fluent Icons" FontSize="15" />
+                                </Button>
+
+                                <!-- Folder Icon Button -->
+                                <Button x:Name="OpenAutomationFolderButton" Grid.Row="0" Grid.Column="2"
+                                        Style="{StaticResource SidebarIconButtonStyle}"
+                                        HorizontalAlignment="Center"
+                                        Click="OpenAutomationFolder_Click"
+                                        ToolTip="Open Automation folder"
+                                        AutomationProperties.Name="Open Automation folder">
+                                    <TextBlock Text="&#xE8B7;" FontFamily="Segoe Fluent Icons" FontSize="15" />
+                                </Button>
+
+                                <!-- Settings Icon-only RadioButton -->
+                                <RadioButton x:Name="SettingsNav" Grid.Row="0" Grid.Column="4"
+                                             Style="{StaticResource IconNavButtonStyle}"
+                                             HorizontalAlignment="Center"
+                                             Checked="Navigation_Checked"
+                                             ToolTip="Settings"
+                                             AutomationProperties.Name="Settings">
+                                    <TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons" FontSize="15.5" />
+                                </RadioButton>
+                            </Grid>
+                        </Border>
+
+                        <!-- Channel Profile Card (avatar + clickable multi-channel switcher popup) -->
+                        <Button x:Name="ProfileSelectorButton"
+                                Style="{StaticResource SidebarCardButtonStyle}"
+                                Padding="8,7"
+                                Click="ProfileSelectorButton_Click"
+                                ToolTip="Active YouTube channel · Click to view channels">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <Grid Width="34" Height="34" VerticalAlignment="Center">
+                                    <Border Width="34" Height="34" CornerRadius="17" ClipToBounds="True"
+                                            Background="#FFFFFFFF"
+                                            BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1.5">
+                                        <Image x:Name="ProfileAvatarImage"
+                                               Source="Assets/TechLogoIcon.png"
+                                               Stretch="UniformToFill"
+                                               RenderOptions.BitmapScalingMode="HighQuality" />
+                                    </Border>
+                                    <Border Width="10" Height="10" CornerRadius="5"
+                                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                            Background="{DynamicResource SuccessBrush}"
+                                            BorderBrush="{DynamicResource NavigationBrush}" BorderThickness="1.5" />
+                                </Grid>
+
+                                <StackPanel x:Name="ProfileTextPanel" Grid.Column="1" Margin="10,0,6,0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="ProfileChannelNameText" Text="Tech Scale"
+                                               FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="ProfileChannelSubText" Text="Tech News · Active"
+                                               FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+
+                                <TextBlock x:Name="ProfileChevronIcon" Grid.Column="2"
+                                           Text="&#xE70E;" FontFamily="Segoe Fluent Icons" FontSize="11"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </Grid>
+                        </Button>
+
+                        <!-- Channels Switcher Popup -->
+                        <Popup x:Name="ChannelProfilePopup"
+                               PlacementTarget="{Binding ElementName=ProfileSelectorButton}"
+                               Placement="Right"
+                               HorizontalOffset="10"
+                               VerticalOffset="-8"
+                               StaysOpen="False"
+                               AllowsTransparency="True"
+                               PopupAnimation="Fade">
+                            <Border Margin="6" Padding="14" Width="284" CornerRadius="12"
+                                    Background="{DynamicResource SurfaceBrush}"
+                                    BorderBrush="{DynamicResource StrokeStrongBrush}" BorderThickness="1"
+                                    TextElement.Foreground="{DynamicResource TextPrimaryBrush}">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.24" Color="#FF000000" />
+                                </Border.Effect>
+                                <StackPanel>
+                                    <Grid Margin="2,0,2,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="CHANNEL PROFILES" FontSize="10.5" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                        <TextBlock Text="YouTube Studio" FontSize="10.5"
+                                                   Foreground="{DynamicResource AccentBrush}" Grid.Column="1" />
+                                    </Grid>
+
+                                    <ItemsControl x:Name="ChannelProfilesList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Margin="0,0,0,6" Padding="10,8"
+                                                        Style="{StaticResource SidebarCardButtonStyle}"
+                                                        Click="ChannelProfileOption_Click">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="10" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+
+                                                        <Border Width="34" Height="34" CornerRadius="17" ClipToBounds="True"
+                                                                Background="{DynamicResource SurfaceBrush}"
+                                                                BorderBrush="{DynamicResource StrokeStrongBrush}" BorderThickness="1">
+                                                            <Grid>
+                                                                <TextBlock Text="{Binding FallbackGlyph}"
+                                                                           FontFamily="Segoe Fluent Icons" FontSize="14"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                                <Image Source="{Binding AvatarImage}" Stretch="UniformToFill"
+                                                                       RenderOptions.BitmapScalingMode="HighQuality"
+                                                                       Visibility="{Binding HasAvatarImage, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                                            </Grid>
+                                                        </Border>
+
+                                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding ChannelName}" FontSize="13" FontWeight="SemiBold" />
+                                                            <TextBlock Text="{Binding Subtitle}" FontSize="11"
+                                                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
+
+                                                        <Border Grid.Column="3" Padding="7,2" CornerRadius="8" VerticalAlignment="Center"
+                                                                Background="{Binding BadgeBackground}">
+                                                            <TextBlock Text="{Binding BadgeText}" FontSize="10" FontWeight="SemiBold"
+                                                                       Foreground="{Binding BadgeForeground}" />
+                                                        </Border>
+                                                    </Grid>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <Border Margin="0,2,0,0" Padding="10,8" CornerRadius="9"
+                                            Background="{DynamicResource SurfaceAltBrush}"
+                                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE710;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                       VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}"
+                                                       Margin="0,0,8,0" />
+                                            <TextBlock x:Name="ChannelPopupStatusText"
+                                                       Text="Future channels can be added here cleanly."
+                                                       FontSize="11.5" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Production page -->
+            <Grid x:Name="ProductionPage" Grid.Column="1" Margin="26,20,26,22">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="0.98*" MinWidth="380" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="1.02*" MinWidth="410" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left column: Full-height Production Steps -->
+                    <Border Grid.Column="0" Style="{StaticResource CardStyle}" Padding="0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Margin="20,17,20,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Production steps" FontSize="17" FontWeight="SemiBold" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                        <TextBlock x:Name="ProjectSummaryText" Text="Latest project will appear here"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        <TextBlock x:Name="StagesCompletedText" Text=" · 0 / 7 complete"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Border x:Name="TotalStagesTimeBorder" Visibility="Collapsed"
+                                            Padding="9,4" CornerRadius="10" Margin="0,0,10,0"
+                                            Background="{DynamicResource SurfaceAltBrush}"
+                                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                            ToolTip="Total recorded stage time for this project">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE823;" FontFamily="Segoe Fluent Icons"
+                                                       FontSize="11" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       Margin="0,0,5,0" />
+                                            <TextBlock x:Name="TotalStagesTimeText" Text="0s"
+                                                       FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Padding="10,4" CornerRadius="10"
+                                            Background="{DynamicResource AccentTintBrush}">
+                                        <TextBlock x:Name="PercentText" Text="0%"
+                                                   VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}"
+                                                   FontSize="13" FontWeight="Bold" />
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+                            <ProgressBar x:Name="StepsCardProgress" Grid.Row="1" Height="4"
+                                         Margin="20,0,20,10" Minimum="0" Maximum="7" Value="0"
+                                         Style="{StaticResource FluentProgressBarStyle}" />
+                            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Padding="10,0,10,12">
+                                <ItemsControl x:Name="StagesList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,2" Padding="10,7" CornerRadius="8"
+                                                    Background="{Binding RowBackground}"
+                                                    BorderBrush="{Binding RowBorderBrush}" BorderThickness="1"
+                                                    Cursor="{Binding RowCursor}"
+                                                    ToolTip="{Binding DetailTooltip}"
+                                                    MouseLeftButtonUp="StageRow_MouseLeftButtonUp">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="28" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Width="24" Height="24" CornerRadius="12"
+                                                            Background="{Binding BadgeBackground}" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Number}" FontSize="10" FontWeight="SemiBold"
+                                                                   Foreground="{Binding BadgeForeground}"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Label}" VerticalAlignment="Center"
+                                                               FontSize="13" FontWeight="{Binding LabelWeight}"
+                                                               Margin="9,0,8,0" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Grid.Column="2" Text="{Binding ElapsedText}"
+                                                               Visibility="{Binding HasElapsed, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                               FontFamily="Cascadia Mono, Consolas" FontSize="10.5"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}"
+                                                               VerticalAlignment="Center" Margin="0,0,9,0" />
+                                                    <Border Grid.Column="3" Padding="8,3" CornerRadius="10"
+                                                            Background="{Binding StatusPillBackground}"
+                                                            BorderBrush="{Binding StatusPillBorderBrush}"
+                                                            BorderThickness="1" VerticalAlignment="Center">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding Glyph}" FontFamily="Segoe Fluent Icons"
+                                                                       Foreground="{Binding StatusBrush}" FontSize="11"
+                                                                       VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                            <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}"
+                                                                       FontSize="10.5" FontWeight="SemiBold"
+                                                                       VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+
+                    <!-- Right column: Current action + snapshot strip & upgraded activity console -->
+                    <Grid Grid.Column="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="14" />
+                            <RowDefinition Height="*" MinHeight="220" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Current Action + Active Pipeline Snapshot Strip -->
+                        <Border Grid.Row="0" Style="{StaticResource CardStyle}" Padding="20,18,20,16">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="CURRENT ACTION" FontSize="11" FontWeight="Bold"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                        <Border x:Name="ActiveProjectChip" Visibility="Collapsed"
+                                                Margin="10,0,0,0" Padding="8,2" CornerRadius="9"
+                                                Background="{DynamicResource SurfaceAltBrush}"
+                                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="ActiveProjectChipText" Text="Video 95"
+                                                       FontSize="10.5" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </Border>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Border Margin="0,0,8,0" Padding="10,5" CornerRadius="14"
+                                                Background="{DynamicResource SurfaceAltBrush}"
+                                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                                ToolTip="Elapsed time for the active production run">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Ellipse x:Name="ProductionTimerDot" Width="7" Height="7"
+                                                         Fill="{DynamicResource MutedBrush}" Margin="0,0,6,0"
+                                                         VerticalAlignment="Center" />
+                                                <TextBlock x:Name="ProductionTimerText" Text="00:00:00"
+                                                           FontFamily="Cascadia Mono, Consolas" FontWeight="SemiBold"
+                                                           FontSize="12" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Padding="11,5" CornerRadius="14"
+                                                Background="{DynamicResource SurfaceAltBrush}"
+                                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Ellipse x:Name="HeaderStatusDot" Width="8" Height="8"
+                                                         Fill="{DynamicResource MutedBrush}" Margin="0,0,7,0"
+                                                         VerticalAlignment="Center" />
+                                                <TextBlock x:Name="HeaderStatusText" Text="Ready"
+                                                           FontSize="12" FontWeight="SemiBold"
+                                                           VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock x:Name="CurrentActionTitle" Text="Ready when you are"
+                                           Margin="0,10,0,0" FontSize="20" FontWeight="SemiBold"
+                                           TextWrapping="Wrap" />
+                                <TextBlock x:Name="CurrentActionDetail"
+                                           Text="Start the app and each choice will appear here with its original safe default."
+                                           Margin="0,5,0,0" TextWrapping="Wrap" FontSize="12.5" LineHeight="18"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                                <ProgressBar x:Name="OverallProgress" Height="6" Margin="0,14,0,0"
+                                             Minimum="0" Maximum="7" Value="0"
+                                             Style="{StaticResource FluentProgressBarStyle}"
+                                             Foreground="{DynamicResource AccentBrush}" />
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="CurrentProgressStepText" Text="Waiting to start"
+                                               FontSize="11" TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    <TextBlock x:Name="CurrentProgressCountText" Grid.Column="1" Text="0 of 7 steps"
+                                               FontSize="11" FontWeight="SemiBold" Margin="10,0,0,0"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </Grid>
+
+                                <Grid Margin="0,15,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <WrapPanel VerticalAlignment="Center">
+                                        <Button x:Name="QuickRunButton" Width="46" Height="38" Margin="0,0,8,0"
+                                                Visibility="Collapsed" Style="{StaticResource PrimaryButtonStyle}"
+                                                Click="QuickRunButton_Click"
+                                                ToolTip="Create a new video · Shift+click for fast mode · Ctrl+Shift+click for queue"
+                                                AutomationProperties.Name="Create a new video">
+                                            <TextBlock Text="&#xE768;" FontFamily="Segoe Fluent Icons" FontSize="16" />
+                                        </Button>
+                                        <Button x:Name="StartButton" Content="Start production" MinWidth="138" Height="38"
+                                                Margin="0,0,8,0" Padding="15,0"
+                                                Style="{StaticResource PrimaryButtonStyle}" Click="StartButton_Click" />
+                                        <Button x:Name="StopButton" Content="Stop safely" Height="38" Margin="0,0,8,0"
+                                                Padding="14,0" Visibility="Collapsed" Style="{StaticResource DangerButtonStyle}"
+                                                Click="StopButton_Click"
+                                                ToolTip="Stop the active generation safely; if a queue is active, clear every remaining item too" />
+                                        <Button x:Name="CancelQueueButton" Content="Cancel Queue" Height="38" Margin="0,0,8,0"
+                                                Padding="14,0" Visibility="Collapsed" Style="{StaticResource SecondaryButtonStyle}"
+                                                Click="CancelActiveQueueButton_Click"
+                                                ToolTip="Finish the current generation, then cancel the remaining queue" />
+                                        <Button x:Name="OpenPreviewButton" Content="Open preview" Height="38" Margin="0,0,8,0"
+                                                Padding="14,0" Visibility="Collapsed" Style="{StaticResource SecondaryButtonStyle}"
+                                                Click="OpenPreviewButton_Click" />
+                                    </WrapPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="Be Skeptical" Margin="0,0,9,0"
+                                                   FontSize="12" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                        <ToggleButton x:Name="SkepticalModeToggleButton"
+                                                      Style="{StaticResource FluentToggleSwitchStyle}"
+                                                      AutomationProperties.Name="Be Skeptical"
+                                                      ToolTip="Use the stronger skeptical news-summary prompt. Saved immediately."
+                                                      Click="SkepticalModeToggleButton_Click" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Active Pipeline Snapshot Strip -->
+                                <Border Margin="0,15,0,0" Padding="12,8" CornerRadius="9"
+                                        Background="{DynamicResource SurfaceAltBrush}"
+                                        BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <WrapPanel VerticalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal" Margin="0,2,14,2"
+                                                        ToolTip="Active or configured LLM model">
+                                                <TextBlock Text="&#xE99A;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                           Foreground="{DynamicResource AccentBrush}"
+                                                           VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                <TextBlock x:Name="SnapshotModelText" Text="AI: —" FontSize="11.5"
+                                                           FontWeight="SemiBold" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,2,14,2"
+                                                        ToolTip="Active or configured voiceover provider">
+                                                <TextBlock Text="&#xE720;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                           Foreground="{DynamicResource AccentBrush}"
+                                                           VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                <TextBlock x:Name="SnapshotTtsText" Text="TTS: —" FontSize="11.5"
+                                                           FontWeight="SemiBold" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,2,0,2"
+                                                        ToolTip="Stories per episode">
+                                                <TextBlock Text="&#xE8A1;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                           Foreground="{DynamicResource AccentBrush}"
+                                                           VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                <TextBlock x:Name="SnapshotStoriesText" Text="3 stories" FontSize="11.5"
+                                                           FontWeight="SemiBold" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            </StackPanel>
+                                        </WrapPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
+                                                    Margin="10,0,0,0">
+                                            <Button x:Name="SnapshotOpenFolderButton" Margin="0,0,6,0"
+                                                    Style="{StaticResource CompactActionButtonStyle}"
+                                                    IsEnabled="False" Click="SnapshotOpenFolderButton_Click"
+                                                    ToolTip="Open the active project folder">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE8B7;" FontFamily="Segoe Fluent Icons" FontSize="11"
+                                                               VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                    <TextBlock Text="Folder" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button x:Name="SnapshotOpenScriptButton" Margin="0,0,6,0"
+                                                    Style="{StaticResource CompactActionButtonStyle}"
+                                                    IsEnabled="False" Click="SnapshotOpenScriptButton_Click"
+                                                    ToolTip="Open video_script.txt">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE8A5;" FontFamily="Segoe Fluent Icons" FontSize="11"
+                                                               VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                    <TextBlock Text="Script" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button x:Name="SnapshotOpenVideoButton"
+                                                    Style="{StaticResource CompactActionButtonStyle}"
+                                                    IsEnabled="False" Click="SnapshotOpenVideoButton_Click"
+                                                    ToolTip="Open the final rendered video">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="11"
+                                                               VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                    <TextBlock Text="Final video" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Upgraded Activity Console -->
+                        <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <Grid Margin="18,13,14,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="&#xE756;" FontFamily="Segoe Fluent Icons" FontSize="14"
+                                                   Foreground="{DynamicResource AccentBrush}"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0" />
+                                        <TextBlock Text="Activity" FontSize="15.5" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                        <Border x:Name="ActivityCountBadge" Margin="8,0,0,0" Padding="7,2" CornerRadius="9"
+                                                Background="{DynamicResource SurfaceAltBrush}"
+                                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                                VerticalAlignment="Center">
+                                            <TextBlock x:Name="ActivityCountText" Text="0" FontSize="10.5"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </Border>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                                                VerticalAlignment="Center" Margin="12,0,8,0">
+                                        <RadioButton x:Name="ActivityFilterAll" Content="All" Tag="All" IsChecked="True"
+                                                     GroupName="ActivityFilter"
+                                                     Style="{StaticResource CompactFilterPillStyle}"
+                                                     Checked="ActivityFilter_Checked" />
+                                        <RadioButton x:Name="ActivityFilterStages" Content="Stages" Tag="Stages"
+                                                     GroupName="ActivityFilter"
+                                                     Style="{StaticResource CompactFilterPillStyle}"
+                                                     Checked="ActivityFilter_Checked" />
+                                        <RadioButton x:Name="ActivityFilterIssues" Content="Warnings &amp; Errors" Tag="Issues"
+                                                     GroupName="ActivityFilter" Margin="0"
+                                                     Style="{StaticResource CompactFilterPillStyle}"
+                                                     Checked="ActivityFilter_Checked" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button x:Name="CopyLogButton" Margin="0,0,6,0"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                Click="CopyLog_Click" ToolTip="Copy visible activity entries">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE8C8;" FontFamily="Segoe Fluent Icons" FontSize="11"
+                                                           VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                <TextBlock x:Name="CopyLogLabel" Text="Copy" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource CompactActionButtonStyle}"
+                                                Click="ClearLog_Click" ToolTip="Clear activity console">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE74D;" FontFamily="Segoe Fluent Icons" FontSize="11"
+                                                           VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                <TextBlock Text="Clear" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+                                <Border Grid.Row="1" Height="1" Background="{DynamicResource StrokeBrush}"
+                                        Margin="18,0,18,0" />
+                                <Grid Grid.Row="2">
+                                    <StackPanel x:Name="ActivityEmptyPanel" VerticalAlignment="Center"
+                                                HorizontalAlignment="Center" Margin="20">
+                                        <TextBlock Text="&#xE756;" FontFamily="Segoe Fluent Icons" FontSize="22"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                                   HorizontalAlignment="Center" Margin="0,0,0,6" />
+                                        <TextBlock x:Name="ActivityEmptyText" Text="No activity yet."
+                                                   FontSize="12.5" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   HorizontalAlignment="Center" />
+                                    </StackPanel>
+                                    <ScrollViewer x:Name="LogScrollViewer" Padding="14,10,10,12"
+                                                  VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl x:Name="ActivityLogList">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,2.5">
+                                                        <Grid.ContextMenu>
+                                                            <ContextMenu Style="{StaticResource FluentContextMenuStyle}">
+                                                                <MenuItem Header="Copy log entry"
+                                                                          Style="{StaticResource FluentMenuItemStyle}"
+                                                                          Click="CopyActivityLine_Click">
+                                                                    <MenuItem.Icon>
+                                                                        <TextBlock Text="&#xE8C8;" FontFamily="Segoe Fluent Icons"
+                                                                                   FontSize="12" VerticalAlignment="Center"
+                                                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                                    </MenuItem.Icon>
+                                                                </MenuItem>
+                                                            </ContextMenu>
+                                                        </Grid.ContextMenu>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="68" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding Timestamp}"
+                                                                   FontFamily="Cascadia Mono, Consolas" FontSize="10.5"
+                                                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                                                   Margin="0,2,8,0" VerticalAlignment="Top" />
+                                                        <Border Grid.Column="1" CornerRadius="4" Padding="6,1.5"
+                                                                Margin="0,0.5,8,0" HorizontalAlignment="Left"
+                                                                VerticalAlignment="Top"
+                                                                Background="{Binding TagBackground}"
+                                                                BorderBrush="{Binding TagBorderBrush}" BorderThickness="1">
+                                                            <TextBlock Text="{Binding Tag}"
+                                                                       FontFamily="Cascadia Mono, Consolas" FontSize="9.5"
+                                                                       FontWeight="Bold"
+                                                                       Foreground="{Binding TagForeground}" />
+                                                        </Border>
+                                                        <TextBlock Grid.Column="2" Text="{Binding Message}"
+                                                                   FontFamily="Cascadia Mono, Consolas" FontSize="11.5"
+                                                                   LineHeight="17" TextWrapping="Wrap"
+                                                                   Foreground="{Binding MessageForeground}" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </Grid>
+
+            <!-- Productions history page -->
+            <Grid x:Name="HistoryPage" Grid.Column="1" Margin="26,20,26,22" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="14" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Page header -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Production history" FontSize="28" FontWeight="SemiBold" />
+                        <TextBlock Text="Browse recent video runs and inspect thumbnails, stories, stage timings, scripts, and publish status."
+                                   Margin="0,3,0,0" FontSize="12.5"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                    <Border Grid.Column="1" VerticalAlignment="Center" Padding="11,5" CornerRadius="13"
+                            Background="{DynamicResource SurfaceAltBrush}"
+                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons" FontSize="12.5"
+                                       VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Margin="0,0,7,0" />
+                            <TextBlock x:Name="HistoryCountBadgeText" Text="0 videos" FontSize="12"
+                                       FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- Master-detail workspace -->
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="336" MinWidth="290" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" MinWidth="460" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left master list -->
+                    <Border Grid.Column="0" Style="{StaticResource CardStyle}" Padding="16">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="12" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Recent videos" FontSize="15.5" FontWeight="SemiBold" />
+                                    <TextBlock Text="Click any production to inspect full details" FontSize="11.5"
+                                               Foreground="{DynamicResource TextTertiaryBrush}" Margin="0,2,0,0" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Grid.Row="2">
+                                <StackPanel x:Name="HistoryEmptyListPanel" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                            Margin="12,28">
+                                    <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons" FontSize="24"
+                                               HorizontalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    <TextBlock Text="No recorded productions yet." Margin="0,8,0,0" FontSize="12.5"
+                                               HorizontalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+
+                                <ListBox x:Name="ProductionsMasterList"
+                                         Background="Transparent" BorderThickness="0"
+                                         Padding="0,0,2,0"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         ItemContainerStyle="{StaticResource HistoryMasterItemStyle}"
+                                         SelectionChanged="ProductionsMasterList_SelectionChanged">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="4" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="6" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+
+                                                <Grid Grid.Row="0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding VideoName}" FontSize="14" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center" />
+                                                    <Border Grid.Column="1" Margin="6,0,0,0" Padding="7,2" CornerRadius="9"
+                                                            Background="{Binding UploadBadgeBackground}"
+                                                            Visibility="{Binding HasUploadBadge, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                            VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding UploadBadgeText}" FontSize="10" FontWeight="SemiBold"
+                                                                   Foreground="{Binding UploadBadgeForeground}" />
+                                                    </Border>
+                                                    <Border Grid.Column="2" Margin="6,0,0,0" Padding="8,2" CornerRadius="9"
+                                                            Background="{Binding StatusBackground}"
+                                                            BorderBrush="{Binding StatusBorder}" BorderThickness="1"
+                                                            VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Status}" FontSize="10.5" FontWeight="SemiBold"
+                                                                   Foreground="{Binding StatusForeground}" />
+                                                    </Border>
+                                                    <Button Grid.Column="3" Margin="4,0,0,0"
+                                                            Style="{StaticResource HistoryMenuButtonStyle}"
+                                                            Click="HistoryItemMenuButton_Click"
+                                                            ToolTip="Production actions">
+                                                        <Button.ContextMenu>
+                                                            <ContextMenu Style="{StaticResource FluentContextMenuStyle}">
+                                                                <MenuItem Header="Upload to YouTube again"
+                                                                          Style="{StaticResource FluentMenuItemStyle}"
+                                                                          IsEnabled="{Binding IsFinished}"
+                                                                          Click="UploadToYouTubeAgainMenuItem_Click">
+                                                                    <MenuItem.Icon>
+                                                                        <TextBlock Text="&#xE898;" FontFamily="Segoe Fluent Icons" FontSize="14"
+                                                                                   VerticalAlignment="Center" HorizontalAlignment="Center" />
+                                                                    </MenuItem.Icon>
+                                                                </MenuItem>
+                                                                <MenuItem Header="Reset voiceover..."
+                                                                          Style="{StaticResource FluentMenuItemStyle}"
+                                                                          Click="ResetVoiceoverMenuItem_Click">
+                                                                    <MenuItem.Icon>
+                                                                        <TextBlock Text="&#xE720;" FontFamily="Segoe Fluent Icons" FontSize="14"
+                                                                                   VerticalAlignment="Center" HorizontalAlignment="Center" />
+                                                                    </MenuItem.Icon>
+                                                                </MenuItem>
+                                                            </ContextMenu>
+                                                        </Button.ContextMenu>
+                                                        <TextBlock Text="&#xE712;" FontFamily="Segoe Fluent Icons" FontSize="13" />
+                                                    </Button>
+                                                </Grid>
+
+                                                <TextBlock Grid.Row="2" Text="{Binding Headline}" FontSize="12"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                                           TextTrimming="CharacterEllipsis" />
+
+                                                <StackPanel Grid.Row="4" Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Date}" FontSize="11.5"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                    <TextBlock Text="  ·  " FontSize="11.5"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                    <TextBlock Text="{Binding Duration}" FontSize="11.5" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+
+                            <Button x:Name="HistoryShowMoreButton" Grid.Row="3" Margin="0,10,0,0"
+                                    Padding="12,8" Style="{StaticResource SecondaryButtonStyle}"
+                                    HorizontalAlignment="Stretch"
+                                    Visibility="Collapsed"
+                                    Click="HistoryShowMoreButton_Click">
+                                <TextBlock x:Name="HistoryShowMoreLabel" Text="Show more..."
+                                           FontWeight="SemiBold" HorizontalAlignment="Center" />
+                            </Button>
+                        </Grid>
+                    </Border>
+
+                    <!-- Right detail inspector -->
+                    <Grid Grid.Column="2">
+                        <Border x:Name="HistoryDetailEmptyPanel" Style="{StaticResource CardStyle}" Padding="28">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="360">
+                                <Border Width="52" Height="52" CornerRadius="14" HorizontalAlignment="Center"
+                                        Background="{DynamicResource AccentTintBrush}">
+                                    <TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="22"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <TextBlock Text="Select a production" Margin="0,14,0,0" FontSize="17" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                                <TextBlock Text="Choose one of the recent videos on the left to view its thumbnail, stories, stage timings, script, and YouTube metadata."
+                                           Margin="0,6,0,0" FontSize="12.5" TextAlignment="Center" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+
+                        <ScrollViewer x:Name="HistoryDetailScrollViewer" Visibility="Collapsed"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      Padding="0,0,4,0">
+                            <StackPanel>
+                                <!-- 1. Hero card -->
+                                <Border Style="{StaticResource CardStyle}" Padding="20">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="232" />
+                                            <ColumnDefinition Width="18" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- 16:9 Thumbnail -->
+                                        <Border Height="130" CornerRadius="10" VerticalAlignment="Top" ClipToBounds="True"
+                                                Background="{DynamicResource SurfaceAltBrush}"
+                                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                            <Grid>
+                                                <StackPanel x:Name="HistoryDetailThumbnailFallback"
+                                                            VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                    <TextBlock Text="&#xE714;" FontFamily="Segoe Fluent Icons" FontSize="26"
+                                                               HorizontalAlignment="Center"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                    <TextBlock Text="No thumbnail yet" Margin="0,6,0,0" FontSize="11.5"
+                                                               HorizontalAlignment="Center"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                </StackPanel>
+                                                <Image x:Name="HistoryDetailThumbnailImage" Stretch="UniformToFill"
+                                                       Visibility="Collapsed" />
+                                            </Grid>
+                                        </Border>
+
+                                        <!-- Metadata & Actions -->
+                                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                            <WrapPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                <Border Padding="8,3" CornerRadius="8" Margin="0,0,6,4"
+                                                        Background="{DynamicResource AccentTintBrush}">
+                                                    <TextBlock x:Name="HistoryDetailVideoChipText" Text="Video 95" FontSize="11.5"
+                                                               FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" />
+                                                </Border>
+                                                <Border x:Name="HistoryDetailStatusBorder" Padding="8,3" CornerRadius="8" Margin="0,0,6,4"
+                                                        Background="{DynamicResource SurfaceAltBrush}"
+                                                        BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                                    <TextBlock x:Name="HistoryDetailStatusText" Text="Finished" FontSize="11.5"
+                                                               FontWeight="SemiBold" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                </Border>
+                                                <Border x:Name="HistoryDetailUploadBadgeBorder" Padding="8,3" CornerRadius="8" Margin="0,0,0,4"
+                                                        Background="{DynamicResource SurfaceAltBrush}" Visibility="Collapsed">
+                                                    <TextBlock x:Name="HistoryDetailUploadBadgeText" Text="Uploaded to YouTube" FontSize="11.5"
+                                                               FontWeight="SemiBold" />
+                                                </Border>
+                                            </WrapPanel>
+
+                                            <TextBlock x:Name="HistoryDetailTitleText" Text="Video production title"
+                                                       FontSize="19" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                            <TextBlock x:Name="HistoryDetailMetaText"
+                                                       Text="13 Nov 2026 · Run duration 00:00:00"
+                                                       Margin="0,5,0,0" FontSize="12.5" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            <TextBlock x:Name="HistoryDetailScheduleText" Visibility="Collapsed"
+                                                       Margin="0,3,0,0" FontSize="12" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+
+                                            <WrapPanel Margin="0,12,0,0" Orientation="Horizontal">
+                                                <Button x:Name="HistoryOpenFolderButton" Margin="0,0,8,6"
+                                                        Style="{StaticResource CompactActionButtonStyle}"
+                                                        Click="HistoryOpenFolder_Click">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                        <TextBlock Text="Folder" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="HistoryOpenVideoButton" Margin="0,0,8,6"
+                                                        Style="{StaticResource CompactActionButtonStyle}"
+                                                        Click="HistoryOpenVideo_Click">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE768;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                        <TextBlock Text="Final video" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="HistoryOpenScriptButton" Margin="0,0,8,6"
+                                                        Style="{StaticResource CompactActionButtonStyle}"
+                                                        Click="HistoryOpenScript_Click">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE8A5;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                        <TextBlock Text="Script" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="HistoryOpenYouTubeButton" Margin="0,0,8,6" Visibility="Collapsed"
+                                                        Style="{StaticResource CompactActionButtonStyle}"
+                                                        Click="HistoryOpenYouTube_Click">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                        <TextBlock Text="YouTube" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="HistoryReuploadButton" Margin="0,0,8,6"
+                                                        Style="{StaticResource CompactActionButtonStyle}"
+                                                        Click="UploadToYouTubeAgainMenuItem_Click">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE898;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                        <TextBlock Text="Re-upload" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="HistoryResetVoiceoverButton" Margin="0,0,0,6"
+                                                        Style="{StaticResource CompactActionButtonStyle}"
+                                                        Click="ResetVoiceoverMenuItem_Click">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE720;" FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                                   VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                        <TextBlock Text="Reset voiceover" VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+
+                                <!-- 2. 4-tile specs grid -->
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <Border Grid.Column="0" Style="{StaticResource CardStyle}" Padding="14,12">
+                                        <StackPanel>
+                                            <TextBlock Text="AI &amp; CURATION" FontSize="10.5" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            <TextBlock x:Name="HistorySpecAiValue" Text="—" Margin="0,5,0,0"
+                                                       FontSize="13.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock x:Name="HistorySpecAiSub" Text="—" Margin="0,2,0,0"
+                                                       FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Grid.Column="2" Style="{StaticResource CardStyle}" Padding="14,12">
+                                        <StackPanel>
+                                            <TextBlock Text="VOICEOVER" FontSize="10.5" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            <TextBlock x:Name="HistorySpecTtsValue" Text="—" Margin="0,5,0,0"
+                                                       FontSize="13.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock x:Name="HistorySpecTtsSub" Text="—" Margin="0,2,0,0"
+                                                       FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Grid.Column="4" Style="{StaticResource CardStyle}" Padding="14,12">
+                                        <StackPanel>
+                                            <TextBlock Text="TIMELINE &amp; RENDER" FontSize="10.5" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            <TextBlock x:Name="HistorySpecRenderValue" Text="—" Margin="0,5,0,0"
+                                                       FontSize="13.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock x:Name="HistorySpecRenderSub" Text="—" Margin="0,2,0,0"
+                                                       FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Grid.Column="6" Style="{StaticResource CardStyle}" Padding="14,12">
+                                        <StackPanel>
+                                            <TextBlock Text="YOUTUBE PUBLISH" FontSize="10.5" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            <TextBlock x:Name="HistorySpecYoutubeValue" Text="—" Margin="0,5,0,0"
+                                                       FontSize="13.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock x:Name="HistorySpecYoutubeSub" Text="—" Margin="0,2,0,0"
+                                                       FontSize="11.5" Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
+
+                                <!-- 3. Stories included card -->
+                                <Border Style="{StaticResource CardStyle}" Margin="0,14,0,0" Padding="20,16">
+                                    <StackPanel>
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="Stories included" FontSize="15.5" FontWeight="SemiBold" />
+                                            <TextBlock x:Name="HistoryStoriesCountText" Grid.Column="1" Text="0 stories"
+                                                       FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </Grid>
+
+                                        <TextBlock x:Name="HistoryStoriesEmptyText" Text="No story metadata found for this production."
+                                                   FontSize="12.5" Foreground="{DynamicResource TextTertiaryBrush}"
+                                                   Visibility="Collapsed" />
+
+                                        <ItemsControl x:Name="HistoryDetailStoriesList">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,0,8" Padding="12,10" CornerRadius="9"
+                                                            Background="{DynamicResource SurfaceAltBrush}"
+                                                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="12" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+
+                                                            <Border Width="28" Height="28" CornerRadius="7" VerticalAlignment="Top"
+                                                                    Background="{DynamicResource AccentTintBrush}">
+                                                                <TextBlock Text="{Binding OrderText}" FontSize="11.5" FontWeight="SemiBold"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                           Foreground="{DynamicResource AccentBrush}" />
+                                                            </Border>
+
+                                                            <StackPanel Grid.Column="2">
+                                                                <WrapPanel Orientation="Horizontal">
+                                                                    <TextBlock Text="{Binding Title}" FontSize="13.5" FontWeight="SemiBold"
+                                                                               TextWrapping="Wrap" Margin="0,0,8,0" />
+                                                                    <Border Padding="6,1" CornerRadius="6" VerticalAlignment="Center"
+                                                                            Background="{DynamicResource AccentBrush}"
+                                                                            Visibility="{Binding IsLead, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                                        <TextBlock Text="LEAD" FontSize="9.5" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource AccentTextBrush}" />
+                                                                    </Border>
+                                                                </WrapPanel>
+                                                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                                    <TextBlock Text="{Binding Source}" FontSize="11.5" FontWeight="SemiBold"
+                                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                                    <TextBlock Text="  ·  " FontSize="11.5"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                    <TextBlock Text="{Binding ScoreText}" FontSize="11.5"
+                                                                               Foreground="{DynamicResource AccentBrush}" />
+                                                                    <TextBlock Text="  ·  " FontSize="11.5"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                    <TextBlock Text="{Binding DurationText}" FontSize="11.5"
+                                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                                    <TextBlock Text="  ·  " FontSize="11.5"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                    <TextBlock Text="{Binding WordCountText}" FontSize="11.5"
+                                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                                </StackPanel>
+                                                                <TextBlock Text="{Binding RankingReason}" Margin="0,4,0,0"
+                                                                           FontSize="12" TextWrapping="Wrap"
+                                                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                                                           Visibility="{Binding HasRankingReason, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                                            </StackPanel>
+
+                                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Top" Margin="10,0,0,0">
+                                                                <Button Margin="0,0,6,0" Style="{StaticResource CompactActionButtonStyle}"
+                                                                        Content="Article"
+                                                                        Visibility="{Binding HasSourceUrl, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                                        Click="HistoryStorySource_Click" />
+                                                                <Button Style="{StaticResource CompactActionButtonStyle}"
+                                                                        Content="Text"
+                                                                        Visibility="{Binding HasTextFile, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                                        Click="HistoryStoryFile_Click" />
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 4. Stage timings breakdown card -->
+                                <Border Style="{StaticResource CardStyle}" Margin="0,14,0,0" Padding="20,16">
+                                    <StackPanel>
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="Stage breakdown" FontSize="15.5" FontWeight="SemiBold" />
+                                            <TextBlock x:Name="HistoryStagesSummaryText" Grid.Column="1" Text="0 / 12 stages"
+                                                       FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </Grid>
+
+                                        <ItemsControl x:Name="HistoryDetailStagesList">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,0,5" Padding="10,7" CornerRadius="8"
+                                                            Background="{DynamicResource SurfaceAltBrush}"
+                                                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="10" />
+                                                                <ColumnDefinition Width="220" />
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+
+                                                            <Border Width="24" Height="22" CornerRadius="6"
+                                                                    Background="{Binding BadgeBackground}">
+                                                                <TextBlock Text="{Binding Number}" FontSize="10.5" FontWeight="SemiBold"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                           Foreground="{Binding StatusBrush}" />
+                                                            </Border>
+
+                                                            <TextBlock Grid.Column="2" Text="{Binding Label}" FontSize="12.5"
+                                                                       FontWeight="SemiBold" VerticalAlignment="Center"
+                                                                       TextTrimming="CharacterEllipsis" />
+
+                                                            <TextBlock Grid.Column="3" Text="{Binding DetailText}" FontSize="11.5"
+                                                                       VerticalAlignment="Center" Margin="8,0"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                                       Visibility="{Binding HasDetail, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                                                            <TextBlock Grid.Column="4" Text="{Binding ElapsedText}" FontSize="11.5"
+                                                                       FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0"
+                                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                                       Visibility="{Binding HasElapsed, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                                                            <TextBlock Grid.Column="5" Text="{Binding StatusText}" FontSize="11.5"
+                                                                       FontWeight="SemiBold" VerticalAlignment="Center" Margin="6,0"
+                                                                       Foreground="{Binding StatusBrush}" />
+
+                                                            <Button Grid.Column="6" Margin="6,0,0,0" Padding="8,3"
+                                                                    Content="Log" Style="{StaticResource CompactActionButtonStyle}"
+                                                                    Visibility="{Binding HasLogFile, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                                    Click="HistoryStageLog_Click" />
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 5. YouTube publish package -->
+                                <Border x:Name="HistoryPublishCard" Style="{StaticResource CardStyle}" Margin="0,14,0,0"
+                                        Padding="20,16" Visibility="Collapsed">
+                                    <StackPanel>
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="YouTube metadata &amp; description" FontSize="15.5" FontWeight="SemiBold" />
+                                            <Button x:Name="HistoryCopyDescriptionButton" Grid.Column="1" Content="Copy description"
+                                                    Style="{StaticResource CompactActionButtonStyle}"
+                                                    Click="HistoryCopyPublishDescription_Click" />
+                                        </Grid>
+
+                                        <Border Padding="12,10" CornerRadius="8"
+                                                Background="{DynamicResource SurfaceAltBrush}"
+                                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="HistoryPublishDescriptionText" FontSize="12.5"
+                                                       TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        </Border>
+
+                                        <ItemsControl x:Name="HistoryDetailTagsList" Margin="0,10,0,0">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel Orientation="Horizontal" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,6,6" Padding="8,3" CornerRadius="7"
+                                                            Background="{DynamicResource AccentTintBrush}">
+                                                        <TextBlock Text="{Binding}" FontSize="11.5"
+                                                                   Foreground="{DynamicResource AccentBrush}" />
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 6. Script preview -->
+                                <Border x:Name="HistoryScriptCard" Style="{StaticResource CardStyle}" Margin="0,14,0,0"
+                                        Padding="20,16" Visibility="Collapsed">
+                                    <StackPanel>
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="Script preview" FontSize="15.5" FontWeight="SemiBold" />
+                                                <TextBlock x:Name="HistoryScriptMetaText" Text="" Margin="0,2,0,0"
+                                                           FontSize="11.5" Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Button Margin="0,0,6,0" Content="Copy script"
+                                                        Style="{StaticResource CompactActionButtonStyle}"
+                                                        Click="HistoryCopyScript_Click" />
+                                                <Button Content="Open file"
+                                                        Style="{StaticResource CompactActionButtonStyle}"
+                                                        Click="HistoryOpenScript_Click" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <Border Padding="12,10" CornerRadius="8"
+                                                Background="{DynamicResource SurfaceAltBrush}"
+                                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                            <TextBlock x:Name="HistoryScriptPreviewText" FontFamily="Consolas"
+                                                       FontSize="12" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+            </Grid>
+
+            <!-- API Quota & Credits page -->
+            <Grid x:Name="QuotaPage" Grid.Column="1" Margin="26,20,26,22" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="14" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Header row -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="API quota &amp; credits" FontSize="28" FontWeight="SemiBold" />
+                        <TextBlock Text="Monitor configured provider usage, remaining credits, and open billing dashboards right inside the app."
+                                   Margin="0,3,0,0" FontSize="12.5"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Padding="11,5" CornerRadius="13" Margin="0,0,10,0"
+                                Background="{DynamicResource SurfaceAltBrush}"
+                                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                            <TextBlock x:Name="QuotaSummaryText" Text="Checking providers…" FontSize="12"
+                                       FontWeight="SemiBold" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                        </Border>
+                        <TextBlock x:Name="QuotaUpdatedText" Text="Loading provider data…"
+                                   VerticalAlignment="Center" Margin="0,0,12,0" FontSize="12"
+                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                        <Button x:Name="RefreshQuotaButton" Padding="13,7"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Click="RefreshQuotaButton_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons" FontSize="12.5"
+                                           VerticalAlignment="Center" Margin="0,0,7,0" />
+                                <TextBlock Text="Refresh" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Split workspace: quota cards + docked in-app browser -->
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition x:Name="QuotaCardsColumn" Width="*" MinWidth="360" />
+                        <ColumnDefinition x:Name="QuotaBrowserSplitterColumn" Width="0" />
+                        <ColumnDefinition x:Name="QuotaBrowserColumn" Width="0" />
+                    </Grid.ColumnDefinitions>
+
+                    <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled" Padding="0,0,4,0">
+                        <ItemsControl x:Name="QuotaItems">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <controls:ResponsiveUniformGrid Breakpoint="640" NarrowColumns="1" WideColumns="2" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource CardStyle}" Margin="0,0,12,12" Padding="18,16"
+                                            Cursor="Hand" MouseLeftButtonUp="QuotaCard_MouseLeftButtonUp"
+                                            ToolTip="Click to open dashboard inside News Studio">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="12" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="*" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <!-- Top provider & status row -->
+                                            <Grid Grid.Row="0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="12" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <Border Width="38" Height="38" CornerRadius="10"
+                                                        Background="{Binding StatusTintBrush}">
+                                                    <TextBlock Text="{Binding ProviderGlyph}" FontFamily="Segoe Fluent Icons"
+                                                               FontSize="17" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Foreground="{Binding StatusBrush}" />
+                                                </Border>
+
+                                                <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding CategoryLabel}" FontSize="11.5"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                                                </StackPanel>
+
+                                                <Border Grid.Column="3" VerticalAlignment="Top" Padding="9,3" CornerRadius="10"
+                                                        Background="{Binding StatusTintBrush}"
+                                                        BorderBrush="{Binding StatusBrush}" BorderThickness="1">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="{Binding StatusGlyph}" FontFamily="Segoe Fluent Icons"
+                                                                   FontSize="10.5" VerticalAlignment="Center"
+                                                                   Foreground="{Binding StatusBrush}" Margin="0,0,5,0" />
+                                                        <TextBlock Text="{Binding StatusLabel}" FontSize="11" FontWeight="SemiBold"
+                                                                   VerticalAlignment="Center" Foreground="{Binding StatusBrush}" />
+                                                    </StackPanel>
+                                                </Border>
+                                            </Grid>
+
+                                            <!-- Primary metric & detail -->
+                                            <StackPanel Grid.Row="2">
+                                                <TextBlock Text="{Binding Primary}" FontSize="16" FontWeight="SemiBold"
+                                                           TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Detail}" Margin="0,4,0,0" FontSize="12.5"
+                                                           TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" />
+                                            </StackPanel>
+
+                                            <!-- Optional quota meter -->
+                                            <Grid Grid.Row="3" Margin="0,12,0,0"
+                                                  Visibility="{Binding HasMeter, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="10" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <ProgressBar Height="7" Maximum="100" Value="{Binding MeterPercent}"
+                                                             VerticalAlignment="Center"
+                                                             Foreground="{Binding StatusBrush}"
+                                                             Style="{StaticResource FluentProgressBarStyle}" />
+                                                <TextBlock Grid.Column="2" Text="{Binding MeterText}" FontSize="11.5"
+                                                           FontWeight="SemiBold" VerticalAlignment="Center"
+                                                           Foreground="{Binding StatusBrush}" />
+                                            </Grid>
+
+                                            <!-- Footer action bar -->
+                                            <Border Grid.Row="4" Margin="0,14,0,0" Padding="0,10,0,0"
+                                                    BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,1,0,0">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <TextBlock Text="{Binding DashboardDomain}" FontSize="11.5"
+                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                               Foreground="{DynamicResource TextTertiaryBrush}" />
+
+                                                    <Button Grid.Column="1" Margin="8,0,6,0"
+                                                            Style="{StaticResource CompactActionButtonStyle}"
+                                                            IsEnabled="{Binding HasDashboardUrl}"
+                                                            Click="OpenQuotaInAppButton_Click">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="&#xE774;" FontFamily="Segoe Fluent Icons" FontSize="11.5"
+                                                                       VerticalAlignment="Center" Margin="0,0,5,0" />
+                                                            <TextBlock Text="Open in app" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                    </Button>
+
+                                                    <Button Grid.Column="2" Padding="7,4"
+                                                            Style="{StaticResource CompactActionButtonStyle}"
+                                                            IsEnabled="{Binding HasDashboardUrl}"
+                                                            Click="OpenQuotaExternalButton_Click"
+                                                            ToolTip="Open in external browser">
+                                                        <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons" FontSize="11.5" />
+                                                    </Button>
+                                                </Grid>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                  Background="Transparent" Cursor="SizeWE" />
+
+                    <!-- Docked in-app browser pane -->
+                    <Border x:Name="QuotaBrowserPanel" Grid.Column="2" Style="{StaticResource CardStyle}"
+                            Padding="0" Visibility="Collapsed" ClipToBounds="True">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <!-- Browser toolbar -->
+                            <Border Padding="12,10" Background="{DynamicResource SurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,0,0,1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="QuotaBrowserBackButton" Margin="0,0,4,0" Padding="7,5"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                IsEnabled="False" ToolTip="Back"
+                                                Click="QuotaBrowserBackButton_Click">
+                                            <TextBlock Text="&#xE72B;" FontFamily="Segoe Fluent Icons" FontSize="12" />
+                                        </Button>
+                                        <Button x:Name="QuotaBrowserForwardButton" Margin="0,0,4,0" Padding="7,5"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                IsEnabled="False" ToolTip="Forward"
+                                                Click="QuotaBrowserForwardButton_Click">
+                                            <TextBlock Text="&#xE72A;" FontFamily="Segoe Fluent Icons" FontSize="12" />
+                                        </Button>
+                                        <Button x:Name="QuotaBrowserReloadButton" Padding="7,5"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                ToolTip="Reload"
+                                                Click="QuotaBrowserReloadButton_Click">
+                                            <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons" FontSize="12" />
+                                        </Button>
+                                    </StackPanel>
+
+                                    <Border Grid.Column="2" Padding="10,4" CornerRadius="8"
+                                            Background="{DynamicResource SurfaceBrush}"
+                                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                                        <StackPanel>
+                                            <TextBlock x:Name="QuotaBrowserTitleText" Text="Provider dashboard"
+                                                       FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock x:Name="QuotaBrowserUrlText" Text="https://"
+                                                       FontSize="10.5" TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource TextTertiaryBrush}" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <StackPanel Grid.Column="4" Orientation="Horizontal">
+                                        <Button x:Name="QuotaBrowserExternalButton" Margin="0,0,4,0" Padding="7,5"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                ToolTip="Open current URL in default browser"
+                                                Click="QuotaBrowserExternalButton_Click">
+                                            <TextBlock Text="&#xE8A7;" FontFamily="Segoe Fluent Icons" FontSize="12" />
+                                        </Button>
+                                        <Button x:Name="QuotaBrowserExpandButton" Margin="0,0,4,0" Padding="7,5"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                ToolTip="Toggle wide browser view"
+                                                Click="QuotaBrowserExpandButton_Click">
+                                            <TextBlock x:Name="QuotaBrowserExpandGlyph" Text="&#xE740;"
+                                                       FontFamily="Segoe Fluent Icons" FontSize="12" />
+                                        </Button>
+                                        <Button x:Name="QuotaBrowserCloseButton" Padding="7,5"
+                                                Style="{StaticResource CompactActionButtonStyle}"
+                                                ToolTip="Close in-app browser"
+                                                Click="QuotaBrowserCloseButton_Click">
+                                            <TextBlock Text="&#xE8BB;" FontFamily="Segoe Fluent Icons" FontSize="12" />
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <ProgressBar x:Name="QuotaBrowserProgress" Grid.Row="1" Height="3"
+                                         IsIndeterminate="True" Visibility="Collapsed"
+                                         Style="{StaticResource FluentProgressBarStyle}" />
+
+                            <Grid Grid.Row="2">
+                                <wv2:WebView2 x:Name="QuotaWebView" />
+                                <StackPanel x:Name="QuotaBrowserFallbackPanel" Visibility="Collapsed"
+                                            VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24" MaxWidth="360">
+                                    <TextBlock Text="&#xE774;" FontFamily="Segoe Fluent Icons" FontSize="28"
+                                               HorizontalAlignment="Center" Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    <TextBlock x:Name="QuotaBrowserFallbackText"
+                                               Text="Could not initialize the embedded browser."
+                                               Margin="0,10,0,0" FontSize="13" TextWrapping="Wrap" TextAlignment="Center"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    <Button Margin="0,14,0,0" Content="Open in external browser"
+                                            HorizontalAlignment="Center"
+                                            Style="{StaticResource PrimaryButtonStyle}"
+                                            Click="QuotaBrowserExternalButton_Click" />
+                                </StackPanel>
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
+
+            <!-- Settings page -->
+            <Grid x:Name="SettingsPage" Grid.Column="1" Margin="30,24,30,24" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="12" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Header and Search -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="400" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Settings" FontSize="30" FontWeight="SemiBold" />
+                        <TextBlock Text="Configure pipeline models, media sources, audio mix, and .env variables safely."
+                                   Margin="0,4,0,0" FontSize="13"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                    <Border x:Name="SettingsSearchBorder" Grid.Column="1" Width="380" Height="40"
+                            HorizontalAlignment="Right" VerticalAlignment="Center" CornerRadius="20"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource StrokeStrongBrush}" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="42" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="38" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons" FontSize="14"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Grid Grid.Column="1">
+                                <TextBox x:Name="SettingsSearchBox" Background="Transparent" BorderThickness="0"
+                                         Padding="0" FontSize="13.5" VerticalContentAlignment="Center"
+                                         AutomationProperties.Name="Find a setting"
+                                         Foreground="{DynamicResource TextPrimaryBrush}"
+                                         CaretBrush="{DynamicResource AccentBrush}"
+                                         SelectionBrush="{DynamicResource AccentBrush}"
+                                         GotFocus="SettingsSearchBox_GotFocus" LostFocus="SettingsSearchBox_LostFocus"
+                                         TextChanged="SettingsSearchBox_TextChanged"
+                                         PreviewKeyDown="SettingsSearchBox_PreviewKeyDown" />
+                                <TextBlock x:Name="SettingsSearchPlaceholder" Text="Search by name, key, or description..."
+                                           IsHitTestVisible="False" VerticalAlignment="Center" FontSize="13"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </Grid>
+                            <Button x:Name="ClearSettingsSearchButton" Grid.Column="2" Width="30" Height="30"
+                                    Visibility="Collapsed" ToolTip="Clear search" Cursor="Hand"
+                                    Background="Transparent" BorderThickness="0" Padding="0"
+                                    Click="ClearSettingsSearch_Click">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="ClearSurface" Background="Transparent" CornerRadius="15">
+                                            <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="11"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="ClearSurface" Property="Background"
+                                                        Value="{DynamicResource SurfaceHoverBrush}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <Border x:Name="SettingsSearchFocusLine" Grid.ColumnSpan="3" Height="2"
+                                    Margin="16,0" VerticalAlignment="Bottom" CornerRadius="1"
+                                    Background="{DynamicResource AccentBrush}" Opacity="0" />
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- Section Filter Bar & Expand/Collapse Actions -->
+                <Grid Grid.Row="1" Margin="0,16,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <WrapPanel VerticalAlignment="Center">
+                        <RadioButton x:Name="FilterAllPill" Content="All" Tag="All" IsChecked="True"
+                                     Style="{StaticResource SettingsFilterPillStyle}"
+                                     Checked="SettingsSectionFilter_Checked" />
+                        <RadioButton x:Name="FilterWorkspacePill" Content="Workspace &amp; AI" Tag="Workspace &amp; AI"
+                                     Style="{StaticResource SettingsFilterPillStyle}"
+                                     Checked="SettingsSectionFilter_Checked" />
+                        <RadioButton x:Name="FilterNewsPill" Content="News &amp; Script" Tag="News &amp; Script"
+                                     Style="{StaticResource SettingsFilterPillStyle}"
+                                     Checked="SettingsSectionFilter_Checked" />
+                        <RadioButton x:Name="FilterVoicePill" Content="Voice &amp; Audio" Tag="Voice &amp; Audio"
+                                     Style="{StaticResource SettingsFilterPillStyle}"
+                                     Checked="SettingsSectionFilter_Checked" />
+                        <RadioButton x:Name="FilterVisualsPill" Content="Visuals &amp; Media" Tag="Visuals &amp; Media"
+                                     Style="{StaticResource SettingsFilterPillStyle}"
+                                     Checked="SettingsSectionFilter_Checked" />
+                        <RadioButton x:Name="FilterRenderPill" Content="Render &amp; Effects" Tag="Render &amp; Effects"
+                                     Style="{StaticResource SettingsFilterPillStyle}"
+                                     Checked="SettingsSectionFilter_Checked" />
+                        <RadioButton x:Name="FilterPublishingPill" Content="Publishing" Tag="Publishing"
+                                     Style="{StaticResource SettingsFilterPillStyle}"
+                                     Checked="SettingsSectionFilter_Checked" />
+                        <ToggleButton x:Name="ModifiedOnlyToggle" Content="Modified only"
+                                      Style="{StaticResource SettingsModifiedToggleStyle}"
+                                      ToolTip="Show only settings with unsaved edits"
+                                      Click="ModifiedOnlyToggle_Click" />
+                    </WrapPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="12,0,0,0">
+                        <Button x:Name="ExpandAllSettingsButton" Content="Expand all"
+                                Padding="11,6" FontSize="12" Margin="0,0,6,0"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Click="ExpandAllSettings_Click" />
+                        <Button x:Name="CollapseAllSettingsButton" Content="Collapse all"
+                                Padding="11,6" FontSize="12"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Click="CollapseAllSettings_Click" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- Settings Scroll Area -->
+                <ScrollViewer x:Name="SettingsScrollViewer" Grid.Row="2" VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                    <StackPanel>
+                        <Border x:Name="AppExperienceCard" Style="{StaticResource CardStyle}"
+                                Padding="18,16" Margin="0,0,0,14">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Width="36" Height="36" CornerRadius="9"
+                                            Background="{DynamicResource SurfaceAltBrush}"
+                                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Text="&#xE7F6;" FontFamily="Segoe Fluent Icons" FontSize="15"
+                                                   Foreground="{DynamicResource AccentBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="App experience &amp; alerts" FontSize="15.5" FontWeight="SemiBold" />
+                                        <TextBlock Text="Workflow sound alerts stored alongside pipeline preferences in .env."
+                                                   Margin="0,2,0,0" FontSize="12" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </StackPanel>
+                                </Grid>
+                                <Border Grid.Row="1" CornerRadius="10"
+                                        Background="{DynamicResource SurfaceAltBrush}"
+                                        BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                        Padding="14,4">
+                                    <StackPanel>
+                                        <Border BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,0,0,1" Padding="0,10">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                                                    <TextBlock Text="Decision alert sound" FontSize="13" FontWeight="SemiBold" />
+                                                    <TextBlock Text="Play a Windows alert sound whenever the workflow pauses for your choice."
+                                                               Margin="0,2,0,0" FontSize="11.5" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                </StackPanel>
+                                                <CheckBox x:Name="ChoiceSoundCheckBox" Grid.Column="1" Content="Enabled"
+                                                          IsChecked="True" VerticalAlignment="Center"
+                                                          Click="ChoiceSoundCheckBox_Click" />
+                                            </Grid>
+                                        </Border>
+                                        <Border Padding="0,10">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                                                    <TextBlock Text="Stage transition sound" FontSize="13" FontWeight="SemiBold" />
+                                                    <TextBlock Text="Play a subtle notification chime when production moves to the next stage."
+                                                               Margin="0,2,0,0" FontSize="11.5" TextWrapping="Wrap"
+                                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                                </StackPanel>
+                                                <CheckBox x:Name="StageSoundCheckBox" Grid.Column="1" Content="Enabled"
+                                                          IsChecked="True" VerticalAlignment="Center"
+                                                          Click="StageSoundCheckBox_Click" />
+                                            </Grid>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Border>
+                        <StackPanel x:Name="SettingsGroupsPanel" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Footer Bar -->
+                <Border Grid.Row="4" Style="{StaticResource CardStyle}" Padding="16,13">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border x:Name="UnsavedChangesBadge" Visibility="Collapsed"
+                                        CornerRadius="10" Padding="8,2" Margin="0,0,9,0"
+                                        Background="{DynamicResource AccentBrush}" VerticalAlignment="Center">
+                                    <TextBlock x:Name="UnsavedChangesBadgeText" Text="0 unsaved"
+                                               FontSize="10.5" FontWeight="Bold"
+                                               Foreground="{DynamicResource AccentTextBrush}" />
+                                </Border>
+                                <TextBlock x:Name="SettingsStatusText"
+                                           Text="Settings stay available during a run. Changes apply to the next pipeline run."
+                                           FontSize="12.5" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </StackPanel>
+                            <TextBlock Text="Saving creates a timestamped backup in Automation/.env.backup first."
+                                       Margin="0,3,0,0" FontSize="11" Foreground="{DynamicResource TextTertiaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="＋  Add new variable" Margin="0,0,9,0"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="AddVariableButton_Click" />
+                            <Button Content="Reload" Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="ReloadSettings_Click" />
+                            <Button x:Name="SaveSettingsButton" Content="Save changes" Margin="9,0,0,0"
+                                    Style="{StaticResource PrimaryButtonStyle}" Click="SaveSettings_Click" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- Queue count dialog opened by Ctrl+Shift+clicking the new-video button -->
+        <Grid x:Name="QueueOverlay" Grid.Row="1" Grid.ColumnSpan="2"
+              Background="#66000000" Visibility="Collapsed" Panel.ZIndex="120"
+              shell:WindowChrome.IsHitTestVisibleInChrome="True">
+            <Border x:Name="QueueCard" Width="500" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Style="{StaticResource CardStyle}" Padding="26">
+                <StackPanel>
+                    <TextBlock Text="GENERATION QUEUE" Foreground="{DynamicResource AccentBrush}"
+                               FontSize="11" FontWeight="Bold" />
+                    <TextBlock Text="Generate videos in order" Margin="0,6,0,0"
+                               FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock Text="Each video completes before the next one starts. Queued runs use fast defaults. The queue stops if a generation fails, is cancelled, or pauses for manual work."
+                               Margin="0,7,0,20" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <TextBlock Text="Generation count" FontSize="12" FontWeight="SemiBold" />
+                    <TextBox x:Name="QueueCountTextBox" Margin="0,6,0,0" MaxLength="2"
+                             Style="{StaticResource InputStyle}" InputScope="Number" />
+                    <TextBlock Text="Enter a whole number from 1 to 20."
+                               Margin="0,6,0,0" FontSize="11"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                    <TextBlock x:Name="QueueErrorText" Foreground="{DynamicResource DangerBrush}"
+                               FontSize="11" Margin="0,7,0,0" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                        <Button Content="Cancel" Style="{StaticResource SecondaryButtonStyle}"
+                                Click="CancelQueue_Click" />
+                        <Button Content="Start queue" Margin="9,0,0,0"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Click="ConfirmQueue_Click" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Persistent choices controlling which workflow checkpoints pause for input -->
+        <Grid x:Name="ProductionOptionsOverlay" Grid.Row="1" Grid.ColumnSpan="2"
+              Background="#66000000" Visibility="Collapsed" Panel.ZIndex="105"
+              shell:WindowChrome.IsHitTestVisibleInChrome="True">
+            <Border x:Name="ProductionOptionsCard" Width="610" MaxHeight="720"
+                    VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Style="{StaticResource CardStyle}" Padding="26">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="PRODUCTION OPTIONS" Foreground="{DynamicResource AccentBrush}"
+                                   FontSize="11" FontWeight="Bold" />
+                        <TextBlock Text="Choose which dialogs use their defaults" Margin="0,6,0,0"
+                                   FontSize="22" FontWeight="SemiBold" />
+                        <TextBlock Text="Check an item to skip that exact prompt and choose its DEFAULT option automatically. Leave it unchecked when you want the prompt to appear. Changes are saved immediately."
+                                   Margin="0,7,0,14" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <CheckBox x:Name="AllProductionPreferencesCheckBox"
+                                  Content="Use all displayed defaults automatically"
+                                  IsThreeState="True" FontWeight="SemiBold"
+                                  PreviewMouseLeftButtonDown="AllProductionPreferences_PreviewMouseLeftButtonDown"
+                                  PreviewKeyDown="AllProductionPreferences_PreviewKeyDown" />
+                        <TextBlock Text="A hyphen means only some choice dialogs use their defaults automatically."
+                                   Margin="27,4,0,16" FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                    </StackPanel>
+                    <Expander x:Name="ProductionPreferencesExpander" Grid.Row="1"
+                              Style="{StaticResource SettingsExpanderStyle}" IsExpanded="False"
+                              Expanded="SettingExpander_Expanded">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Automatic default choices"
+                                           FontSize="15" FontWeight="SemiBold" />
+                                <TextBlock Text="8 options" Margin="12,2,0,0" FontSize="11"
+                                           Foreground="{DynamicResource TextTertiaryBrush}" />
+                            </StackPanel>
+                        </Expander.Header>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="430">
+                          <StackPanel>
+                            <Border Style="{StaticResource CardStyle}" Padding="15" Margin="0,0,0,9">
+                                <StackPanel>
+                                    <CheckBox x:Name="ConfirmProductionActionCheckBox"
+                                              Content="Start a new video automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_PRODUCTION_ACTION"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Choose the production action.” Default: Create a new Tech News video instead of continuing the latest video."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="15" Margin="0,0,0,9">
+                                <StackPanel>
+                                    <CheckBox x:Name="ConfirmResumeSectionCheckBox"
+                                              Content="Resume from the recommended section automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_RESUME_SECTION"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Choose the section to continue from.” Default: the option marked DEFAULT, normally the first unfinished production stage."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="15" Margin="0,0,0,9">
+                                <StackPanel>
+                                    <CheckBox x:Name="ConfirmProviderRequestsCheckBox"
+                                              Content="Allow the listed provider requests automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_PROVIDER_REQUESTS"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Allow the listed provider requests?” Default: Continue with every provider request shown in the cost list."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="15" Margin="0,0,0,9">
+                                <StackPanel>
+                                    <CheckBox x:Name="UseDefaultLeadStoryCheckBox"
+                                              Content="Use the top-ranked news as the lead story automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_LEAD_STORY"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Which news should be first and drive the YouTube title and thumbnail?” Default: choose item 1, the first and highest-ranked story displayed."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="15" Margin="0,0,0,9">
+                                <StackPanel>
+                                    <CheckBox x:Name="WaitForSeparatorsCheckBox"
+                                              Content="Skip manually created separators automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_SEPARATORS"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Manual video separator checkpoint.” Default: skip manual separator videos and show storyboard images from each chapter’s beginning."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="15" Margin="0,0,0,9">
+                                <StackPanel>
+                                    <CheckBox x:Name="WaitForAiVideosCheckBox"
+                                              Content="Keep storyboard images instead of AI videos automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_AI_VIDEOS"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Will you add AI-generated videos for the five story sections?” Default: No—continue using the generated storyboard images."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="15" Margin="0,0,0,9">
+                                <StackPanel>
+                                    <CheckBox x:Name="WaitForPreviewCheckBox"
+                                              Content="Approve the review preview and render automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_PREVIEW"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Approve the review preview?” Default: approve the preview and begin the final render without waiting for review."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="15" Margin="0,0,0,9">
+                                <StackPanel>
+                                    <CheckBox x:Name="UseDefaultYouTubeTitleCheckBox"
+                                              Content="Use the recommended YouTube title automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_YOUTUBE_TITLE"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Review or change the YouTube title before upload.” Default: keep the recommended YouTube title without waiting for review."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Padding="15">
+                                <StackPanel>
+                                    <CheckBox x:Name="ConfirmYouTubeUploadCheckBox"
+                                              Content="Upload the completed package to YouTube automatically"
+                                              Tag="NEWS_STUDIO_GUI_USE_DEFAULT_YOUTUBE_UPLOAD"
+                                              Click="ProductionPreference_Click" />
+                                    <TextBlock Text="Prompt: “Upload the video, thumbnail, title, description, and chapters to YouTube?” Default: upload the complete package to YouTube."
+                                               Margin="27,4,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                </StackPanel>
+                            </Border>
+                          </StackPanel>
+                        </ScrollViewer>
+                    </Expander>
+                    <Grid Grid.Row="2" Margin="0,18,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="ProductionOptionsStatusText" Text="Saved automatically"
+                                   VerticalAlignment="Center" FontSize="11"
+                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <Button Content="Close" Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="CloseProductionOptions_Click" />
+                            <Button Content="Continue" Margin="9,0,0,0"
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    Click="ContinueProductionOptions_Click" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Smoke + content dialog for every timed pipeline decision -->
+        <Grid x:Name="DecisionOverlay" Grid.Row="1" Grid.ColumnSpan="2"
+              Background="#66000000" Visibility="Collapsed" Panel.ZIndex="100"
+              shell:WindowChrome.IsHitTestVisibleInChrome="True">
+            <Border x:Name="DecisionCard" Width="560" MaxHeight="650" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Style="{StaticResource CardStyle}" Padding="26">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="ACTION REQUIRED" Foreground="{DynamicResource AccentBrush}"
+                                       FontSize="11" FontWeight="Bold" />
+                            <TextBlock x:Name="DecisionTitle" Text="Choose an option" Margin="0,6,0,0"
+                                       FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Border x:Name="DecisionCountdownBorder" Grid.Column="1" Padding="10,5" CornerRadius="12" Background="#120F6CBD">
+                            <TextBlock x:Name="DecisionCountdownText" Text="2:00" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource AccentBrush}" />
+                        </Border>
+                    </Grid>
+                    <TextBlock x:Name="DecisionInstructionText" Grid.Row="1" Text="Choose now or the safe default will be used when the timer ends."
+                               Margin="0,9,0,15" Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" MaxHeight="390">
+                        <StackPanel>
+                            <Border x:Name="DecisionDetailsCard" Visibility="Collapsed"
+                                    Background="{DynamicResource SurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                    CornerRadius="9" Padding="14" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock x:Name="DecisionDetailsTitle" Text="Provider requests for this run"
+                                               FontSize="13" FontWeight="SemiBold" />
+                                    <StackPanel x:Name="DecisionDetailsPanel" Margin="0,7,0,0" />
+                                </StackPanel>
+                            </Border>
+                            <Border x:Name="DecisionTextInputCard" Visibility="Collapsed"
+                                    Background="{DynamicResource SurfaceAltBrush}"
+                                    BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                    CornerRadius="9" Padding="14" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="DecisionTextInputLabel" Text="YouTube title"
+                                                   FontSize="13" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="DecisionTextInputCounter" Grid.Column="1" Text="0 / 100"
+                                                   FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </Grid>
+                                    <TextBox x:Name="DecisionCustomTextBox" Margin="0,8,0,0"
+                                             Style="{StaticResource InputStyle}" MaxLength="100"
+                                             TextWrapping="Wrap" AcceptsReturn="False"
+                                             TextChanged="DecisionCustomTextBox_TextChanged" />
+                                    <TextBlock x:Name="DecisionTextInputHint"
+                                               Text="Edit the title above and click option 1 (or press Enter), or choose a candidate title below."
+                                               Margin="0,6,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    <TextBlock x:Name="DecisionTextInputError" Visibility="Collapsed"
+                                               Margin="0,5,0,0" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource DangerBrush}" />
+                                </StackPanel>
+                            </Border>
+                            <StackPanel x:Name="DecisionOptionsPanel" />
+                        </StackPanel>
+                    </ScrollViewer>
+                    <Grid Grid.Row="3" Margin="0,17,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <ProgressBar x:Name="DecisionProgress" Height="4" Minimum="0"
+                                     Style="{StaticResource FluentProgressBarStyle}"
+                                     Foreground="{DynamicResource AccentBrush}" />
+                        <Grid Grid.Row="1" Margin="0,13,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <CheckBox x:Name="FastDefaultsCheckBox" Content="Skip later waits (Shift+Enter)"
+                                      Visibility="Collapsed" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button x:Name="DecisionAssetButton" Content="Open preview" Margin="0,0,8,0"
+                                        Visibility="Collapsed" Style="{StaticResource SecondaryButtonStyle}"
+                                        Click="DecisionAssetButton_Click" />
+                                <Button Content="Cancel workflow" Style="{StaticResource DangerButtonStyle}"
+                                        Click="CancelDecisionButton_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Fluent editor for user-defined .env entries -->
+        <Grid x:Name="AddVariableOverlay" Grid.Row="1" Grid.ColumnSpan="2"
+              Background="#66000000" Visibility="Collapsed" Panel.ZIndex="110"
+              shell:WindowChrome.IsHitTestVisibleInChrome="True">
+            <Border x:Name="AddVariableCard" Width="520" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Style="{StaticResource CardStyle}" Padding="26">
+                <StackPanel>
+                    <TextBlock Text="NEW ENVIRONMENT VARIABLE" Foreground="{DynamicResource AccentBrush}"
+                               FontSize="11" FontWeight="Bold" />
+                    <TextBlock Text="Add new variable" Margin="0,6,0,0"
+                               FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock Text="The entry is staged here first. Save changes writes it to .env after creating a backup."
+                               Margin="0,7,0,20" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                    <TextBlock Text="Variable name" FontSize="12" FontWeight="SemiBold" />
+                    <TextBox x:Name="NewVariableKeyTextBox" Margin="0,6,0,15"
+                             Style="{StaticResource InputStyle}" CharacterCasing="Upper" />
+                    <TextBlock Text="Initial value" FontSize="12" FontWeight="SemiBold" />
+                    <TextBox x:Name="NewVariableValueTextBox" Margin="0,6,0,13"
+                             Style="{StaticResource InputStyle}" />
+                    <CheckBox x:Name="NewVariableSecretCheckBox" Content="Treat this value as a secret"
+                              Margin="0,0,0,5" />
+                    <TextBlock x:Name="AddVariableErrorText" Foreground="{DynamicResource DangerBrush}"
+                               FontSize="11" Margin="0,7,0,0" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                        <Button Content="Cancel" Style="{StaticResource SecondaryButtonStyle}"
+                                Click="CancelAddVariable_Click" />
+                        <Button Content="Add variable" Margin="9,0,0,0"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Click="ConfirmAddVariable_Click" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Voiceover reset dialog opened from Production history three-dots menu -->
+        <Grid x:Name="VoiceoverResetOverlay" Grid.Row="1" Grid.ColumnSpan="2"
+              Background="#66000000" Visibility="Collapsed" Panel.ZIndex="125"
+              shell:WindowChrome.IsHitTestVisibleInChrome="True">
+            <Border x:Name="VoiceoverResetCard" Width="540" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Style="{StaticResource CardStyle}" Padding="26">
+                <StackPanel>
+                    <TextBlock Text="RESET SECTIONS · VOICEOVER" Foreground="{DynamicResource AccentBrush}"
+                               FontSize="11" FontWeight="Bold" />
+                    <TextBlock x:Name="VoiceoverResetTitleText" Text="Reset voiceover" Margin="0,6,0,0"
+                               FontSize="22" FontWeight="SemiBold" />
+                    <TextBlock Text="Regenerates all story voiceovers for this project while keeping the news scripts unchanged. Save overwrites the voiceover and restarts production from the voiceover stage to resync animations, video, and subtitles."
+                               Margin="0,7,0,18" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+
+                    <!-- Progress / status banner while generating or saving -->
+                    <Border x:Name="VoiceoverBusyBanner" Padding="14,12" CornerRadius="9"
+                            Margin="0,0,0,14"
+                            Background="{DynamicResource SurfaceAltBrush}"
+                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock x:Name="VoiceoverStatusText"
+                                       Text="Generating new voiceovers..."
+                                       FontSize="12.5" FontWeight="SemiBold"
+                                       TextWrapping="Wrap" />
+                            <ProgressBar x:Name="VoiceoverBusyProgress" Height="4" Margin="0,9,0,0"
+                                         IsIndeterminate="True"
+                                         Background="{DynamicResource SurfaceHoverBrush}"
+                                         Foreground="{DynamicResource AccentBrush}"
+                                         BorderThickness="0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Generated voiceover file & audio preview player -->
+                    <Border x:Name="VoiceoverPlayerCard" Padding="16,14" CornerRadius="10"
+                            Background="{DynamicResource SurfaceAltBrush}"
+                            BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="38" Height="38" CornerRadius="9"
+                                        Background="{DynamicResource SurfaceHoverBrush}"
+                                        BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                        VerticalAlignment="Center">
+                                    <TextBlock Text="&#xE720;" FontFamily="Segoe Fluent Icons"
+                                               FontSize="16" Foreground="{DynamicResource AccentBrush}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="12,0,12,0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="VoiceoverFileNameText" Text="Video_voiceover.mp3"
+                                               FontSize="13.5" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="VoiceoverFileDetailText" Text="Waiting for generation..."
+                                               Margin="0,2,0,0" FontSize="11.5"
+                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Button x:Name="VoiceoverPlayButton" Grid.Column="2"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        Padding="14,7" IsEnabled="False"
+                                        Click="VoiceoverPlayButton_Click">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock x:Name="VoiceoverPlayGlyph" Text="&#xE768;"
+                                                   FontFamily="Segoe Fluent Icons" FontSize="12"
+                                                   VerticalAlignment="Center" Margin="0,0,7,0" />
+                                        <TextBlock x:Name="VoiceoverPlayLabel" Text="Play"
+                                                   FontSize="13" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ProgressBar x:Name="VoiceoverPlaybackProgress" Height="5"
+                                             Minimum="0" Maximum="100" Value="0"
+                                             VerticalAlignment="Center"
+                                             Style="{StaticResource FluentProgressBarStyle}"
+                                             Background="{DynamicResource SurfaceHoverBrush}"
+                                             Foreground="{DynamicResource AccentBrush}" />
+                                <TextBlock x:Name="VoiceoverTimeText" Grid.Column="1"
+                                           Text="00:00 / 00:00" Margin="12,0,0,0"
+                                           FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           VerticalAlignment="Center" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock x:Name="VoiceoverErrorText" Visibility="Collapsed"
+                               Foreground="{DynamicResource DangerBrush}"
+                               FontSize="11.5" Margin="0,10,0,0" TextWrapping="Wrap" />
+
+                    <Grid Margin="0,20,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="VoiceoverCancelButton" Grid.Column="0"
+                                Content="Cancel" Style="{StaticResource SecondaryButtonStyle}"
+                                Click="CancelVoiceoverReset_Click" />
+                        <StackPanel Grid.Column="2" Orientation="Horizontal">
+                            <Button x:Name="VoiceoverRegenerateButton"
+                                    Content="Regenerate" Style="{StaticResource SecondaryButtonStyle}"
+                                    IsEnabled="False"
+                                    Click="RegenerateVoiceover_Click" />
+                            <Button x:Name="VoiceoverSaveButton" Margin="9,0,0,0"
+                                    Content="Save" Style="{StaticResource PrimaryButtonStyle}"
+                                    IsEnabled="False"
+                                    Click="SaveVoiceoverReset_Click" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920, height=1080, initial-scale=1">
+  <title>Tech News Motion Scene</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #0B0F19;
+      --text: #F6F8FC;
+      --muted: #9BA8BA;
+      --cyan: #38BDF8;
+      --indigo: #818CF8;
+      --glass: rgba(255, 255, 255, 0.04);
+      --glass-border: rgba(255, 255, 255, 0.1);
+      --stage-font: Inter, "Segoe UI", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 1920px; height: 1080px; margin: 0; overflow: hidden; }
+    body { background: var(--canvas); color: var(--text); font-family: var(--stage-font); }
+
+    #stage {
+      position: relative;
+      isolation: isolate;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      background: var(--canvas);
+    }
+    #stage::before, #stage::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+    }
+    #stage::before {
+      opacity: 0.28;
+      background-image:
+        linear-gradient(rgba(56, 189, 248, 0.09) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(56, 189, 248, 0.09) 1px, transparent 1px);
+      background-size: 72px 72px;
+      mask-image: radial-gradient(ellipse at center, #000 20%, transparent 84%);
+    }
+    #stage::after {
+      background:
+        radial-gradient(ellipse at 7% 7%, rgba(56, 189, 248, 0.2), transparent 34%),
+        radial-gradient(ellipse at 94% 93%, rgba(129, 140, 248, 0.2), transparent 38%),
+        radial-gradient(ellipse at 84% 12%, rgba(56, 189, 248, 0.08), transparent 28%);
+    }
+    #scene {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+    .scene-container {
+      position: relative;
+      display: grid;
+      place-items: center;
+      transform-origin: 50% 50%;
+      will-change: opacity, transform;
+    }
+    .glass-panel {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: 24px;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34), inset 0 1px rgba(255, 255, 255, 0.035);
+    }
+    .eyebrow {
+      color: #A5B4C8;
+      font-size: 20px;
+      font-weight: 750;
+      letter-spacing: 0.2em;
+      line-height: 1.2;
+      text-transform: uppercase;
+    }
+    .soft-glow {
+      position: absolute;
+      z-index: -1;
+      width: 640px;
+      height: 420px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.12);
+      filter: blur(110px);
+      pointer-events: none;
+    }
+
+    /* bento_stat */
+    .bento-scene { width: 1920px; height: 1080px; }
+    .bento-card {
+      position: relative;
+      display: flex;
+      width: 1120px;
+      min-height: 590px;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 88px 96px 76px;
+      overflow: hidden;
+      text-align: center;
+    }
+    .bento-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at 50% 110%, rgba(56, 189, 248, 0.12), transparent 58%);
+      pointer-events: none;
+    }
+    .bento-accent { position: absolute; top: 0; left: 16%; width: 68%; height: 1px; background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.8), rgba(129, 140, 248, 0.8), transparent); }
+    .brand-dock {
+      position: absolute;
+      top: 30px;
+      right: 32px;
+      display: grid;
+      width: 76px;
+      height: 76px;
+      place-items: center;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 22px;
+      background: rgba(255,255,255,0.055);
+    }
+    .brand-mark { display: block; width: 40px; height: 40px; color: #D8F3FF; object-fit: contain; }
+    .brand-mark svg { display: block; width: 100%; height: 100%; }
+    .bento-kicker { position: relative; margin: 0 0 24px; color: var(--cyan); }
+    .metric-value {
+      position: relative;
+      margin: 0;
+      color: #F9FCFF;
+      font-size: 178px;
+      font-weight: 780;
+      letter-spacing: -0.075em;
+      line-height: 0.98;
+      text-shadow: 0 8px 48px rgba(56, 189, 248, 0.18);
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-label { position: relative; max-width: 850px; margin: 30px 0 0; color: #C2CDDC; font-size: 34px; font-weight: 450; line-height: 1.35; }
+    .metric-footnote { position: relative; margin: 26px 0 0; color: #718198; font-size: 18px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+    /* versus_card */
+    .versus-scene { width: 1920px; height: 1080px; padding: 90px 120px; }
+    .versus-heading { position: absolute; top: 112px; left: 0; width: 100%; margin: 0; color: #D9E4F2; font-size: 28px; font-weight: 700; letter-spacing: 0.16em; text-align: center; text-transform: uppercase; }
+    .versus-layout { position: relative; display: grid; width: 1500px; grid-template-columns: 1fr 1fr; gap: 72px; align-items: center; }
+    .versus-card {
+      position: relative;
+      display: flex;
+      min-height: 480px;
+      flex-direction: column;
+      justify-content: center;
+      padding: 58px 64px;
+      overflow: hidden;
+    }
+    .versus-card::before { content: ""; position: absolute; inset: 0; opacity: 0.6; pointer-events: none; }
+    .versus-left::before { background: radial-gradient(ellipse at 0 50%, rgba(56,189,248,0.17), transparent 64%); }
+    .versus-right::before { background: radial-gradient(ellipse at 100% 50%, rgba(129,140,248,0.19), transparent 64%); }
+    .versus-name { position: relative; margin: 0; color: #B6C4D6; font-size: 22px; font-weight: 760; letter-spacing: 0.15em; text-transform: uppercase; }
+    .versus-value { position: relative; margin: 28px 0 0; color: #F8FBFF; font-size: 104px; font-weight: 780; letter-spacing: -0.06em; line-height: 1; font-variant-numeric: tabular-nums; }
+    .versus-side-note { position: relative; margin: 24px 0 0; color: #8190A5; font-size: 22px; }
+    .versus-right { text-align: right; }
+    .versus-right .versus-value { color: #DCE2FF; }
+    .versus-badge {
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      left: 50%;
+      display: grid;
+      width: 118px;
+      height: 118px;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 50%;
+      background: #12192A;
+      box-shadow: 0 0 0 12px rgba(11,15,25,0.84), 0 16px 50px rgba(0,0,0,0.42);
+      color: #F9FBFF;
+      font-size: 28px;
+      font-weight: 850;
+      letter-spacing: 0.08em;
+      transform: translate(-50%, -50%);
+    }
+
+    /* headline_highlight */
+    .headline-scene { width: 1920px; height: 1080px; padding: 120px; }
+    .headline-card { position: relative; display: flex; width: 1420px; min-height: 600px; flex-direction: column; justify-content: center; padding: 88px 112px; overflow: hidden; }
+    .headline-card::after { content: ""; position: absolute; right: -90px; bottom: -230px; width: 600px; height: 480px; border-radius: 50%; background: rgba(129,140,248,0.1); filter: blur(80px); pointer-events: none; }
+    .headline-source-row { position: relative; z-index: 1; display: flex; align-items: center; gap: 16px; margin-bottom: 34px; }
+    .source-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 20px rgba(56,189,248,0.65); }
+    .headline-source { color: #AAB8CC; font-size: 21px; font-weight: 750; letter-spacing: 0.16em; text-transform: uppercase; }
+    .headline-title { position: relative; z-index: 1; max-width: 1190px; margin: 0; color: #F7F9FD; font-size: 78px; font-weight: 760; letter-spacing: -0.04em; line-height: 1.16; }
+    .highlight-word { position: relative; display: inline-block; isolation: isolate; white-space: pre; }
+    .highlight-text { position: relative; z-index: 1; }
+    .highlight-bar { position: absolute; z-index: 0; right: -0.04em; bottom: 0.08em; left: -0.04em; height: 0.31em; border-radius: 0.08em; transform: scaleX(0); transform-origin: left center; }
+    .highlight-yellow .highlight-bar { background: linear-gradient(90deg, rgba(250,204,21,0.92), rgba(251,191,36,0.66)); }
+    .highlight-blue .highlight-bar { background: linear-gradient(90deg, rgba(56,189,248,0.9), rgba(129,140,248,0.7)); }
+    .headline-footer { position: absolute; right: 112px; bottom: 48px; left: 112px; display: flex; justify-content: space-between; color: #697A91; font-size: 17px; letter-spacing: 0.12em; text-transform: uppercase; }
+
+    /* terminal_code */
+    .terminal-scene { width: 1920px; height: 1080px; padding: 100px; }
+    .terminal-window { width: 1260px; min-height: 620px; overflow: hidden; border: 1px solid rgba(255,255,255,0.12); border-radius: 24px; background: rgba(7,10,17,0.94); box-shadow: 0 42px 110px rgba(0,0,0,0.5), 0 0 90px rgba(56,189,248,0.07); }
+    .terminal-topbar { display: flex; height: 76px; align-items: center; gap: 12px; padding: 0 28px; border-bottom: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.035); }
+    .terminal-dot { width: 13px; height: 13px; border-radius: 50%; }
+    .terminal-dot-red { background: #FF5F57; }
+    .terminal-dot-yellow { background: #FEBC2E; }
+    .terminal-dot-green { background: #28C840; }
+    .terminal-title { flex: 1; margin-left: 14px; color: #A9B5C6; font-size: 19px; font-weight: 650; text-align: center; }
+    .terminal-mode { color: #65758A; font-size: 14px; font-weight: 750; letter-spacing: 0.17em; }
+    .terminal-body { min-height: 544px; padding: 48px 58px; color: #D7E1ED; font-family: Consolas, "SFMono-Regular", Menlo, monospace; font-size: 27px; line-height: 1.8; }
+    .terminal-line { min-height: 1.8em; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .terminal-prompt { color: #38D996; }
+    .terminal-output .terminal-prompt { color: #718198; }
+    .terminal-command { color: #E6EDF6; }
+    .terminal-cursor { display: inline-block; width: 13px; height: 25px; margin-left: 4px; transform: translateY(4px); background: #38D996; }
+
+    /* bullet_summary */
+    .summary-scene { width: 1920px; height: 1080px; padding: 88px 160px; align-content: center; }
+    .summary-heading-row { display: flex; width: 1320px; align-items: end; justify-content: space-between; margin: 0 auto 42px; }
+    .summary-title { max-width: 970px; margin: 0; color: #F6F8FC; font-size: 68px; font-weight: 760; letter-spacing: -0.045em; line-height: 1.05; }
+    .summary-count { padding-bottom: 8px; color: #73849A; font-size: 17px; font-weight: 750; letter-spacing: 0.16em; text-transform: uppercase; }
+    .summary-list { display: flex; width: 1320px; flex-direction: column; gap: 18px; margin: 0 auto; }
+    .summary-card { display: grid; min-height: 138px; grid-template-columns: 76px 1fr; align-items: center; gap: 28px; padding: 24px 34px; }
+    .summary-icon-wrap { display: grid; width: 68px; height: 68px; place-items: center; border: 1px solid rgba(56,189,248,0.24); border-radius: 20px; background: rgba(56,189,248,0.08); color: #7DD3FC; }
+    .summary-icon-wrap svg { width: 32px; height: 32px; stroke-width: 1.8; }
+    .summary-text { margin: 0; color: #D7E0EC; font-size: 29px; font-weight: 510; line-height: 1.35; }
+
+    /* stage-one generic scene compatibility */
+    .legacy-scene { width: 1920px; height: 1080px; }
+    .legacy-item { position: absolute; white-space: pre-wrap; }
+    .legacy-text { line-height: 1.12; }
+    .legacy-image { object-fit: contain; }
+    .legacy-icon { width: 100%; height: 100%; }
+  </style>
+  <script src="../vendor/gsap.min.js"></script>
+  <script src="../vendor/lucide.min.js"></script>
+</head>
+<body>
+  <main id="stage" aria-label="Technology news motion scene">
+    <div id="scene"></div>
+  </main>
+  <script>
+    (() => {
+      const scene = document.getElementById("scene");
+      const svgTags = new Set(["svg", "g", "path", "circle", "ellipse", "rect", "line", "polyline", "polygon", "defs", "lineargradient", "radialgradient", "stop", "title", "desc", "clippath"]);
+
+      function make(tag, className, text) {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text !== undefined && text !== null) element.textContent = String(text);
+        return element;
+      }
+
+      function imageSource(source) {
+        if (/^[a-z]:[\\/]/i.test(source)) {
+          return `file:///${encodeURI(source.replace(/\\/g, "/"))}`;
+        }
+        if (/^\\\\/.test(source)) {
+          return `file:${encodeURI(source.replace(/\\/g, "/"))}`;
+        }
+        return source;
+      }
+
+      function appendLucide(parent, name, className) {
+        const icon = make("i", className || "");
+        const safeName = /^[a-z0-9-]+$/i.test(String(name || "")) ? String(name) : "circle-help";
+        icon.setAttribute("data-lucide", safeName || "circle-help");
+        parent.appendChild(icon);
+        return icon;
+      }
+
+      function appendBrandMark(parent, logoSvg, fallbackName) {
+        const mark = make("div", "brand-mark");
+        if (typeof logoSvg === "string" && logoSvg.trim()) {
+          const source = logoSvg.trim();
+          if (source.startsWith("<")) {
+            const parsed = new DOMParser().parseFromString(source, "image/svg+xml");
+            const svg = parsed.documentElement;
+            if (svg && svg.localName.toLowerCase() === "svg" && !parsed.querySelector("parsererror")) {
+              for (const element of Array.from(svg.querySelectorAll("*"))) {
+                if (!svgTags.has(element.localName.toLowerCase())) {
+                  element.remove();
+                  continue;
+                }
+                for (const attribute of Array.from(element.attributes)) {
+                  const name = attribute.name.toLowerCase();
+                  const value = attribute.value.trim();
+                  if (name.startsWith("on") || ((name === "href" || name === "xlink:href") && !value.startsWith("#")) || (name === "style" && /url\s*\(|javascript:/i.test(value))) {
+                    element.removeAttribute(attribute.name);
+                  }
+                }
+              }
+              for (const attribute of Array.from(svg.attributes)) {
+                if (attribute.name.toLowerCase().startsWith("on")) svg.removeAttribute(attribute.name);
+              }
+              svg.setAttribute("aria-hidden", "true");
+              mark.appendChild(document.importNode(svg, true));
+              parent.appendChild(mark);
+              return mark;
+            }
+          } else {
+            const image = make("img", "brand-mark");
+            image.alt = "";
+            image.src = imageSource(source);
+            parent.appendChild(image);
+            return image;
+          }
+        }
+        appendLucide(mark, fallbackName || "cpu", "brand-fallback-icon");
+        parent.appendChild(mark);
+        return mark;
+      }
+
+      function createContainer(className) {
+        const container = make("section", `scene-container ${className}`);
+        container.setAttribute("aria-live", "off");
+        scene.appendChild(container);
+        return container;
+      }
+
+      function addGlassGlow(container, className) {
+        const glow = make("div", `soft-glow ${className || ""}`);
+        container.appendChild(glow);
+        return glow;
+      }
+
+      function renderBento(config, container, timeline, duration) {
+        addGlassGlow(container, "bento-glow");
+        const card = make("article", "glass-panel bento-card");
+        const accent = make("div", "bento-accent");
+        const dock = make("div", "brand-dock");
+        appendBrandMark(dock, config.logo_svg, config.logo_icon || config.icon || "cpu");
+        const kicker = make("p", "eyebrow bento-kicker", config.kicker || "TECH SIGNAL");
+        const value = make("p", "metric-value", "0");
+        const label = make("p", "metric-label", config.label || "");
+        const footnote = config.footnote ? make("p", "metric-footnote", config.footnote) : null;
+        card.append(accent, dock, kicker, value, label);
+        if (footnote) card.appendChild(footnote);
+        container.appendChild(card);
+
+        timeline.fromTo(card,
+          { autoAlpha: 0, scale: 0.72, y: 34 },
+          { autoAlpha: 1, scale: 1, y: 0, duration: Math.min(0.85, duration * 0.32), ease: "back.out(1.4)" },
+          0.08
+        );
+        const rawValue = String(config.value ?? "0");
+        const match = rawValue.match(/[+-]?\d[\d,]*(?:\.\d+)?/);
+        if (!match) {
+          value.textContent = rawValue;
+          timeline.fromTo(value, { autoAlpha: 0, y: 16 }, { autoAlpha: 1, y: 0, duration: 0.35 }, 0.3);
+        } else {
+          const target = Number(match[0].replace(/,/g, ""));
+          const decimals = (match[0].split(".")[1] || "").length;
+          const prefix = rawValue.slice(0, match.index);
+          const suffix = rawValue.slice(match.index + match[0].length);
+          const counter = { value: 0 };
+          const countStart = 0.42;
+          const countDuration = Math.min(1.8, Math.max(0.3, duration - 0.4 - countStart));
+          timeline.to(counter, {
+            value: target,
+            duration: countDuration,
+            ease: "power2.out",
+            onUpdate: () => {
+              const shown = Number(counter.value.toFixed(decimals));
+              const formatted = new Intl.NumberFormat("en-US", {
+                minimumFractionDigits: decimals,
+                maximumFractionDigits: decimals
+              }).format(shown);
+              value.textContent = `${prefix}${formatted}${suffix}`;
+            }
+          }, countStart);
+        }
+        timeline.fromTo(label,
+          { autoAlpha: 0, y: 20 },
+          { autoAlpha: 1, y: 0, duration: 0.45, ease: "power3.out" },
+          0.58
+        );
+      }
+
+      function renderVersus(config, container, timeline, duration) {
+        const heading = make("p", "eyebrow versus-heading", config.metric || "COMPARISON");
+        const layout = make("div", "versus-layout");
+        const left = make("article", "glass-panel versus-card versus-left");
+        const right = make("article", "glass-panel versus-card versus-right");
+        const leftTitle = make("p", "versus-name", config.left_title || "Option A");
+        const leftValue = make("p", "versus-value", config.left_val ?? "—");
+        const leftNote = config.left_note ? make("p", "versus-side-note", config.left_note) : null;
+        left.append(leftTitle, leftValue);
+        if (leftNote) left.appendChild(leftNote);
+        const rightTitle = make("p", "versus-name", config.right_title || "Option B");
+        const rightValue = make("p", "versus-value", config.right_val ?? "—");
+        const rightNote = config.right_note ? make("p", "versus-side-note", config.right_note) : null;
+        right.append(rightTitle, rightValue);
+        if (rightNote) right.appendChild(rightNote);
+        const badge = make("div", "versus-badge", "VS");
+        layout.append(left, right, badge);
+        container.append(heading, layout);
+        const enterDuration = Math.min(0.82, duration * 0.3);
+        timeline.fromTo(heading,
+          { autoAlpha: 0, y: -18 },
+          { autoAlpha: 1, y: 0, duration: 0.42, ease: "power3.out" },
+          0.08
+        );
+        timeline.fromTo(left,
+          { autoAlpha: 0, x: -360 },
+          { autoAlpha: 1, x: 0, duration: enterDuration, ease: "power3.out" },
+          0.18
+        );
+        timeline.fromTo(right,
+          { autoAlpha: 0, x: 360 },
+          { autoAlpha: 1, x: 0, duration: enterDuration, ease: "power3.out" },
+          0.18
+        );
+        timeline.fromTo(badge,
+          { autoAlpha: 0, scale: 0.45, rotation: -18 },
+          { autoAlpha: 1, scale: 1, rotation: 0, duration: 0.48, ease: "back.out(1.5)" },
+          Math.min(0.56, Math.max(0.18, duration - 0.9))
+        );
+      }
+
+      function renderHeadline(config, container, timeline, duration) {
+        addGlassGlow(container, "headline-glow");
+        const card = make("article", "glass-panel headline-card");
+        const sourceRow = make("div", "headline-source-row");
+        sourceRow.append(make("span", "source-dot"), make("span", "headline-source", config.source || "TECH NEWS"));
+        const headline = make("h1", "headline-title");
+        const rawHeadline = String(config.headline || "");
+        const highlights = new Set((Array.isArray(config.highlight_words) ? config.highlight_words : []).map(word => String(word).toLowerCase()));
+        const bars = [];
+        let highlightIndex = 0;
+        for (const piece of rawHeadline.split(/(\s+)/)) {
+          if (!piece) continue;
+          const word = piece.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "").toLowerCase();
+          if (!/^\s+$/.test(piece) && highlights.has(word)) {
+            const wrapper = make("span", `highlight-word ${highlightIndex % 2 === 0 ? "highlight-yellow" : "highlight-blue"}`);
+            const bar = make("span", "highlight-bar");
+            bar.setAttribute("aria-hidden", "true");
+            const text = make("span", "highlight-text", piece);
+            wrapper.append(bar, text);
+            headline.appendChild(wrapper);
+            bars.push(bar);
+            highlightIndex += 1;
+          } else {
+            headline.appendChild(document.createTextNode(piece));
+          }
+        }
+        const footer = make("div", "headline-footer");
+        footer.append(make("span", "", config.category || "BREAKING UPDATE"), make("span", "", config.footer || "TECH NEWS"));
+        card.append(sourceRow, headline, footer);
+        container.appendChild(card);
+        timeline.fromTo(card,
+          { autoAlpha: 0, y: 34, scale: 0.975 },
+          { autoAlpha: 1, y: 0, scale: 1, duration: Math.min(0.7, duration * 0.26), ease: "power3.out" },
+          0.08
+        );
+        timeline.fromTo(sourceRow,
+          { autoAlpha: 0, x: -16 },
+          { autoAlpha: 1, x: 0, duration: 0.35, ease: "power2.out" },
+          0.42
+        );
+        const available = Math.max(0, duration - 0.4 - 0.8);
+        const stagger = bars.length > 1 ? Math.min(0.095, available / (bars.length - 1)) : 0;
+        bars.forEach((bar, index) => {
+          timeline.fromTo(bar,
+            { scaleX: 0 },
+            { scaleX: 1, duration: Math.min(0.38, available || 0.2), ease: "power2.out" },
+            Math.min(0.76 + index * stagger, Math.max(0.12, duration - 0.4 - 0.38))
+          );
+        });
+      }
+
+      function renderTerminal(config, container, timeline, duration) {
+        const window = make("article", "terminal-window");
+        const topbar = make("header", "terminal-topbar");
+        topbar.append(make("span", "terminal-dot terminal-dot-red"), make("span", "terminal-dot terminal-dot-yellow"), make("span", "terminal-dot terminal-dot-green"));
+        topbar.append(make("span", "terminal-title", config.title || "Terminal"), make("span", "terminal-mode", "SHELL SESSION"));
+        const body = make("div", "terminal-body");
+        const lines = Array.isArray(config.lines) ? config.lines : [];
+        const records = lines.map(rawLine => {
+          const line = rawLine && typeof rawLine === "object" ? rawLine : { text: String(rawLine) };
+          const row = make("div", `terminal-line ${line.type === "output" ? "terminal-output" : ""}`);
+          const promptText = line.prompt !== undefined ? String(line.prompt) : (line.type === "output" ? "› " : "$ ");
+          const prompt = make("span", "terminal-prompt", promptText);
+          const text = make("span", "terminal-command");
+          row.append(prompt, text);
+          body.appendChild(row);
+          return { row, text, value: String(line.text ?? ""), promptText };
+        });
+        window.append(topbar, body);
+        container.appendChild(window);
+        timeline.fromTo(window,
+          { autoAlpha: 0, y: 28, scale: 0.985 },
+          { autoAlpha: 1, y: 0, scale: 1, duration: 0.5, ease: "power3.out" },
+          0.06
+        );
+        const start = 0.52;
+        const available = Math.max(0, duration - 0.4 - start);
+        const rawDurations = records.map(record => Math.max(0.2, Math.min(1.2, record.value.length * 0.032)));
+        const rawGaps = records.map(() => 0.11);
+        const requested = rawDurations.reduce((sum, value) => sum + value, 0) + rawGaps.reduce((sum, value) => sum + value, 0);
+        const scale = requested > available && requested > 0 ? available / requested : 1;
+        let position = start;
+        records.forEach((record, index) => {
+          timeline.fromTo(record.row,
+            { autoAlpha: 0 },
+            { autoAlpha: 1, duration: 0.05 },
+            position
+          );
+          const cursor = { count: 0 };
+          const typingDuration = rawDurations[index] * scale;
+          timeline.to(cursor, {
+            count: record.value.length,
+            duration: typingDuration,
+            ease: "none",
+            onUpdate: () => {
+              record.text.textContent = record.value.slice(0, Math.floor(cursor.count));
+            },
+            onComplete: () => {
+              record.text.textContent = record.value;
+            }
+          }, position);
+          position += typingDuration + rawGaps[index] * scale;
+        });
+      }
+
+      function renderSummary(config, container, timeline, duration) {
+        const headingRow = make("div", "summary-heading-row");
+        const title = make("h1", "summary-title", config.title || "Key takeaways");
+        const items = Array.isArray(config.items) ? config.items.slice(0, 3) : [];
+        const count = make("span", "summary-count", `${String(items.length).padStart(2, "0")} KEY POINTS`);
+        headingRow.append(title, count);
+        const list = make("div", "summary-list");
+        const cards = [];
+        items.forEach(itemValue => {
+          const item = itemValue && typeof itemValue === "object" ? itemValue : { text: String(itemValue) };
+          const card = make("article", "glass-panel summary-card");
+          const iconWrap = make("div", "summary-icon-wrap");
+          appendLucide(iconWrap, item.icon || "circle-check", "summary-icon");
+          const text = make("p", "summary-text", item.text || "");
+          card.append(iconWrap, text);
+          list.appendChild(card);
+          cards.push(card);
+        });
+        container.append(headingRow, list);
+        timeline.fromTo(headingRow,
+          { autoAlpha: 0, y: -18 },
+          { autoAlpha: 1, y: 0, duration: 0.42, ease: "power3.out" },
+          0.08
+        );
+        if (cards.length) {
+          timeline.fromTo(cards,
+            { autoAlpha: 0, y: 54, scale: 0.965 },
+            { autoAlpha: 1, y: 0, scale: 1, duration: Math.min(0.62, duration * 0.25), stagger: 0.25, ease: "back.out(1.25)" },
+            0.3
+          );
+        }
+      }
+
+      function renderLegacy(config, container, timeline, duration) {
+        const specs = Array.isArray(config.elements) ? [...config.elements] : [];
+        if (!specs.length && config.title != null) specs.push({ type: "text", text: config.title, x: 140, y: 350, width: 1640, fontSize: 92 });
+        if (!Array.isArray(config.elements) && config.subtitle != null) specs.push({ type: "text", text: config.subtitle, x: 145, y: 500, width: 1500, fontSize: 42 });
+        const nodes = [];
+        specs.forEach((rawSpec, index) => {
+          const spec = rawSpec && typeof rawSpec === "object" ? rawSpec : { text: String(rawSpec) };
+          const item = make("div", "legacy-item");
+          item.style.left = `${Number(spec.x) || 0}px`;
+          item.style.top = `${Number(spec.y) || 0}px`;
+          if (spec.width != null) item.style.width = `${Number(spec.width)}px`;
+          if (spec.height != null) item.style.height = `${Number(spec.height)}px`;
+          if (spec.type === "icon") {
+            appendLucide(item, spec.name || "circle-help", "legacy-icon");
+          } else if (spec.type === "image" || spec.type === "logo") {
+            const image = make("img", "legacy-image");
+            image.alt = spec.alt || "";
+            if (spec.src) image.src = imageSource(String(spec.src));
+            item.appendChild(image);
+          } else {
+            const text = make("span", "legacy-text", spec.text ?? "");
+            text.style.fontSize = `${Number(spec.fontSize) || 64}px`;
+            text.style.fontWeight = String(spec.fontWeight || 700);
+            text.style.color = typeof spec.color === "string" ? spec.color : "#F6F8FC";
+            item.appendChild(text);
+          }
+          container.appendChild(item);
+          nodes.push({ item, index });
+        });
+        nodes.forEach(({ item, index }) => {
+          timeline.fromTo(item,
+            { autoAlpha: 0, y: 28 },
+            { autoAlpha: 1, y: 0, duration: Math.min(0.65, duration * 0.2), ease: "power3.out" },
+            Math.min(index * 0.1, Math.max(0, duration - 0.7))
+          );
+        });
+      }
+
+      window.initScene = (sceneConfig, duration) => {
+        if (!window.gsap) throw new Error("GSAP failed to load from motion_engine/vendor/gsap.min.js");
+        const config = sceneConfig && typeof sceneConfig === "object" ? sceneConfig : {};
+        const seconds = Number(duration);
+        if (!Number.isFinite(seconds) || seconds <= 0) throw new Error("Scene duration must be positive");
+        scene.replaceChildren();
+        const hasLegacyContent = Array.isArray(config.elements) || config.title != null || config.subtitle != null;
+        const templateType = String(config.template_type || (hasLegacyContent ? "legacy" : "bento_stat"));
+        const container = createContainer(`${templateType}-scene`);
+        const timeline = window.gsap.timeline({ paused: true, defaults: { ease: "power3.out" } });
+
+        switch (templateType) {
+          case "bento_stat": renderBento(config, container, timeline, seconds); break;
+          case "versus_card": renderVersus(config, container, timeline, seconds); break;
+          case "headline_highlight": renderHeadline(config, container, timeline, seconds); break;
+          case "terminal_code": renderTerminal(config, container, timeline, seconds); break;
+          case "bullet_summary": renderSummary(config, container, timeline, seconds); break;
+          case "legacy": renderLegacy(config, container, timeline, seconds); break;
+          default: throw new Error(`Unknown motion template_type: ${templateType}`);
+        }
+
+        if (window.lucide && typeof window.lucide.createIcons === "function") {
+          window.lucide.createIcons();
+        }
+
+        const exitDuration = Math.min(0.4, seconds);
+        const exitStart = Math.max(0, seconds - exitDuration);
+        timeline.to(container,
+          { autoAlpha: 0, scale: 0.95, duration: exitDuration, ease: "power2.in" },
+          exitStart
+        );
+        window.tl = timeline;
+        return timeline;
+      };
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,2464 @@
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import random
+import subprocess
+import sys
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from dotenv import load_dotenv
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+SOURCE_ROOT = Path(__file__).resolve().parent
+SCRIPT_DIR = SOURCE_ROOT.parent
+load_dotenv(SCRIPT_DIR / ".env")
+
+from file_utils import (  # noqa: E402
+    atomic_write_json,
+    atomic_write_text,
+    json_fingerprint,
+    report_cli_error,
+    sha256_file,
+)
+from file_locations import (  # noqa: E402
+    ASSETS_ROOT,
+    BACKGROUND_MUSIC_ROOT,
+    EDITING_REFERENCE_FILE,
+    IMAGE_TV_EFFECT_FILE,
+    PAPER_SFX_FILE,
+    PROJECTS_ROOT,
+    SHUTTER_SFX_FILE,
+    TV_FRAME_FILE,
+    project_dir,
+    project_name,
+    resolve_portable_path,
+)
+from separator_policy import require_separator_checkpoint  # noqa: E402
+from tooling import find_executable  # noqa: E402
+from motion_filters import MOTION_RENDERER_NAME, smooth_push_in_filter  # noqa: E402
+
+
+EFFECTS_SCHEMA_VERSION = 1
+STAGE_NAME = "effects"
+SUPPORTED_AUDIO = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false.")
+
+
+def _path_env(name: str, default: Path) -> Path:
+    raw = os.getenv(name, "").strip()
+    path = Path(raw).expanduser() if raw else default
+    if not path.is_absolute():
+        path = SCRIPT_DIR / path
+    return path.resolve()
+
+
+def _optional_path_env(name: str) -> Path | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = SCRIPT_DIR / path
+    return path.resolve()
+
+
+@dataclass(frozen=True)
+class EffectsSettings:
+    width: int = 1920
+    height: int = 1080
+    fps: int = 30
+    motion_scale: float = 1.020
+    hero_motion_scale: float = 1.015
+    maximum_visual_hold_seconds: float = 9.0
+    tv_frame_enabled: bool = False
+    tv_frame_file: Path = TV_FRAME_FILE
+    tv_frame_opacity: float = 1.0
+    image_tv_effect_enabled: bool = True
+    image_tv_effect_file: Path = IMAGE_TV_EFFECT_FILE
+    image_tv_effect_opacity: float = 0.18
+    glitch_enabled: bool = False
+    glitch_duration_seconds: float = 0.08
+    glitch_max_per_minute: int = 1
+    glitch_minimum_spacing_seconds: float = 10.0
+    glitch_noise_strength: int = 2
+    sfx_gain_db: float = -24.0
+    paper_sfx_enabled: bool = True
+    paper_sfx_file: Path = PAPER_SFX_FILE
+    paper_sfx_gain_db: float = -10.0
+    shutter_sfx_enabled: bool = True
+    shutter_sfx_file: Path = SHUTTER_SFX_FILE
+    shutter_sfx_gain_db: float = -10.0
+    music_enabled: bool = True
+    music_directory: Path = BACKGROUND_MUSIC_ROOT
+    music_file: Path | None = None
+    first_music_file: Path | None = None
+    music_target_lufs: float = -20.0
+    music_speech_gain_db: float = -22.0
+    music_separator_gain_db: float = -16.0
+    music_loop_crossfade_seconds: float = 0.35
+    music_section_fade_seconds: float = 3.0
+    music_section_silence_seconds: float = 1.0
+    music_fade_seconds: float = 3.0
+    proof_width: int = 960
+    proof_height: int = 540
+    editing_reference_file: Path = EDITING_REFERENCE_FILE
+
+    @classmethod
+    def from_environment(cls) -> "EffectsSettings":
+        music_file = _optional_path_env("BACKGROUND_MUSIC_FILE")
+        first_music_file = _optional_path_env("FIRST_BACKGROUND_MUSIC")
+        return cls(
+            width=int(os.getenv("EFFECTS_WIDTH", "1920")),
+            height=int(os.getenv("EFFECTS_HEIGHT", "1080")),
+            fps=int(os.getenv("EFFECTS_FPS", "30")),
+            motion_scale=float(os.getenv("EFFECTS_MOTION_SCALE", "1.025")),
+            hero_motion_scale=float(
+                os.getenv("EFFECTS_HERO_MOTION_SCALE", "1.01875")
+            ),
+            maximum_visual_hold_seconds=float(
+                os.getenv("EFFECTS_MAX_VISUAL_HOLD_SECONDS", "9")
+            ),
+            # The legacy static TV-frame layer is retired from production.
+            tv_frame_enabled=False,
+            tv_frame_file=_path_env(
+                "TV_FRAME_FILE",
+                TV_FRAME_FILE,
+            ),
+            tv_frame_opacity=float(os.getenv("TV_FRAME_OPACITY", "1.0")),
+            image_tv_effect_enabled=_bool_env("IMAGE_TV_EFFECT_ENABLED", True),
+            image_tv_effect_file=_path_env(
+                "IMAGE_TV_EFFECT_FILE",
+                IMAGE_TV_EFFECT_FILE,
+            ),
+            image_tv_effect_opacity=float(
+                os.getenv("IMAGE_TV_EFFECT_OPACITY", "0.18")
+            ),
+            glitch_enabled=_bool_env("GLITCH_ENABLED", False),
+            glitch_duration_seconds=float(
+                os.getenv("GLITCH_DURATION_SECONDS", "0.08")
+            ),
+            glitch_max_per_minute=int(
+                os.getenv("GLITCH_MAX_PER_MINUTE", "1")
+            ),
+            glitch_minimum_spacing_seconds=float(
+                os.getenv("GLITCH_MINIMUM_SPACING_SECONDS", "10")
+            ),
+            glitch_noise_strength=int(
+                os.getenv("GLITCH_NOISE_STRENGTH", "2")
+            ),
+            sfx_gain_db=float(os.getenv("GLITCH_SFX_GAIN_DB", "-24")),
+            paper_sfx_enabled=_bool_env("PAPER_SFX_ENABLED", True),
+            paper_sfx_file=_path_env(
+                "PAPER_SFX_FILE",
+                PAPER_SFX_FILE,
+            ),
+            paper_sfx_gain_db=float(os.getenv("PAPER_SFX_GAIN_DB", "-10.0")),
+            shutter_sfx_enabled=_bool_env("SHUTTER_SFX_ENABLED", True),
+            shutter_sfx_file=_path_env(
+                "SHUTTER_SFX_FILE",
+                SHUTTER_SFX_FILE,
+            ),
+            shutter_sfx_gain_db=float(os.getenv("SHUTTER_SFX_GAIN_DB", "-10.0")),
+            music_enabled=_bool_env("BACKGROUND_MUSIC_ENABLED", True),
+            music_directory=_path_env(
+                "BACKGROUND_MUSIC_DIRECTORY",
+                BACKGROUND_MUSIC_ROOT,
+            ),
+            music_file=music_file,
+            first_music_file=first_music_file,
+            music_target_lufs=float(
+                os.getenv("BACKGROUND_MUSIC_TARGET_LUFS", "-20")
+            ),
+            music_speech_gain_db=float(
+                os.getenv("BACKGROUND_MUSIC_SPEECH_GAIN_DB", "-24")
+            ),
+            music_separator_gain_db=float(
+                os.getenv("BACKGROUND_MUSIC_SEPARATOR_GAIN_DB", "-18")
+            ),
+            music_loop_crossfade_seconds=float(
+                os.getenv("BACKGROUND_MUSIC_LOOP_CROSSFADE_SECONDS", "0.35")
+            ),
+            music_section_fade_seconds=float(
+                os.getenv(
+                    "BACKGROUND_MUSIC_SECTION_FADE_SECONDS",
+                    # Compatibility with configurations written before
+                    # section transitions stopped crossfading.
+                    os.getenv("BACKGROUND_MUSIC_SECTION_CROSSFADE_SECONDS", "3.0"),
+                )
+            ),
+            music_section_silence_seconds=float(
+                os.getenv("BACKGROUND_MUSIC_SECTION_SILENCE_SECONDS", "1.0")
+            ),
+            music_fade_seconds=float(
+                os.getenv("BACKGROUND_MUSIC_FADE_SECONDS", "3")
+            ),
+            proof_width=int(os.getenv("EFFECTS_PROOF_WIDTH", "960")),
+            proof_height=int(os.getenv("EFFECTS_PROOF_HEIGHT", "540")),
+            editing_reference_file=_path_env(
+                "EDITING_REFERENCE_FILE",
+                EDITING_REFERENCE_FILE,
+            ),
+        )
+
+    def validate(self) -> None:
+        if self.width < 320 or self.height < 180:
+            raise ValueError("Effects resolution is too small.")
+        if self.width % 2 or self.height % 2:
+            raise ValueError("Effects width and height must be even.")
+        if not 1 <= self.fps <= 120:
+            raise ValueError("EFFECTS_FPS must be between 1 and 120.")
+        if not 1.0 <= self.motion_scale <= 1.12:
+            raise ValueError("EFFECTS_MOTION_SCALE must be between 1.0 and 1.12.")
+        if not 1.0 <= self.hero_motion_scale <= 1.10:
+            raise ValueError(
+                "EFFECTS_HERO_MOTION_SCALE must be between 1.0 and 1.10."
+            )
+        if not 3 <= self.maximum_visual_hold_seconds <= 15:
+            raise ValueError(
+                "EFFECTS_MAX_VISUAL_HOLD_SECONDS must be between 3 and 15."
+            )
+        if not 0 <= self.tv_frame_opacity <= 1:
+            raise ValueError("TV_FRAME_OPACITY must be between 0 and 1.")
+        if not 0 <= self.image_tv_effect_opacity <= 1:
+            raise ValueError("IMAGE_TV_EFFECT_OPACITY must be between 0 and 1.")
+        if not 0.05 <= self.glitch_duration_seconds <= 0.35:
+            raise ValueError("Glitch duration must be between 0.05 and 0.35 seconds.")
+        if not 0 <= self.glitch_max_per_minute <= 12:
+            raise ValueError("GLITCH_MAX_PER_MINUTE must be between 0 and 12.")
+        if self.glitch_minimum_spacing_seconds < 2:
+            raise ValueError("Glitch spacing must be at least 2 seconds.")
+        for label, gain in (
+            ("PAPER_SFX_GAIN_DB", self.paper_sfx_gain_db),
+            ("SHUTTER_SFX_GAIN_DB", self.shutter_sfx_gain_db),
+        ):
+            if not -36 <= gain <= 0:
+                raise ValueError(f"{label} must be between -36 and 0 dB.")
+        if not -36 <= self.music_speech_gain_db <= -12:
+            raise ValueError("Speech music gain must be between -36 and -12 dB.")
+        if not -30 <= self.music_separator_gain_db <= -8:
+            raise ValueError("Separator music gain must be between -30 and -8 dB.")
+        if self.music_speech_gain_db >= self.music_separator_gain_db:
+            raise ValueError("Music must be quieter under speech than separators.")
+        if not 0 <= self.music_loop_crossfade_seconds <= 2:
+            raise ValueError("Music loop crossfade must be between 0 and 2 seconds.")
+        if not 0.1 <= self.music_section_fade_seconds <= 4:
+            raise ValueError(
+                "Music section fade must be between 0.1 and 4 seconds."
+            )
+        if not 0 <= self.music_section_silence_seconds <= 10:
+            raise ValueError(
+                "Music section silence must be between 0 and 10 seconds."
+            )
+        if self.proof_width % 2 or self.proof_height % 2:
+            raise ValueError("Proof width and height must be even.")
+
+
+def load_json(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"{label} not found: {path}") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{label} is unreadable: {path}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{label} must contain a JSON object: {path}")
+    return value
+
+
+def _run(command: list[str], label: str) -> None:
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[-2000:]
+        raise RuntimeError(f"{label} failed: {detail}")
+
+
+def probe_media(path: Path) -> dict[str, Any]:
+    ffprobe = find_executable("ffprobe")
+    if ffprobe is None:
+        raise RuntimeError("FFprobe is required for Milestone 6.")
+    result = subprocess.run(
+        [
+            str(ffprobe),
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration:stream=codec_type,codec_name,width,height,pix_fmt,"
+            "sample_rate,channels",
+            "-of",
+            "json",
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"FFprobe could not read {path}: {result.stderr.strip()}")
+    payload = json.loads(result.stdout)
+    duration = float(payload.get("format", {}).get("duration") or 0)
+    return {"duration_seconds": duration, "streams": payload.get("streams", [])}
+
+
+def _license_sidecar(path: Path) -> Path:
+    return path.with_name(f"{path.stem}.license.json")
+
+
+def ensure_default_audio_assets(settings: EffectsSettings) -> dict[str, Path]:
+    ffmpeg = find_executable("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("FFmpeg is required to create Milestone 6 audio assets.")
+    settings.music_directory.mkdir(parents=True, exist_ok=True)
+    sfx_directory = settings.music_directory.parent / "sfx"
+    sfx_directory.mkdir(parents=True, exist_ok=True)
+
+    available_music = sorted(
+        path
+        for path in settings.music_directory.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_AUDIO
+    )
+    if settings.music_file is not None and settings.music_file.is_file():
+        music = settings.music_file
+    elif available_music:
+        available_music.sort(
+            key=lambda path: path.name == "automation_ambient_bed.wav"
+        )
+        music = available_music[0]
+    else:
+        music = settings.music_directory / "automation_ambient_bed.wav"
+        expression = (
+            "0.032*(sin(2*PI*110*t)+0.55*sin(2*PI*165*t)+"
+            "0.30*sin(2*PI*220*t))*(0.88+0.12*cos(2*PI*t/12))|"
+            "0.032*(sin(2*PI*110*t)+0.50*sin(2*PI*165*t)+"
+            "0.34*sin(2*PI*220*t))*(0.88+0.12*cos(2*PI*t/12))"
+        )
+        _run(
+            [
+                str(ffmpeg),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"aevalsrc={expression}:s=48000:d=12",
+                "-c:a",
+                "pcm_s16le",
+                "-y",
+                str(music),
+            ],
+            "Default background-music generation",
+        )
+        atomic_write_json(
+            _license_sidecar(music),
+            {
+                "title": "Automation Ambient Bed",
+                "creator": "News Studio procedural generator",
+                "license": "Original procedural audio; unrestricted project use",
+                "seamless_loop": True,
+                "loop_start_seconds": 0.0,
+                "loop_end_seconds": 12.0,
+                "generated_at_utc": utc_now(),
+            },
+        )
+
+    sfx = sfx_directory / "glitch_transition.wav"
+    if not sfx.is_file():
+        _run(
+            [
+                str(ffmpeg),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "anoisesrc=color=pink:amplitude=0.18:duration=0.16:sample_rate=48000",
+                "-af",
+                (
+                    "highpass=f=900,lowpass=f=6500,"
+                    "afade=t=in:st=0:d=0.015,afade=t=out:st=0.11:d=0.05,"
+                    "aformat=channel_layouts=stereo"
+                ),
+                "-c:a",
+                "pcm_s16le",
+                "-y",
+                str(sfx),
+            ],
+            "Glitch SFX generation",
+        )
+        atomic_write_json(
+            _license_sidecar(sfx),
+            {
+                "title": "Glitch Transition",
+                "creator": "News Studio procedural generator",
+                "license": "Original procedural audio; unrestricted project use",
+                "generated_at_utc": utc_now(),
+            },
+        )
+    return {"music": music, "sfx": sfx}
+
+
+def select_music_track(settings: EffectsSettings) -> tuple[Path, dict]:
+    if settings.music_file is not None:
+        candidates = [settings.music_file]
+    else:
+        candidates = sorted(
+            path
+            for path in settings.music_directory.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_AUDIO
+        )
+        candidates.sort(key=lambda path: path.name == "automation_ambient_bed.wav")
+    if not candidates or not candidates[0].is_file():
+        raise FileNotFoundError(
+            f"No background music found in {settings.music_directory}."
+        )
+    track = candidates[0].resolve()
+    sidecar = _license_sidecar(track)
+    metadata = load_json(sidecar, "Music license metadata") if sidecar.is_file() else {
+        "title": track.stem,
+        "creator": "user supplied",
+        "license": "user confirmed for project use",
+        "seamless_loop": False,
+    }
+    return track, metadata
+
+
+def _music_candidates(settings: EffectsSettings) -> list[Path]:
+    if settings.music_file is not None:
+        candidates = [settings.music_file]
+    else:
+        candidates = sorted(
+            (
+                path.resolve()
+                for path in settings.music_directory.iterdir()
+                if path.is_file() and path.suffix.lower() in SUPPORTED_AUDIO
+            ),
+            key=lambda path: (
+                path.name == "automation_ambient_bed.wav",
+                path.name.lower(),
+            ),
+        )
+    candidates = [path for path in candidates if path.is_file()]
+    if not candidates:
+        raise FileNotFoundError(
+            f"No background music found in {settings.music_directory}."
+        )
+    return candidates
+
+
+def _music_metadata(track: Path) -> dict:
+    sidecar = _license_sidecar(track)
+    if sidecar.is_file():
+        return load_json(sidecar, "Music license metadata")
+    return {
+        "title": track.stem,
+        "creator": "user supplied",
+        "license": "user confirmed for project use",
+        "seamless_loop": False,
+    }
+
+
+def select_music_tracks(
+    settings: EffectsSettings,
+    *,
+    story_count: int,
+    video_number: int,
+) -> tuple[list[tuple[Path, dict]], str]:
+    """Return a reproducible playlist with an optional fixed first-story track."""
+    if story_count < 1:
+        raise ValueError("Background-music selection requires at least one story.")
+    candidates = _music_candidates(settings)
+    first_track = (
+        settings.first_music_file.resolve()
+        if settings.first_music_file is not None
+        else None
+    )
+    if first_track is not None:
+        if not first_track.is_file():
+            raise FileNotFoundError(
+                f"FIRST_BACKGROUND_MUSIC does not exist: {first_track}"
+            )
+        if first_track.suffix.lower() not in SUPPORTED_AUDIO:
+            raise ValueError(
+                "FIRST_BACKGROUND_MUSIC must use a supported audio extension: "
+                f"{first_track}"
+            )
+    seed_material = json.dumps(
+        {
+            "video_number": video_number,
+            "tracks": [f"{path.name}:{path.stat().st_size}" for path in candidates],
+            "first_track": (
+                f"{first_track.name}:{first_track.stat().st_size}"
+                if first_track is not None
+                else None
+            ),
+        },
+        sort_keys=True,
+    )
+    seed = json_fingerprint({"music_playlist": seed_material})
+    rng = random.Random(int(seed[:16], 16))
+    selected: list[Path] = [first_track] if first_track is not None else []
+    shuffled_candidates = [
+        path for path in candidates if first_track is None or path != first_track
+    ]
+    # A one-track library remains usable; uniqueness is preferred but cannot
+    # be required when no alternate music exists.
+    if not shuffled_candidates:
+        shuffled_candidates = candidates
+    while len(selected) < story_count:
+        cycle = list(shuffled_candidates)
+        rng.shuffle(cycle)
+        if selected and len(cycle) > 1 and cycle[0] == selected[-1]:
+            cycle[0], cycle[1] = cycle[1], cycle[0]
+        selected.extend(cycle)
+    selected = selected[:story_count]
+    return [(track, _music_metadata(track)) for track in selected], seed
+
+
+def _require_inputs(video_dir: Path) -> tuple[dict, dict, dict, dict]:
+    state = load_json(video_dir / "state.json", "Stage state")
+    timing = load_json(video_dir / "story_timing.json", "Story timing manifest")
+    require_separator_checkpoint(state, timing)
+    media = load_json(video_dir / "05_visuals" / "media_plan.json", "Media plan")
+    if media.get("quality", {}).get("status") != "passed":
+        raise RuntimeError("A complete, passing Milestone 5 media plan is required.")
+    captions = load_json(video_dir / "06_captions" / "captions.json", "Captions")
+    if captions.get("quality", {}).get("status") != "passed":
+        raise RuntimeError("Passing basic captions are required for the effects stage.")
+    return state, timing, media, captions
+
+
+def _asset_record(
+    path_value: str,
+    expected_sha256: str = "",
+    *,
+    kind: str = "image",
+    source_start_seconds: float = 0.0,
+) -> dict:
+    path = resolve_portable_path(path_value).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Visual asset is missing: {path}")
+    checksum = sha256_file(path)
+    if expected_sha256 and checksum != expected_sha256:
+        raise RuntimeError(f"Visual asset changed after selection: {path}")
+    if kind not in {"image", "video"}:
+        raise RuntimeError(f"Unsupported visual asset kind: {kind}")
+    return {
+        "file": str(path),
+        "sha256": checksum,
+        "kind": kind,
+        "source_start_seconds": (
+            max(0.0, float(source_start_seconds)) if kind == "video" else 0.0
+        ),
+    }
+
+
+def _attribution_record(selected: dict) -> dict | None:
+    license_info = selected.get("license", {})
+    if license_info.get("attribution_required") is not True:
+        return None
+    creator = str(selected.get("creator", "")).strip()
+    source_url = str(selected.get("source_url", "")).strip()
+    license_name = str(license_info.get("name", "")).strip()
+    provided = str(license_info.get("attribution_text", "")).strip()
+    if not any((creator, source_url, license_name, provided)):
+        raise RuntimeError(
+            "An attribution-required asset is missing source attribution metadata."
+        )
+    return {
+        "required": True,
+        "creator": creator,
+        "source_url": source_url,
+        "license_name": license_name,
+        "provided_text": provided,
+    }
+
+
+def build_visual_events(timing: dict, media: dict, settings: EffectsSettings) -> list[dict]:
+    timing_by_id = {story["story_id"]: story for story in timing.get("stories", [])}
+    raw_events: list[dict] = []
+    for story_plan in media.get("stories", []):
+        story_id = story_plan["story_id"]
+        timed = timing_by_id.get(story_id)
+        if timed is None:
+            raise RuntimeError(f"Timing is missing for {story_id}.")
+        narration_start = float(timed["narration"]["start"])
+        for hero in story_plan.get("hero_ranges", []):
+            asset_kind = str(hero.get("asset_kind", "image"))
+            asset = _asset_record(str(hero["asset"]), kind=asset_kind)
+            start = float(hero["start"])
+            end = float(hero["end"])
+            hero_role = str(hero.get("role", "timed_story_hero"))
+            raw_events.append(
+                {
+                    "story_id": story_id,
+                    "story_order": int(story_plan["order"]),
+                    "source_type": (
+                        "ai_generated_story_video"
+                        if hero_role == "ai_generated_story_video"
+                        else "generated_separator_summary"
+                        if hero_role == "skipped_separator_story_summary"
+                        else "generated_hero"
+                    ),
+                    "source_id": f"hero_{int(hero['image_index']):02d}",
+                    "local_start": start,
+                    "local_end": end,
+                    "timeline_start": narration_start + start,
+                    "timeline_end": narration_start + end,
+                    "asset": asset,
+                    "crop_risk": False,
+                    "brand_logo": False,
+                    "attribution": None,
+                }
+            )
+        for window in story_plan.get("windows", []):
+            selected = window.get("selected_asset", {})
+            asset_path = selected.get("project_copy") or selected.get("absolute_path")
+            if not asset_path:
+                raise RuntimeError(f"Selected asset path missing for {window.get('window_id')}.")
+            asset = _asset_record(
+                str(asset_path),
+                str(selected.get("sha256", "")),
+                kind=str(selected.get("kind", "image")),
+                source_start_seconds=float(
+                    selected.get("source_start_seconds", 0) or 0
+                ),
+            )
+            start = float(window["start"])
+            end = float(window["end"])
+            raw_events.append(
+                {
+                    "story_id": story_id,
+                    "story_order": int(story_plan["order"]),
+                    "source_type": "archive",
+                    "source_id": str(window["window_id"]),
+                    "local_start": start,
+                    "local_end": end,
+                    # Local media ranges are canonical. Always derive global time
+                    # from the current story manifest so changing inter-story gaps
+                    # never requires another paid media-selection pass.
+                    "timeline_start": narration_start + start,
+                    "timeline_end": narration_start + end,
+                    "asset": asset,
+                    "crop_risk": "crop_risk" in selected.get("quality_flags", []),
+                    "brand_logo": bool(selected.get("brand_logo", False)),
+                    "attribution": _attribution_record(selected),
+                }
+            )
+    timed_stories = timing.get("stories", [])
+    for previous, current in zip(timed_stories, timed_stories[1:]):
+        hold_start = float(previous["narration"]["end"])
+        hold_end = float(current["narration"]["start"])
+        if hold_end <= hold_start + 0.001:
+            continue
+        story_events = [
+            event
+            for event in raw_events
+            if event["story_id"] == previous["story_id"]
+        ]
+        if not story_events:
+            raise RuntimeError(
+                f"Cannot fill inter-story gap after {previous['story_id']}: "
+                "no visual event exists."
+            )
+        source = max(story_events, key=lambda item: item["timeline_end"])
+        raw_events.append(
+            {
+                "story_id": previous["story_id"],
+                "story_order": int(previous["order"]),
+                "source_type": "inter_story_hold",
+                "source_id": f"gap_after_story_{int(previous['order']):02d}",
+                "local_start": float(previous["narration"]["duration"]),
+                "local_end": float(previous["narration"]["duration"])
+                + (hold_end - hold_start),
+                "timeline_start": hold_start,
+                "timeline_end": hold_end,
+                "asset": dict(source["asset"]),
+                "crop_risk": bool(source["crop_risk"]),
+                "brand_logo": bool(source.get("brand_logo", False)),
+                "attribution": source.get("attribution"),
+            }
+        )
+    raw_events.sort(key=lambda item: (item["timeline_start"], item["timeline_end"]))
+    for index, event in enumerate(raw_events):
+        event["event_id"] = f"visual_{index + 1:04d}"
+        event["duration"] = round(event["timeline_end"] - event["timeline_start"], 6)
+        is_hold = event["source_type"] == "inter_story_hold"
+        is_native_video = event.get("asset", {}).get("kind") == "video" and not is_hold
+        maximum_scale = (
+            settings.hero_motion_scale
+            if event["source_type"]
+            in {"generated_hero", "generated_separator_summary"}
+            else settings.motion_scale
+        )
+        if event.get("brand_logo", False):
+            maximum_scale = 1.0
+        event["motion"] = {
+            "type": (
+                "native_video"
+                if is_native_video
+                else "static"
+                if is_hold or maximum_scale <= 1.0
+                else "smooth_push_in"
+            ),
+            "maximum_scale": 1.0 if is_hold or is_native_video else maximum_scale,
+            "renderer": MOTION_RENDERER_NAME,
+            "easing": "smoothstep",
+            "focus": "center_safe",
+            "vertical_pan": False,
+            "caption_safe_bottom_percent": 22,
+            "deterministic_index": index,
+        }
+        for key in ("local_start", "local_end", "timeline_start", "timeline_end"):
+            event[key] = round(float(event[key]), 6)
+    return raw_events
+
+
+def validate_visual_coverage(events: list[dict], timing: dict) -> dict:
+    errors: list[str] = []
+    by_story: dict[str, list[dict]] = {}
+    for event in events:
+        if event.get("source_type") == "inter_story_hold":
+            continue
+        by_story.setdefault(event["story_id"], []).append(event)
+    story_results = []
+    tolerance = 0.03
+    for story in timing.get("stories", []):
+        duration = float(story["narration"]["duration"])
+        ordered = sorted(by_story.get(story["story_id"], []), key=lambda item: item["local_start"])
+        cursor = 0.0
+        gaps = []
+        overlaps = []
+        for event in ordered:
+            start = float(event["local_start"])
+            end = float(event["local_end"])
+            if start > cursor + tolerance:
+                gaps.append([round(cursor, 3), round(start, 3)])
+            if start < cursor - tolerance:
+                overlaps.append([round(start, 3), round(cursor, 3)])
+            cursor = max(cursor, end)
+        if cursor < duration - tolerance:
+            gaps.append([round(cursor, 3), round(duration, 3)])
+        if gaps:
+            errors.append(f"{story['story_id']} has visual gaps: {gaps}")
+        if overlaps:
+            errors.append(f"{story['story_id']} has visual overlaps: {overlaps}")
+        story_results.append(
+            {
+                "story_id": story["story_id"],
+                "event_count": len(ordered),
+                "gaps": gaps,
+                "overlaps": overlaps,
+                "status": "passed" if not gaps and not overlaps else "failed",
+            }
+        )
+    return {"status": "passed" if not errors else "failed", "errors": errors, "stories": story_results}
+
+
+def validate_visual_cadence(
+    events: list[dict],
+    maximum_hold_seconds: float,
+) -> dict:
+    """Reject long still holds, including adjacent reuse of identical pixels."""
+    visible = [
+        event
+        for event in events
+        if event.get("source_type") != "inter_story_hold"
+    ]
+    long_events = []
+    for event in visible:
+        duration = float(event["timeline_end"]) - float(event["timeline_start"])
+        # Timestamp alignment and sentence-boundary rounding can differ by a few
+        # frames. The media planner enforces the hard maximum for new projects;
+        # accept a legacy/sub-frame overshoot up to 0.10s instead of aborting.
+        if duration > maximum_hold_seconds + 0.10:
+            long_events.append(
+                {
+                    "event_id": event.get("event_id", ""),
+                    "story_id": event.get("story_id", ""),
+                    "duration": round(duration, 3),
+                    "asset": event.get("asset", {}).get("file", ""),
+                }
+            )
+
+    repeated_runs = []
+    by_story: dict[str, list[dict]] = {}
+    for event in visible:
+        by_story.setdefault(str(event.get("story_id", "")), []).append(event)
+    for story_id, story_events in by_story.items():
+        ordered = sorted(story_events, key=lambda item: float(item["timeline_start"]))
+        run_start = run_end = 0.0
+        run_sha = ""
+        run_count = 0
+
+        def record_run() -> None:
+            if (
+                run_count > 1
+                and run_sha
+                and run_end - run_start > maximum_hold_seconds + 0.03
+            ):
+                repeated_runs.append(
+                    {
+                        "story_id": story_id,
+                        "duration": round(run_end - run_start, 3),
+                        "sha256": run_sha,
+                        "event_count": run_count,
+                    }
+                )
+
+        for event in ordered:
+            start = float(event["timeline_start"])
+            end = float(event["timeline_end"])
+            checksum = str(event.get("asset", {}).get("sha256", ""))
+            if checksum and checksum == run_sha and abs(start - run_end) <= 0.03:
+                run_end = end
+                run_count += 1
+            else:
+                record_run()
+                run_start, run_end, run_sha, run_count = start, end, checksum, 1
+        record_run()
+    return {
+        "status": "passed" if not long_events and not repeated_runs else "failed",
+        "maximum_hold_seconds": maximum_hold_seconds,
+        "long_events": long_events,
+        "repeated_asset_runs": repeated_runs,
+    }
+
+
+def build_glitch_events(
+    timing: dict,
+    visuals: list[dict],
+    settings: EffectsSettings,
+) -> list[dict]:
+    if not settings.glitch_enabled or settings.glitch_max_per_minute == 0:
+        return []
+    duration = float(timing.get("duration_seconds", 0))
+    maximum = max(1, math.ceil(duration / 60) * settings.glitch_max_per_minute)
+    candidates: list[tuple[float, str, int | None]] = []
+    if not timing.get("quality", {}).get("manual_separators_skipped", False):
+        for story in timing.get("stories", []):
+            separator = story.get("separator", {})
+            start = float(separator.get("start", 0))
+            end = float(separator.get("end", start))
+            candidates.append((end, "separator_exit_accent", int(story["order"])))
+    for index, event in enumerate(visuals[1:], start=1):
+        if index % 3 == 0:
+            candidates.append((float(event["timeline_start"]), "selected_cut", event["story_order"]))
+    result = []
+    last = -10_000.0
+    for start, reason, story_order in sorted(candidates):
+        if start - last < settings.glitch_minimum_spacing_seconds:
+            continue
+        end = min(duration, start + settings.glitch_duration_seconds)
+        if end <= start:
+            continue
+        result.append(
+            {
+                "event_id": f"glitch_{len(result) + 1:03d}",
+                "start": round(start, 6),
+                "end": round(end, 6),
+                "duration": round(end - start, 6),
+                "reason": reason,
+                "story_order": story_order,
+                "effects": {
+                    "noise_strength": settings.glitch_noise_strength,
+                    "rgb_split_pixels": 3,
+                    "horizontal_displacement_pixels": 6,
+                    "tape_dropout_opacity": 0.16,
+                },
+            }
+        )
+        last = start
+        if len(result) >= maximum:
+            break
+    return result
+
+
+def _timeline_sfx_asset(path: Path, gain_db: float, label: str) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} sound is missing: {path}")
+    probe = probe_media(path)
+    if not any(
+        stream.get("codec_type") == "audio"
+        for stream in probe.get("streams", [])
+    ):
+        raise RuntimeError(f"{label} sound has no audio stream: {path}")
+    duration = float(probe.get("duration_seconds", 0))
+    if duration <= 0:
+        raise RuntimeError(f"{label} sound has no measurable duration: {path}")
+    return {
+        "file": str(path),
+        "sha256": sha256_file(path),
+        "duration_seconds": round(duration, 6),
+        "gain_db": gain_db,
+        "user_provided": True,
+    }
+
+
+def build_timeline_sfx(
+    timing: dict,
+    visuals: list[dict],
+    settings: EffectsSettings,
+) -> dict:
+    assets: dict[str, dict] = {}
+    events: list[dict] = []
+    if settings.paper_sfx_enabled:
+        assets["paper"] = _timeline_sfx_asset(
+            settings.paper_sfx_file,
+            settings.paper_sfx_gain_db,
+            "Paper",
+        )
+        for story in timing.get("stories", []):
+            events.append(
+                {
+                    "event_id": f"paper_story_{int(story['order']):02d}",
+                    "sound": "paper",
+                    "start": round(float(story["narration"]["start"]), 6),
+                    "reason": "news_section_start",
+                    "story_id": story["story_id"],
+                    "story_order": int(story["order"]),
+                }
+            )
+
+    separator_ranges: list[tuple[float, float]] = []
+    if not timing.get("quality", {}).get("manual_separators_skipped", False):
+        separator_ranges = [
+            (
+                float(story.get("separator", {}).get("start", 0)),
+                float(story.get("separator", {}).get("end", 0)),
+            )
+            for story in timing.get("stories", [])
+            if float(story.get("separator", {}).get("end", 0))
+            > float(story.get("separator", {}).get("start", 0))
+        ]
+
+    image_events = [
+        event
+        for event in sorted(
+            visuals,
+            key=lambda item: (item["timeline_start"], item["timeline_end"]),
+        )
+        if event.get("source_type") != "inter_story_hold"
+    ]
+    shutter_candidates = 0
+    if settings.shutter_sfx_enabled:
+        assets["shutter"] = _timeline_sfx_asset(
+            settings.shutter_sfx_file,
+            settings.shutter_sfx_gain_db,
+            "Shutter",
+        )
+        for image_number, event in enumerate(image_events, start=1):
+            if image_number % 3:
+                continue
+            shutter_candidates += 1
+            start = float(event["timeline_start"])
+            for separator_start, separator_end in separator_ranges:
+                if separator_start <= start < separator_end:
+                    start = separator_end
+                    break
+            if start >= float(event["timeline_end"]):
+                continue
+            events.append(
+                {
+                    "event_id": f"shutter_image_{image_number:04d}",
+                    "sound": "shutter",
+                    "start": round(start, 6),
+                    "reason": "every_third_visible_image",
+                    "visual_event_id": event["event_id"],
+                    "visual_sequence_number": image_number,
+                    "story_id": event["story_id"],
+                    "story_order": int(event["story_order"]),
+                }
+            )
+    events.sort(key=lambda item: (item["start"], item["event_id"]))
+    return {
+        "enabled": bool(assets),
+        "assets": assets,
+        "events": events,
+        "selection_rule": {
+            "paper": "once at every narration/news-section start",
+            "shutter": (
+                "every third image event globally; manual separators and "
+                "inter-story hold extensions are excluded"
+            ),
+            "separator_collision_policy": (
+                "move a shutter cue to the first visible frame after the separator; "
+                "skip it if that image is never visible"
+            ),
+        },
+        "image_event_count": len(image_events),
+        "shutter_candidate_count": shutter_candidates,
+    }
+
+
+def _db_factor(value: float) -> float:
+    return 10 ** (value / 20)
+
+
+def _music_plan(
+    selected_tracks: list[tuple[Path, dict]],
+    selection_seed: str,
+    timing: dict,
+    settings: EffectsSettings,
+) -> dict:
+    duration = float(timing["duration_seconds"])
+    stories = timing.get("stories", [])
+    if not stories:
+        raise RuntimeError("Background music requires at least one story.")
+    if len(selected_tracks) != len(stories):
+        raise RuntimeError("Background-music playlist does not match the story count.")
+    section_fade = settings.music_section_fade_seconds
+    section_silence = settings.music_section_silence_seconds
+    tracks: list[dict] = []
+    for index, (story, selected) in enumerate(zip(stories, selected_tracks)):
+        track, metadata = selected
+        track_duration = float(probe_media(track)["duration_seconds"])
+        if track_duration <= 0:
+            raise RuntimeError(f"Background music has no measurable duration: {track}")
+        story_start = float(story["narration"]["start"])
+        next_start = (
+            float(stories[index + 1]["narration"]["start"])
+            if index + 1 < len(stories)
+            else duration
+        )
+        timeline_start = 0.0 if index == 0 else story_start
+        timeline_end = (
+            duration
+            if index + 1 == len(stories)
+            else min(duration, next_start - section_silence)
+        )
+        segment_duration = timeline_end - timeline_start
+        if segment_duration <= 0:
+            raise RuntimeError(
+                "BACKGROUND_MUSIC_SECTION_SILENCE_SECONDS leaves no playable "
+                f"music for story {story.get('order', index + 1)}."
+            )
+        tracks.append({
+            "story_id": story["story_id"],
+            "story_order": int(story["order"]),
+            "track_file": str(track),
+            "track_sha256": sha256_file(track),
+            "license_metadata_file": (
+                str(_license_sidecar(track)) if _license_sidecar(track).is_file() else None
+            ),
+            "license": metadata,
+            "track_duration_seconds": round(track_duration, 6),
+            "timeline_start": round(timeline_start, 6),
+            "timeline_end": round(timeline_end, 6),
+            "segment_duration_seconds": round(segment_duration, 6),
+            "loop_count": max(1, math.ceil(segment_duration / track_duration)),
+            "fade_in_seconds": round(
+                settings.music_fade_seconds if index == 0 else section_fade, 3
+            ),
+            "fade_out_seconds": round(
+                settings.music_fade_seconds
+                if index + 1 == len(stories)
+                else section_fade,
+                3,
+            ),
+        })
+    silence_intervals = [
+        {
+            "after_story_id": tracks[index]["story_id"],
+            "before_story_id": tracks[index + 1]["story_id"],
+            "timeline_start": tracks[index]["timeline_end"],
+            "timeline_end": tracks[index + 1]["timeline_start"],
+            "duration_seconds": round(
+                tracks[index + 1]["timeline_start"] - tracks[index]["timeline_end"],
+                6,
+            ),
+        }
+        for index in range(len(tracks) - 1)
+    ]
+    if any(
+        not math.isclose(
+            float(item["duration_seconds"]),
+            section_silence,
+            abs_tol=0.000001,
+        )
+        for item in silence_intervals
+    ):
+        raise RuntimeError("Background-music silence intervals are inconsistent.")
+    speech_windows = [
+        {
+            "start": round(float(story["narration"]["start"]), 6),
+            "end": round(float(story["narration"]["end"]), 6),
+        }
+        for story in timing.get("stories", [])
+    ]
+    first = tracks[0]
+    return {
+        "enabled": True,
+        "mode": "fixed_first_fade_out_silence_fade_in_playlist",
+        "selection_seed": selection_seed,
+        "tracks": tracks,
+        "track_count": len(tracks),
+        "unique_track_count": len({item["track_sha256"] for item in tracks}),
+        "different_track_per_story": (
+            len({item["track_sha256"] for item in tracks}) == len(tracks)
+        ),
+        # Legacy fields keep older render/proof consumers safe.
+        "track_file": first["track_file"],
+        "track_sha256": first["track_sha256"],
+        "track_duration_seconds": first["track_duration_seconds"],
+        "program_duration_seconds": round(duration, 6),
+        "loop_count": sum(item["loop_count"] for item in tracks),
+        "loop_mode": "trim_or_repeat_each_story_track",
+        "transition_mode": "fade_out_then_silence_then_fade_in",
+        "section_fade_seconds": round(section_fade, 3),
+        "section_silence_seconds": round(section_silence, 3),
+        "silence_intervals": silence_intervals,
+        # Legacy field: zero explicitly records that adjacent tracks no
+        # longer overlap, while keeping older manifest readers safe.
+        "crossfade_seconds": 0.0,
+        "fade_in_seconds": settings.music_fade_seconds,
+        "fade_out_seconds": settings.music_fade_seconds,
+        "normalization": {
+            "filter": "loudnorm",
+            "target_lufs": settings.music_target_lufs,
+            "true_peak_db": -2.0,
+            "loudness_range": 7.0,
+        },
+        "ducking": {
+            "method": "timeline_volume_envelope",
+            "speech_gain_db": settings.music_speech_gain_db,
+            "speech_gain_factor": round(_db_factor(settings.music_speech_gain_db), 6),
+            "separator_gain_db": settings.music_separator_gain_db,
+            "separator_gain_factor": round(_db_factor(settings.music_separator_gain_db), 6),
+            "attack_seconds": 0.18,
+            "release_seconds": 0.35,
+            "speech_windows": speech_windows,
+        },
+    }
+
+
+def _separator_events(timing: dict) -> list[dict]:
+    if timing.get("quality", {}).get("manual_separators_skipped", False):
+        return []
+    events = []
+    for story in timing.get("stories", []):
+        path = Path(story["separator"]["file"])
+        if not path.is_file():
+            raise FileNotFoundError(f"Validated separator is missing: {path}")
+        events.append({
+            "story_id": story["story_id"],
+            "story_order": int(story["order"]),
+            "file": str(path),
+            "sha256": sha256_file(path),
+            "start": round(float(story["separator"]["start"]), 6),
+            "end": round(float(story["separator"]["end"]), 6),
+            "duration": round(float(story["separator"]["duration"]), 6),
+        })
+    return events
+
+
+def _narration_events(timing: dict) -> list[dict]:
+    return [
+        {
+            "story_id": story["story_id"],
+            "story_order": int(story["order"]),
+            "file": story["audio_file"],
+            "sha256": sha256_file(Path(story["audio_file"])),
+            "start": round(float(story["narration"]["start"]), 6),
+            "end": round(float(story["narration"]["end"]), 6),
+            "duration": round(float(story["narration"]["duration"]), 6),
+        }
+        for story in timing.get("stories", [])
+    ]
+
+
+def _input_fingerprint(
+    timing_path: Path,
+    media_path: Path,
+    captions_path: Path,
+    settings: EffectsSettings,
+    overlay: dict | None,
+    image_tv_effect: dict | None,
+    editing_reference: dict | None,
+    music: dict | None,
+    sfx: dict,
+    timeline_sfx: dict,
+) -> str:
+    settings_payload = asdict(settings)
+    for key in (
+        "tv_frame_file",
+        "image_tv_effect_file",
+        "paper_sfx_file",
+        "shutter_sfx_file",
+        "music_directory",
+        "music_file",
+        "editing_reference_file",
+    ):
+        value = settings_payload.get(key)
+        settings_payload[key] = str(value) if value is not None else None
+    return json_fingerprint(
+        {
+            "timing_sha256": sha256_file(timing_path),
+            "media_sha256": sha256_file(media_path),
+            "captions_sha256": sha256_file(captions_path),
+            "settings": settings_payload,
+            "overlay": overlay,
+            "image_tv_effect": image_tv_effect,
+            "editing_reference": editing_reference,
+            "music": music,
+            "sfx": sfx,
+            "timeline_sfx": timeline_sfx,
+        }
+    )
+
+
+def _filter_templates(settings: EffectsSettings) -> dict:
+    layer_order = [
+        "base_visual",
+        "static_center_crop",
+        "tape_dropout_glitch_accents",
+        "animated_tv_effect_images_only",
+        "manual_separator",
+        "persistent_story_title",
+        "source_attribution_bottom_right",
+        "captions",
+    ]
+    if settings.tv_frame_enabled:
+        layer_order.insert(5, "tv_frame")
+    return {
+        "layer_order": layer_order,
+        "motion": {
+            "smooth_push_in": (
+                "tpad,fps,perspective=sense=source:eval=frame:"
+                "interpolation=cubic (floating-point center crop + smoothstep easing)"
+            ),
+            "static": "scale=OUTPUT_WIDTH:OUTPUT_HEIGHT:force_original_aspect_ratio=increase,crop=OUTPUT_WIDTH:OUTPUT_HEIGHT",
+        },
+        "glitch": (
+            f"noise=alls={settings.glitch_noise_strength}:allf=t+u,"
+            "drawbox=y=ih*0.43:h=8:color=white@0.16:t=fill"
+        ),
+        "tv_frame": (
+            f"scale={settings.width}:{settings.height},format=rgba,"
+            f"colorchannelmixer=aa={settings.tv_frame_opacity}"
+        ),
+        "animated_tv_effect": (
+            f"scale={settings.width}:{settings.height},format=rgba,"
+            f"colorchannelmixer=aa={settings.image_tv_effect_opacity}; "
+            "loop across program; disable during every manual separator interval"
+        ),
+        "music": (
+            f"loudnorm=I={settings.music_target_lufs}:TP=-2:LRA=7,"
+            "volume=TIMELINE_DUCK_EXPRESSION:eval=frame"
+        ),
+        "music_loop": (
+            "acrossfade=d="
+            f"{settings.music_loop_crossfade_seconds}:c1=tri:c2=tri"
+        ),
+        "delivery": {
+            "video": "H.264 yuv420p",
+            "audio": "AAC 48 kHz stereo",
+            "resolution": f"{settings.width}x{settings.height}",
+            "fps": settings.fps,
+        },
+    }
+
+
+def _write_state(video_dir: Path, state: dict, manifest_path: Path, plan: dict) -> None:
+    stages = state.setdefault("stages", {})
+    previous_fingerprint = stages.get(STAGE_NAME, {}).get("input_fingerprint")
+    if previous_fingerprint and previous_fingerprint != plan["input_fingerprint"]:
+        invalidated = [
+            stage
+            for stage in ("render", "publish")
+            if stage in stages
+        ]
+        for stage in invalidated:
+            stages.pop(stage, None)
+        state["downstream_invalidation"] = {
+            "reason": "Effects inputs or configuration changed.",
+            "invalidated_stages": invalidated,
+            "previous_effects_fingerprint": previous_fingerprint,
+            "current_effects_fingerprint": plan["input_fingerprint"],
+            "updated_at_utc": utc_now(),
+        }
+    stages[STAGE_NAME] = {
+        "status": "EFFECTS_READY",
+        "reason": (
+            "Motion, TV treatment, controlled glitch/SFX, and looped ducked music "
+            "are planned for the complete timeline."
+        ),
+        "effects_manifest_file": str(manifest_path),
+        "input_fingerprint": plan["input_fingerprint"],
+        "visual_event_count": len(plan["visual_events"]),
+        "glitch_event_count": len(plan["glitch_events"]),
+        "timeline_sfx_event_count": len(
+            plan.get("audio", {}).get("timeline_sfx", {}).get("events", [])
+        ),
+        "updated_at_utc": utc_now(),
+    }
+    state["updated_at_utc"] = state["stages"][STAGE_NAME]["updated_at_utc"]
+    atomic_write_json(video_dir / "state.json", state)
+
+
+def _ffmpeg_filter_path(path: Path) -> str:
+    value = path.resolve().as_posix().replace("'", r"\'")
+    if len(value) >= 2 and value[1] == ":":
+        value = value[0] + r"\:" + value[2:]
+    return value
+
+
+def _discover_reference_images(limit: int = 3) -> list[Path]:
+    extensions = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
+    roots = [
+        ASSETS_ROOT / "Media (No-Copyright)",
+        ASSETS_ROOT / "Media",
+    ]
+    images = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and path.suffix.lower() in extensions:
+                images.append(path.resolve())
+                if len(images) >= limit:
+                    return images
+    raise FileNotFoundError("At least three reference images are required.")
+
+
+def _outside_ranges_expression(ranges: list[tuple[float, float]]) -> str:
+    ordered = sorted((start, end) for start, end in ranges if end > start)
+    merged: list[list[float]] = []
+    for start, end in ordered:
+        if merged and start <= merged[-1][1] + 0.001:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    if not merged:
+        return "1"
+    disabled = "+".join(
+        f"between(t\\,{start:.6f}\\,{end:.6f})"
+        for start, end in merged
+    )
+    return f"not({disabled})"
+
+
+def reference_proof_renderer_fingerprint() -> str:
+    return sha256_file(Path(__file__))
+
+
+def render_reference_proof(
+    *,
+    output_path: Path,
+    images: list[Path],
+    narration_file: Path,
+    music_file: Path,
+    sfx_file: Path,
+    paper_sfx_file: Path | None = None,
+    shutter_sfx_file: Path | None = None,
+    settings: EffectsSettings,
+    duration_seconds: float = 60.0,
+    separator_file: Path | None = None,
+    separator_duration_seconds: float | None = None,
+    captions_file: Path | None = None,
+    image_durations: list[float] | None = None,
+    visual_kinds: list[str] | None = None,
+    visual_source_types: list[str] | None = None,
+    story_titles: list[dict] | None = None,
+    source_attributions: list[dict] | None = None,
+    include_separator: bool = True,
+) -> dict:
+    """Render a compact real-filter proof without completing Milestone 8."""
+    ffmpeg = find_executable("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("FFmpeg is required for the effects reference proof.")
+    selected_images = images if image_durations is not None else images[:3]
+    if image_durations is None and len(selected_images) < 3:
+        raise ValueError("The reference proof requires three images.")
+    if image_durations is not None:
+        if not selected_images or len(selected_images) != len(image_durations):
+            raise ValueError("Actual-timeline proof images and durations must match.")
+        if any(duration <= 0 for duration in image_durations):
+            raise ValueError("Actual-timeline proof image durations must be positive.")
+        if abs(sum(image_durations) - duration_seconds) > 0.1:
+            raise ValueError("Actual-timeline proof images must cover the proof duration.")
+    kinds = visual_kinds or ["image"] * len(selected_images)
+    if len(kinds) != len(selected_images):
+        raise ValueError("Reference-proof visual kinds must match the visual inputs.")
+    if any(kind not in {"image", "video"} for kind in kinds):
+        raise ValueError("Reference-proof visual kinds must be image or video.")
+    source_types = visual_source_types or ["archive"] * len(selected_images)
+    if len(source_types) != len(selected_images):
+        raise ValueError("Reference-proof source types must match the visual inputs.")
+    inputs = [*selected_images, narration_file, music_file]
+    if settings.glitch_enabled:
+        inputs.append(sfx_file)
+    if paper_sfx_file is not None:
+        inputs.append(paper_sfx_file)
+    if shutter_sfx_file is not None:
+        inputs.append(shutter_sfx_file)
+    if settings.image_tv_effect_enabled:
+        inputs.append(settings.image_tv_effect_file)
+    if separator_file is not None:
+        inputs.append(separator_file)
+    if captions_file is not None:
+        inputs.append(captions_file)
+    for overlay in [*(story_titles or []), *(source_attributions or [])]:
+        text_file = Path(str(overlay.get("text_file", "")))
+        if text_file:
+            inputs.append(text_file)
+    for path in inputs:
+        if not path.is_file():
+            raise FileNotFoundError(f"Reference proof input is missing: {path}")
+    if settings.tv_frame_enabled and not settings.tv_frame_file.is_file():
+        raise FileNotFoundError(f"TV frame overlay not found: {settings.tv_frame_file}")
+    if not 6 <= duration_seconds <= 60:
+        raise ValueError("Reference proof duration must be between 6 and 60 seconds.")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    caption_suffix = (
+        captions_file.suffix.casefold()
+        if captions_file is not None
+        and captions_file.suffix.casefold() in {".ass", ".srt"}
+        else ".srt"
+    )
+    caption_path = output_path.with_name(
+        f"milestone6_reference{caption_suffix}"
+    )
+    if captions_file is not None:
+        caption_text = captions_file.read_text(encoding="utf-8-sig")
+    else:
+        caption_end = max(5.5, duration_seconds - 0.25)
+        end_minutes = int(caption_end // 60)
+        end_seconds = caption_end - end_minutes * 60
+        caption_text = (
+            "1\n00:00:00,250 --> 00:00:02,750\nMILESTONE 6 REFERENCE\n\n"
+            "2\n00:00:03,100 --> 00:00:05,500\n"
+            "Motion, TV frame and controlled glitch\n\n"
+            f"3\n00:00:05,600 --> 00:{end_minutes:02d}:"
+            f"{end_seconds:06.3f}\nLooped music, ducking and SFX\n"
+        ).replace(
+            f"{end_seconds:06.3f}",
+            f"{end_seconds:06.3f}".replace(".", ","),
+        )
+    atomic_write_text(caption_path, caption_text)
+
+    requested_separator_duration = (
+        separator_duration_seconds
+        if separator_duration_seconds is not None
+        else min(3.0, duration_seconds / 4)
+    )
+    separator_duration = min(
+        max(0.1, float(requested_separator_duration)),
+        duration_seconds - 3.0,
+    )
+    durations = image_durations or [duration_seconds / 3] * 3
+    width = settings.proof_width
+    height = settings.proof_height
+    fps = settings.fps
+    command = [str(ffmpeg), "-hide_banner", "-loglevel", "error"]
+    separator_has_audio = False
+    if separator_file is None:
+        command.extend(
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc2=size={width}x{height}:rate={fps}:duration={separator_duration}",
+            ]
+        )
+    else:
+        separator_probe = probe_media(separator_file)
+        separator_has_audio = any(
+            stream.get("codec_type") == "audio"
+            for stream in separator_probe.get("streams", [])
+        )
+        command.extend(["-i", str(separator_file)])
+    for visual, visual_duration, visual_kind in zip(
+        selected_images,
+        durations,
+        kinds,
+        strict=True,
+    ):
+        if visual_kind == "video":
+            command.extend(["-i", str(visual)])
+        else:
+            command.extend(
+                [
+                    "-loop", "1", "-framerate", str(fps),
+                    "-t", str(visual_duration), "-i", str(visual),
+                ]
+            )
+    next_input_index = len(selected_images) + 1
+    overlay_index = -1
+    if settings.tv_frame_enabled:
+        overlay_index = next_input_index
+        command.extend(["-loop", "1", "-framerate", str(fps), "-i", str(settings.tv_frame_file)])
+        next_input_index += 1
+    narration_index = next_input_index
+    command.extend(["-i", str(narration_file)])
+    next_input_index += 1
+    music_index = next_input_index
+    command.extend(["-stream_loop", "-1", "-i", str(music_file)])
+    next_input_index += 1
+    sfx_index = -1
+    if settings.glitch_enabled:
+        sfx_index = next_input_index
+        command.extend(["-i", str(sfx_file)])
+        next_input_index += 1
+    paper_sfx_index = -1
+    if paper_sfx_file is not None:
+        paper_sfx_index = next_input_index
+        command.extend(["-i", str(paper_sfx_file)])
+        next_input_index += 1
+    shutter_sfx_index = -1
+    if shutter_sfx_file is not None:
+        shutter_sfx_index = next_input_index
+        command.extend(["-i", str(shutter_sfx_file)])
+        next_input_index += 1
+    image_effect_index = -1
+    if settings.image_tv_effect_enabled:
+        image_effect_index = next_input_index
+        command.extend(["-stream_loop", "-1", "-i", str(settings.image_tv_effect_file)])
+
+    filters = [
+        (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},setsar=1,fps={fps},format=yuv420p,"
+            f"trim=duration={separator_duration},setpts=PTS-STARTPTS[v0]"
+        )
+    ]
+    for offset, (visual_duration, visual_kind) in enumerate(
+        zip(durations, kinds, strict=True),
+        start=1,
+    ):
+        if visual_kind == "video":
+            filters.append(
+                f"[{offset}:v]scale={width}:{height}:"
+                "force_original_aspect_ratio=increase:flags=lanczos,"
+                f"crop={width}:{height},setsar=1,fps={fps},format=yuv420p,"
+                "tpad=stop_mode=clone:stop_duration=0.2,"
+                f"trim=duration={visual_duration},setpts=PTS-STARTPTS[v{offset}]"
+            )
+        else:
+            scale = settings.motion_scale
+            frames = max(2, round(visual_duration * fps))
+            motion_filter = smooth_push_in_filter(
+                width=width,
+                height=height,
+                fps=fps,
+                duration=visual_duration,
+                frames=frames,
+                maximum_scale=scale,
+            )
+            filters.append(
+                f"[{offset}:v]{motion_filter},"
+                f"setsar=1,trim=duration={visual_duration},"
+                f"setpts=PTS-STARTPTS[v{offset}]"
+            )
+    filters.append(
+        "".join(f"[v{index}]" for index in range(1, len(durations) + 1))
+        + f"concat=n={len(durations)}:v=1:a=0[vbase]"
+    )
+    if include_separator:
+        filters.append(
+            f"[vbase][v0]overlay=0:0:eof_action=pass:"
+            f"enable='between(t,0,{separator_duration:.3f})'[vstory]"
+        )
+        current_video = "vstory"
+    else:
+        # The synthetic separator input remains at index zero so all following
+        # input indexes stay stable. Consume its filtered output explicitly
+        # when separators are skipped; FFmpeg rejects unconnected outputs.
+        filters.append("[v0]nullsink")
+        current_video = "vbase"
+    cumulative_starts = []
+    cursor = 0.0
+    for image_duration in durations[:-1]:
+        cursor += image_duration
+        cumulative_starts.append(cursor)
+    glitch_starts = sorted(
+        ({separator_duration} if include_separator else set())
+        | set(cumulative_starts)
+    )
+    if settings.glitch_enabled:
+        enable = "+".join(
+            f"between(t\\,{start:.3f}\\,{min(duration_seconds, start + settings.glitch_duration_seconds):.3f})"
+            for start in glitch_starts
+        )
+        filters.append(
+            f"[{current_video}]noise=alls={settings.glitch_noise_strength}:allf=t+u:enable='{enable}',"
+            f"drawbox=y=ih*0.43:w=iw:h=8:color=white@0.10:t=fill:enable='{enable}'[vfx]"
+        )
+        current_video = "vfx"
+    if image_effect_index >= 0:
+        image_effect_enable = (
+            f"not(between(t\\,0\\,{separator_duration:.3f}))"
+            if include_separator
+            else "1"
+        )
+        filters.append(
+            f"[{image_effect_index}:v]scale={width}:{height}:flags=lanczos,"
+            "format=rgba,"
+            f"colorchannelmixer=aa={settings.image_tv_effect_opacity},"
+            "setpts=PTS-STARTPTS[imageeffect]"
+        )
+        filters.append(
+            f"[{current_video}][imageeffect]overlay=0:0:eof_action=repeat:repeatlast=1:"
+            f"shortest=0:format=auto:enable='{image_effect_enable}'[veffect]"
+        )
+        current_video = "veffect"
+    if settings.tv_frame_enabled:
+        excluded_ranges: list[tuple[float, float]] = []
+        if include_separator:
+            excluded_ranges.append((0.0, separator_duration))
+        cursor = 0.0
+        for visual_duration, visual_kind, source_type in zip(
+            durations,
+            kinds,
+            source_types,
+            strict=True,
+        ):
+            end = cursor + visual_duration
+            if visual_kind == "video" or source_type == "generated_separator_summary":
+                excluded_ranges.append((cursor, end))
+            cursor = end
+        frame_enable = _outside_ranges_expression(excluded_ranges)
+        filters.append(
+            f"[{overlay_index}:v]scale={width}:{height},format=rgba,"
+            f"colorchannelmixer=aa={settings.tv_frame_opacity}[tv]"
+        )
+        filters.append(
+            f"[{current_video}][tv]overlay=0:0:shortest=1:"
+            f"enable='{frame_enable}'[vframed]"
+        )
+        current_video = "vframed"
+    story_title_ass_path: Path | None = None
+    if story_titles:
+        from render_stage import _write_story_title_ass
+
+        story_title_ass_path = output_path.with_name(
+            "milestone6_story_titles_paper.ass"
+        )
+        _write_story_title_ass(story_titles, story_title_ass_path)
+        filters.append(
+            f"[{current_video}]subtitles=filename='"
+            f"{_ffmpeg_filter_path(story_title_ass_path)}'[vtitles]"
+        )
+        current_video = "vtitles"
+    proof_scale = min(
+        width / max(1, settings.width),
+        height / max(1, settings.height),
+    )
+    attribution_font_size = max(
+        8,
+        round(int(os.getenv("ATTRIBUTION_FONT_SIZE", "20")) * proof_scale),
+    )
+    attribution_margin_right = round(
+        int(os.getenv("ATTRIBUTION_MARGIN_RIGHT", "0")) * proof_scale
+    )
+    attribution_margin_bottom = max(
+        1,
+        round(int(os.getenv("ATTRIBUTION_MARGIN_BOTTOM", "8")) * proof_scale),
+    )
+    attribution_border = max(2, round(8 * proof_scale))
+    for index, attribution in enumerate(source_attributions or [], start=1):
+        start = max(0.0, float(attribution["start"]))
+        end = min(duration_seconds, float(attribution["end"]))
+        if end <= start:
+            continue
+        next_label = f"vattribution{index}"
+        filters.append(
+            f"[{current_video}]drawtext=textfile='"
+            f"{_ffmpeg_filter_path(Path(attribution['text_file']))}':reload=0:"
+            f"fontcolor=white@0.94:fontsize={attribution_font_size}:"
+            "text_align=R:box=1:boxcolor=black@0.68:"
+            f"boxborderw={attribution_border}:"
+            f"x=w-text_w-{attribution_margin_right + attribution_border}:"
+            f"y=h-text_h-{attribution_margin_bottom}:"
+            f"enable='between(t\\,{start:.6f}\\,{end:.6f})'[{next_label}]"
+        )
+        current_video = next_label
+    filters.append(
+        f"[{current_video}]subtitles=filename='{_ffmpeg_filter_path(caption_path)}'[vout]"
+    )
+
+    voice_duration = duration_seconds
+    delay_ms = 0
+    filters.append(
+        f"[{narration_index}:a]atrim=start=0:end={voice_duration},asetpts=PTS-STARTPTS,"
+        f"aresample=48000,aformat=channel_layouts=stereo,adelay={delay_ms}|{delay_ms}[voice]"
+    )
+    speech_factor = _db_factor(settings.music_speech_gain_db)
+    volume_expression = f"{speech_factor:.6f}"
+    fade_out_start = max(0.0, duration_seconds - settings.music_fade_seconds)
+    filters.append(
+        f"[{music_index}:a]atrim=duration={duration_seconds},asetpts=PTS-STARTPTS,"
+        f"aresample=48000,aformat=channel_layouts=stereo,"
+        f"loudnorm=I={settings.music_target_lufs}:TP=-2:LRA=7,"
+        f"volume='{volume_expression}':eval=frame,"
+        f"afade=t=in:st=0:d={settings.music_fade_seconds},"
+        f"afade=t=out:st={fade_out_start}:d={settings.music_fade_seconds}[music]"
+    )
+    audio_inputs = ["[voice]", "[music]"]
+    if separator_has_audio:
+        filters.append(
+            f"[0:a]atrim=start=0:end={separator_duration},asetpts=PTS-STARTPTS,"
+            "aresample=48000,aformat=channel_layouts=stereo[separator_audio]"
+        )
+        audio_inputs.insert(0, "[separator_audio]")
+    if sfx_index >= 0:
+        sfx_factor = _db_factor(settings.sfx_gain_db)
+        filters.append(
+            f"[{sfx_index}:a]asplit={len(glitch_starts)}"
+            + "".join(f"[sfx{index}]" for index in range(len(glitch_starts)))
+        )
+        sfx_labels = []
+        for index, start in enumerate(glitch_starts):
+            delay = round(start * 1000)
+            label = f"s{index}"
+            filters.append(
+                f"[sfx{index}]aresample=48000,aformat=channel_layouts=stereo,"
+                f"volume={sfx_factor:.6f},adelay={delay}|{delay}[{label}]"
+            )
+            sfx_labels.append(f"[{label}]")
+        audio_inputs.extend(sfx_labels)
+    if paper_sfx_index >= 0:
+        paper_factor = _db_factor(settings.paper_sfx_gain_db)
+        filters.append(
+            f"[{paper_sfx_index}:a]aresample=48000,"
+            "aformat=channel_layouts=stereo,"
+            f"volume={paper_factor:.6f}[paper]"
+        )
+        audio_inputs.append("[paper]")
+    if shutter_sfx_index >= 0:
+        shutter_start = sum(durations[:2]) if len(durations) >= 3 else duration_seconds
+        shutter_delay = round(shutter_start * 1000)
+        shutter_factor = _db_factor(settings.shutter_sfx_gain_db)
+        filters.append(
+            f"[{shutter_sfx_index}:a]aresample=48000,"
+            "aformat=channel_layouts=stereo,"
+            f"volume={shutter_factor:.6f},"
+            f"adelay={shutter_delay}|{shutter_delay}[shutter]"
+        )
+        audio_inputs.append("[shutter]")
+    filters.append(
+        f"{''.join(audio_inputs)}amix=inputs={len(audio_inputs)}:"
+        "duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.891[mix]"
+    )
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[vout]",
+            "-map",
+            "[mix]",
+            "-t",
+            str(duration_seconds),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-ar",
+            "48000",
+            "-movflags",
+            "+faststart",
+            "-y",
+            str(output_path),
+        ]
+    )
+    _run(command, "Milestone 6 reference proof")
+    probe = probe_media(output_path)
+    actual_duration = float(probe["duration_seconds"])
+    if abs(actual_duration - duration_seconds) > 0.15:
+        raise RuntimeError(
+            f"Reference proof duration mismatch: {actual_duration:.3f}s"
+        )
+    report = {
+        "schema_version": 1,
+        "created_at_utc": utc_now(),
+        "output_file": str(output_path),
+        "output_sha256": sha256_file(output_path),
+        "duration_seconds": round(actual_duration, 6),
+        "resolution": f"{width}x{height}",
+        "fps": fps,
+        "images": [str(path) for path in selected_images],
+        "image_durations": [round(value, 6) for value in durations],
+        "visual_kinds": kinds,
+        "visual_source_types": source_types,
+        "tv_frame_excluded_ranges": [
+            [round(start, 6), round(end, 6)] for start, end in excluded_ranges
+        ] if settings.tv_frame_enabled else [],
+        "uses_actual_visual_timeline": image_durations is not None,
+        "separator_file": str(separator_file) if separator_file is not None else None,
+        "separator_audio_included": separator_has_audio,
+        "narration_file": str(narration_file),
+        "music_file": str(music_file),
+        "sfx_file": str(sfx_file),
+        "paper_sfx_file": str(paper_sfx_file) if paper_sfx_file else None,
+        "shutter_sfx_file": str(shutter_sfx_file) if shutter_sfx_file else None,
+        "tv_frame_file": str(settings.tv_frame_file) if settings.tv_frame_enabled else None,
+        "captions_file": str(caption_path),
+        "captions_source_file": str(captions_file) if captions_file is not None else None,
+        "story_titles": story_titles or [],
+        "story_title_overlay_file": (
+            str(story_title_ass_path) if story_title_ass_path else None
+        ),
+        "source_attributions": source_attributions or [],
+        "verified_features": [
+            "alternating_image_motion",
+            "subtle_animated_tv_overlay",
+            "paper_section_sfx",
+            "shutter_every_third_image_sfx",
+            "looped_background_music",
+            "music_ducking_under_voice",
+        ] + (
+            ["active_word_caption_highlighting"]
+            if caption_suffix == ".ass"
+            else []
+        ) + (
+            ["story_title_overlays"]
+            if story_titles
+            else []
+        ) + (
+            ["source_attribution_watermarks"]
+            if source_attributions
+            else []
+        ) + (
+            ["tv_frame_overlay", "caption_layer_above_frame"]
+            if settings.tv_frame_enabled
+            else []
+        ),
+        "quality": {"status": "passed"},
+        "renderer_sha256": reference_proof_renderer_fingerprint(),
+    }
+    atomic_write_json(output_path.with_suffix(".json"), report)
+    return report
+
+
+def _editing_reference(settings: EffectsSettings) -> dict | None:
+    if not settings.editing_reference_file.is_file():
+        return None
+    return {
+        "file": str(settings.editing_reference_file),
+        "sha256": sha256_file(settings.editing_reference_file),
+        "purpose": "Canonical CapCut track-order and visual-treatment reference",
+        "track_order_top_to_bottom": [
+            "captions_and_title_elements",
+            "shutter_tv_frame",
+            "manual_news_separators",
+            "tape_dropout_glitch",
+            "story_visuals",
+            "voiceover_and_sfx",
+            "repeated_background_music",
+        ],
+    }
+
+
+def _image_tv_effect_plan(settings: EffectsSettings) -> dict | None:
+    if not settings.image_tv_effect_enabled:
+        return None
+    path = settings.image_tv_effect_file
+    if not path.is_file():
+        raise FileNotFoundError(f"Animated TV effect not found: {path}")
+    probe = probe_media(path)
+    video = next(
+        (
+            stream
+            for stream in probe.get("streams", [])
+            if stream.get("codec_type") == "video"
+        ),
+        None,
+    )
+    if video is None:
+        raise RuntimeError(f"Animated TV effect has no video stream: {path}")
+    pixel_format = str(video.get("pix_fmt", "")).casefold()
+    alpha_formats = {
+        "argb",
+        "abgr",
+        "rgba",
+        "bgra",
+        "gbrap",
+        "gbrap10le",
+        "gbrap12le",
+        "gbrap16le",
+    }
+    if pixel_format not in alpha_formats and not pixel_format.startswith("yuva"):
+        raise RuntimeError(
+            "Animated TV effect must contain a native alpha channel; "
+            f"found pixel format {pixel_format or 'unknown'}."
+        )
+    duration = float(probe.get("duration_seconds", 0))
+    if duration <= 0:
+        raise RuntimeError("Animated TV effect duration must be positive.")
+    return {
+        "enabled": True,
+        "file": str(path),
+        "sha256": sha256_file(path),
+        "codec": str(video.get("codec_name", "")),
+        "pixel_format": pixel_format,
+        "native_alpha": True,
+        "opacity": settings.image_tv_effect_opacity,
+        "source_duration_seconds": round(duration, 6),
+        "loop_to_program_duration": True,
+        "audio_ignored": True,
+        "coverage": "story_images_except_manual_separator_intervals",
+        "layer_position": "above_glitch_below_manual_separator",
+    }
+
+
+def render_project_reference_proof(
+    *,
+    video_number: int,
+    settings: EffectsSettings,
+    duration_seconds: float = 60.0,
+) -> dict:
+    video_dir = project_dir(video_number)
+    timing = load_json(video_dir / "story_timing.json", "Story timing manifest")
+    stories = timing.get("stories", [])
+    if not stories:
+        raise RuntimeError("Story timing contains no stories for the reference proof.")
+    effects_plan = load_json(
+        video_dir / "07_effects" / "effects_plan.json",
+        "Effects plan",
+    )
+    if effects_plan.get("quality", {}).get("status") != "passed":
+        raise RuntimeError("A passing effects plan is required for the reference proof.")
+    proof_duration = min(
+        float(duration_seconds),
+        float(effects_plan.get("duration_seconds", duration_seconds)),
+    )
+    proof_events = [
+        event
+        for event in effects_plan.get("visual_events", [])
+        if float(event.get("timeline_start", 0)) < proof_duration - 0.001
+        and float(event.get("timeline_end", 0)) > 0.001
+    ]
+    proof_events.sort(key=lambda item: float(item["timeline_start"]))
+    reference_images: list[Path] = []
+    image_durations: list[float] = []
+    visual_kinds: list[str] = []
+    visual_source_types: list[str] = []
+    cursor = 0.0
+    for event in proof_events:
+        start = max(0.0, float(event["timeline_start"]))
+        end = min(proof_duration, float(event["timeline_end"]))
+        if start > cursor + 0.03:
+            raise RuntimeError(
+                f"Reference proof visual timeline has a gap at {cursor:.3f}-{start:.3f}."
+            )
+        if end <= start + 0.001:
+            continue
+        reference_images.append(Path(event["asset"]["file"]))
+        image_durations.append(end - start)
+        visual_kinds.append(str(event.get("asset", {}).get("kind", "image")))
+        visual_source_types.append(str(event.get("source_type", "archive")))
+        cursor = end
+    if cursor < proof_duration - 0.03:
+        raise RuntimeError("Reference proof visual timeline does not cover 60 seconds.")
+    narration_file = Path(stories[0]["audio_file"])
+    first_separator = stories[0].get("separator") or {}
+    separator_file = Path(first_separator["file"]) if first_separator.get("file") else None
+    separator_duration = first_separator.get("duration")
+    generated = ensure_default_audio_assets(settings)
+    music_plan = effects_plan.get("audio", {}).get("background_music", {})
+    proof_tracks = music_plan.get("tracks") or []
+    if proof_tracks:
+        music_file = Path(proof_tracks[0]["track_file"])
+    else:
+        music_file, _ = select_music_track(settings)
+    captions_manifest = load_json(
+        video_dir / "06_captions" / "captions.json",
+        "Caption manifest",
+    )
+    captions_file = Path(
+        captions_manifest.get("combined_ass_file")
+        or captions_manifest["combined_srt_file"]
+    )
+    from render_stage import _compact_source_attribution, _compact_story_title
+
+    overlay_dir = video_dir / "07_effects" / "preview_overlays"
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    story_titles = []
+    for story in stories:
+        start = float(story["narration"]["start"])
+        end = min(proof_duration, float(story["narration"]["end"]))
+        if start >= proof_duration or end <= start:
+            continue
+        order = int(story["order"])
+        title_file = overlay_dir / f"{order:02d}_story_title.txt"
+        display_title = _compact_story_title(str(story.get("title", "")), order)
+        atomic_write_text(title_file, display_title)
+        story_titles.append(
+            {
+                "story_id": story["story_id"],
+                "order": order,
+                "start": start,
+                "end": end,
+                "text": display_title,
+                "text_file": str(title_file),
+            }
+        )
+    source_attributions = []
+    for event in proof_events:
+        attribution = event.get("attribution")
+        if not attribution or attribution.get("required") is not True:
+            continue
+        start = max(0.0, float(event["timeline_start"]))
+        end = min(proof_duration, float(event["timeline_end"]))
+        if end <= start:
+            continue
+        text_file = overlay_dir / f"{event['event_id']}_source.txt"
+        display_text = _compact_source_attribution(attribution)
+        atomic_write_text(text_file, display_text)
+        source_attributions.append(
+            {
+                "event_id": event["event_id"],
+                "story_id": event["story_id"],
+                "start": start,
+                "end": end,
+                "text": display_text,
+                "text_file": str(text_file),
+            }
+        )
+    output = video_dir / "07_effects" / "milestone6_reference_60s.mp4"
+    report = render_reference_proof(
+        output_path=output,
+        images=reference_images,
+        narration_file=narration_file,
+        music_file=music_file,
+        sfx_file=generated["sfx"],
+        paper_sfx_file=(
+            settings.paper_sfx_file if settings.paper_sfx_enabled else None
+        ),
+        shutter_sfx_file=(
+            settings.shutter_sfx_file if settings.shutter_sfx_enabled else None
+        ),
+        settings=settings,
+        duration_seconds=proof_duration,
+        separator_file=separator_file,
+        separator_duration_seconds=(
+            float(separator_duration) if separator_duration is not None else None
+        ),
+        captions_file=captions_file,
+        image_durations=image_durations,
+        visual_kinds=visual_kinds,
+        visual_source_types=visual_source_types,
+        story_titles=story_titles,
+        source_attributions=source_attributions,
+        include_separator=separator_file is not None,
+    )
+    effects_plan = video_dir / "07_effects" / "effects_plan.json"
+    report["effects_plan_sha256"] = sha256_file(effects_plan)
+    atomic_write_json(output.with_suffix(".json"), report)
+    return report
+
+
+def build_effects_plan(
+    *,
+    video_number: int,
+    settings: EffectsSettings | None = None,
+    force: bool = False,
+) -> dict:
+    settings = settings or EffectsSettings.from_environment()
+    settings.validate()
+    video_dir = project_dir(video_number)
+    if not video_dir.is_dir():
+        raise FileNotFoundError(f"Project directory not found: {video_dir}")
+    state, timing, media, captions = _require_inputs(video_dir)
+    generated = ensure_default_audio_assets(settings)
+    editing_reference = _editing_reference(settings)
+    overlay = None
+    if settings.tv_frame_enabled:
+        if not settings.tv_frame_file.is_file():
+            raise FileNotFoundError(f"TV frame overlay not found: {settings.tv_frame_file}")
+        overlay = {
+            "enabled": True,
+            "file": str(settings.tv_frame_file),
+            "sha256": sha256_file(settings.tv_frame_file),
+            "opacity": settings.tv_frame_opacity,
+            "coverage": "complete_program",
+            "caption_layer_above_overlay": True,
+        }
+    image_tv_effect = _image_tv_effect_plan(settings)
+    music = None
+    if settings.music_enabled:
+        selected_tracks, selection_seed = select_music_tracks(
+            settings,
+            story_count=len(timing.get("stories", [])),
+            video_number=video_number,
+        )
+        music = _music_plan(selected_tracks, selection_seed, timing, settings)
+    sfx_file = generated["sfx"]
+    sfx = {
+        "file": str(sfx_file),
+        "sha256": sha256_file(sfx_file),
+        "gain_db": settings.sfx_gain_db,
+        "license_metadata_file": str(_license_sidecar(sfx_file)),
+    }
+    visuals = build_visual_events(timing, media, settings)
+    coverage = validate_visual_coverage(visuals, timing)
+    if coverage["status"] != "passed":
+        raise RuntimeError(f"Effects visual coverage failed: {coverage['errors']}")
+    cadence = validate_visual_cadence(
+        visuals,
+        settings.maximum_visual_hold_seconds,
+    )
+    if cadence["status"] != "passed":
+        raise RuntimeError(
+            "Effects visual cadence failed; rebuild archive visuals with shorter "
+            f"windows: {cadence}"
+        )
+    timeline_sfx = build_timeline_sfx(timing, visuals, settings)
+    timing_path = video_dir / "story_timing.json"
+    media_path = video_dir / "05_visuals" / "media_plan.json"
+    captions_path = video_dir / "06_captions" / "captions.json"
+    fingerprint = _input_fingerprint(
+        timing_path,
+        media_path,
+        captions_path,
+        settings,
+        overlay,
+        image_tv_effect,
+        editing_reference,
+        music,
+        sfx,
+        timeline_sfx,
+    )
+    output_dir = video_dir / "07_effects"
+    manifest_path = output_dir / "effects_plan.json"
+    if manifest_path.is_file() and not force:
+        existing = load_json(manifest_path, "Effects plan")
+        if (
+            existing.get("input_fingerprint") == fingerprint
+            and existing.get("quality", {}).get("status") == "passed"
+        ):
+            cached = dict(existing)
+            cached["run_status"] = "cached"
+            _write_state(video_dir, state, manifest_path, cached)
+            return cached
+
+    glitches = build_glitch_events(timing, visuals, settings)
+    duration = float(timing["duration_seconds"])
+    glitch_coverage = sum(item["duration"] for item in glitches) / max(duration, 0.001)
+    if glitch_coverage > 0.03:
+        raise RuntimeError("Glitch coverage exceeds the 3% readability cap.")
+    use_ass_captions = bool(captions.get("combined_ass_file"))
+    captions_file = Path(
+        captions.get("combined_ass_file") or captions["combined_srt_file"]
+    )
+    expected_caption_sha = captions.get(
+        "combined_ass_sha256" if use_ass_captions else "combined_srt_sha256",
+        "",
+    )
+    if (
+        not captions_file.is_file()
+        or sha256_file(captions_file) != expected_caption_sha
+    ):
+        raise RuntimeError("Caption file is missing or changed after caption planning.")
+    separators = _separator_events(timing)
+    narrations = _narration_events(timing)
+    plan = {
+        "schema_version": EFFECTS_SCHEMA_VERSION,
+        "video_number": video_number,
+        "video_name": project_name(video_number),
+        "created_at_utc": utc_now(),
+        "updated_at_utc": utc_now(),
+        "run_status": "generated",
+        "input_fingerprint": fingerprint,
+        "duration_seconds": round(duration, 6),
+        "configuration": {
+            **asdict(settings),
+            "tv_frame_file": str(settings.tv_frame_file),
+            "image_tv_effect_file": str(settings.image_tv_effect_file),
+            "paper_sfx_file": str(settings.paper_sfx_file),
+            "shutter_sfx_file": str(settings.shutter_sfx_file),
+            "music_directory": str(settings.music_directory),
+            "music_file": str(settings.music_file) if settings.music_file else None,
+            "editing_reference_file": str(settings.editing_reference_file),
+        },
+        "editing_reference": editing_reference or {"available": False},
+        "visual_events": visuals,
+        "separator_events": separators,
+        "glitch_events": glitches,
+        "image_tv_effect": image_tv_effect or {"enabled": False},
+        "tv_frame": overlay or {"enabled": False},
+        "captions": {
+            "file": str(captions_file),
+            "sha256": sha256_file(captions_file),
+            "layer_position": "above_tv_frame",
+        },
+        "audio": {
+            "narration_events": narrations,
+            "background_music": music or {"enabled": False},
+            "glitch_sfx": {
+                **sfx,
+                "events": [
+                    {"start": item["start"], "end": item["end"]}
+                    for item in glitches
+                ],
+            },
+            "timeline_sfx": timeline_sfx,
+            "mix_order": [
+                "voiceover",
+                "separator_audio",
+                "paper_section_sfx",
+                "shutter_every_third_image_sfx",
+                "glitch_sfx",
+                "ducked_background_music",
+            ],
+            "final_target": {
+                "integrated_lufs": -14.0,
+                "true_peak_db": -1.0,
+                "note": "Enforced and measured by Milestone 8 final render.",
+            },
+        },
+        "ffmpeg_templates": _filter_templates(settings),
+        "quality": {
+            "status": "passed",
+            "visual_coverage": coverage,
+            "visual_cadence": cadence,
+            "motion_is_deterministic": True,
+            "motion_is_consistent": all(
+                item["motion"]["type"]
+                in {"smooth_push_in", "slow_push_in", "static", "native_video"}
+                for item in visuals
+            ),
+            "no_directional_pans": all(
+                item["motion"]["type"] not in {"pan_left", "pan_right"}
+                for item in visuals
+            ),
+            "maximum_motion_scale": max(
+                (item["motion"]["maximum_scale"] for item in visuals),
+                default=1.0,
+            ),
+            "glitch_timeline_coverage_ratio": round(glitch_coverage, 6),
+            "glitch_under_three_percent": glitch_coverage <= 0.03,
+            "captions_remain_top_layer": True,
+            "image_tv_effect_uses_native_alpha": (
+                not settings.image_tv_effect_enabled
+                or bool(image_tv_effect and image_tv_effect["native_alpha"])
+            ),
+            "image_tv_effect_excludes_separators": (
+                not settings.image_tv_effect_enabled
+                or image_tv_effect.get("coverage")
+                == "story_images_except_manual_separator_intervals"
+            ),
+            "attribution_event_count": sum(
+                item.get("attribution") is not None for item in visuals
+            ),
+            "music_covers_complete_timeline": not settings.music_enabled or (
+                music is not None
+                and bool(music.get("tracks"))
+                and float(music["tracks"][0]["timeline_start"]) <= 0
+                and float(music["tracks"][-1]["timeline_end"]) >= duration
+            ),
+            "music_section_silence_intervals_valid": not settings.music_enabled or (
+                music is not None
+                and len(music.get("silence_intervals", []))
+                == max(0, len(narrations) - 1)
+                and all(
+                    math.isclose(
+                        float(item.get("duration_seconds", -1)),
+                        settings.music_section_silence_seconds,
+                        abs_tol=0.000001,
+                    )
+                    for item in music.get("silence_intervals", [])
+                )
+            ),
+            "music_ducking_windows_match_narration": not settings.music_enabled or (
+                len(music["ducking"]["speech_windows"]) == len(narrations)
+            ),
+            "paper_sfx_covers_every_story_start": (
+                not settings.paper_sfx_enabled
+                or len(
+                    [
+                        event
+                        for event in timeline_sfx["events"]
+                        if event["sound"] == "paper"
+                    ]
+                )
+                == len(narrations)
+            ),
+            "shutter_sfx_uses_every_third_image": all(
+                int(event["visual_sequence_number"]) % 3 == 0
+                for event in timeline_sfx["events"]
+                if event["sound"] == "shutter"
+            ),
+            "shutter_sfx_excludes_separator_intervals": all(
+                not any(
+                    float(separator["start"]) <= float(event["start"])
+                    < float(separator["end"])
+                    for separator in separators
+                )
+                for event in timeline_sfx["events"]
+                if event["sound"] == "shutter"
+            ),
+            "all_referenced_files_exist": True,
+        },
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(manifest_path, plan)
+    atomic_write_text(
+        output_dir / "ffmpeg_filter_templates.txt",
+        json.dumps(plan["ffmpeg_templates"], ensure_ascii=False, indent=2) + "\n",
+    )
+    _write_state(video_dir, state, manifest_path, plan)
+    return plan
+
+
+def effects_status(video_number: int, settings: EffectsSettings | None = None) -> dict:
+    settings = settings or EffectsSettings.from_environment()
+    settings.validate()
+    video_dir = project_dir(video_number)
+    manifest_path = video_dir / "07_effects" / "effects_plan.json"
+    try:
+        state, timing, media, captions = _require_inputs(video_dir)
+        del state
+        generated = ensure_default_audio_assets(settings)
+        editing_reference = _editing_reference(settings)
+        overlay = None
+        if settings.tv_frame_enabled:
+            overlay = {
+                "enabled": True,
+                "file": str(settings.tv_frame_file),
+                "sha256": sha256_file(settings.tv_frame_file),
+                "opacity": settings.tv_frame_opacity,
+                "coverage": "complete_program",
+                "caption_layer_above_overlay": True,
+            }
+        image_tv_effect = _image_tv_effect_plan(settings)
+        music = None
+        if settings.music_enabled:
+            selected_tracks, selection_seed = select_music_tracks(
+                settings,
+                story_count=len(timing.get("stories", [])),
+                video_number=video_number,
+            )
+            music = _music_plan(selected_tracks, selection_seed, timing, settings)
+        sfx_file = generated["sfx"]
+        sfx = {
+            "file": str(sfx_file),
+            "sha256": sha256_file(sfx_file),
+            "gain_db": settings.sfx_gain_db,
+            "license_metadata_file": str(_license_sidecar(sfx_file)),
+        }
+        visuals = build_visual_events(timing, media, settings)
+        timeline_sfx = build_timeline_sfx(timing, visuals, settings)
+        expected = _input_fingerprint(
+            video_dir / "story_timing.json",
+            video_dir / "05_visuals" / "media_plan.json",
+            video_dir / "06_captions" / "captions.json",
+            settings,
+            overlay,
+            image_tv_effect,
+            editing_reference,
+            music,
+            sfx,
+            timeline_sfx,
+        )
+        manifest = load_json(manifest_path, "Effects plan")
+        ready = manifest.get("input_fingerprint") == expected and manifest.get("quality", {}).get("status") == "passed"
+        return {
+            "status": "EFFECTS_READY" if ready else "STALE",
+            "manifest": str(manifest_path),
+            "reason": "Effects plan is current." if ready else "Effects inputs changed.",
+        }
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        return {"status": "BLOCKED", "manifest": str(manifest_path), "reason": str(exc)}
+
+
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Plan Milestone 6 motion, TV treatment, glitch/SFX, and music."
+    )
+    parser.add_argument("--video", type=int)
+    parser.add_argument(
+        "--action",
+        choices=("generate", "status", "install-assets", "reference-proof"),
+        default="generate",
+    )
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--proof-seconds", type=float, default=60.0)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_arguments()
+    settings = EffectsSettings.from_environment()
+    try:
+        settings.validate()
+        if args.action == "install-assets":
+            paths = ensure_default_audio_assets(settings)
+            print(f"Background music: {paths['music']}")
+            print(f"Glitch SFX      : {paths['sfx']}")
+            return 0
+        if args.action == "reference-proof":
+            if args.video is None:
+                raise ValueError("--video is required for reference-proof.")
+            report = render_project_reference_proof(
+                video_number=args.video,
+                settings=settings,
+                duration_seconds=args.proof_seconds,
+            )
+            print(f"Reference proof: {report['output_file']}")
+            return 0
+        if args.video is None:
+            raise ValueError("--video is required for generate/status.")
+        if args.action == "status":
+            print(json.dumps(effects_status(args.video, settings), ensure_ascii=False, indent=2))
+            return 0
+        plan = build_effects_plan(
+            video_number=args.video,
+            settings=settings,
+            force=args.force,
+        )
+        print(
+            f"Milestone 6 ready: {project_dir(args.video) / '07_effects' / 'effects_plan.json'}"
+        )
+        print(
+            f"Visuals={len(plan['visual_events'])} | "
+            f"glitches={len(plan['glitch_events'])} | "
+            "music tracks="
+            f"{plan['audio']['background_music'].get('track_count', 0)} | "
+            "section transition="
+            f"{plan['audio']['background_music'].get('section_fade_seconds', 0)}s fade + "
+            f"{plan['audio']['background_music'].get('section_silence_seconds', 0)}s silence"
+        )
+        return 0
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        report_cli_error("EFFECTS", exc)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

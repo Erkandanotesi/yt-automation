@@ -1,42 +1,73 @@
-# Local secrets
-.env
-.env.*
-!.env.example
-.youtube_credentials/
-client_secret*.json
-youtube_token*.json
+# ==============================================================================
+# Secrets, Credentials & Local Config Overrides
+# ==============================================================================
+**/.env
+**/.env.*
+!**/.env.example
+Automation/.youtube_credentials/
+**/client_secret*.json
+**/youtube_token*.json
+Automation/data/env_backups/
 
-# Python environment and caches
+# ==============================================================================
+# Python Environments, Caches & Build Artifacts
+# ==============================================================================
+Automation/.venv/
+Automation/.venv_qwen/
 .venv/
-__pycache__/
+.venv_qwen/
+**/__pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# .NET / WPF Build Artifacts
+Automation/NewsStudio.App/**/bin/
+Automation/NewsStudio.App/**/obj/
+.vs/
+
+# ==============================================================================
+# Generated Projects, Large Media Assets & Local AI Models
+# ==============================================================================
+Projects/*
+!Projects/.gitkeep
+
+Assets/*
+!Assets/.gitkeep
+
+models/*
+!models/.gitkeep
+
+# ==============================================================================
+# Runtime State, Indexes, Diagnostics & Regenerable Tooling
+# ==============================================================================
+Automation/data/processed_urls.json
+Automation/data/youtube_schedule_state.json
+Automation/data/news_history_reset.json
+Automation/data/provider_quota_status.json
+Automation/data/provider_rate_limit_observations.json
+Automation/data/history_backups/
+Automation/data/env_backups/
+Automation/data/diagnostics/
+Automation/data/*feed_audit*.json
+Automation/data/news_archive/*
+!Automation/data/news_archive/.gitkeep
+Automation/data/indexes/*
+!Automation/data/indexes/.gitkeep
+
+Automation/tools/ffmpeg/
+motion_engine/vendor/
+motion_engine/cache/
+motion_engine/output/
 
 # Logs and interrupted writes
 *.log
 *.part
 *.tmp
 
-# Runtime state and regenerable local indexes
-data/processed_urls.json
-data/youtube_schedule_state.json
-data/news_archive/*
-!data/news_archive/.gitkeep
-data/indexes/media_index.json
-data/indexes/media_index_report.json
-data/indexes/online_searches/
-data/*feed_audit*.json
-
-# Legacy/generated video projects do not belong in the code repository
-Video*/
-Old/
-
-# Portable third-party binaries
-tools/ffmpeg/
-
-# Local editor and operating-system files
+# Editor & OS files
 .idea/
 .vscode/
 Thumbs.db
